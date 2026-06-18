@@ -1,0 +1,62 @@
+---
+import '../styles/theme.css';
+
+interface Props {
+	title?: string;
+}
+
+const { title = "Mon Site Composable" } = Astro.props;
+---
+
+<!doctype html>
+<html lang="fr">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width" />
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<meta name="generator" content={Astro.generator} />
+		<title>{title}</title>
+		
+		<!-- Google Fonts pré-chargées pour correspondre aux palettes IA -->
+		<link rel="preconnect" href="https://fonts.googleapis.com">
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+		<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Inter:wght@300;400;600;700&family=Lora:ital,wght@0,400;0,700;1,400&family=Outfit:wght@400;600;800&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Space+Grotesk:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;600;700&family=Karla:wght@400;700&display=swap" rel="stylesheet">
+	</head>
+	<body>
+		<slot />
+	</body>
+</html>
+
+<style is:global>
+	:root {
+		/* Fallbacks par défaut si theme.css n'est pas chargé */
+		--color-primary: #3b82f6;
+		--color-secondary: #eff6ff;
+		--color-bg: #ffffff;
+		--color-text: #1f2937;
+		--font-heading: 'Inter', sans-serif;
+		--font-body: 'Inter', sans-serif;
+		--border-radius: 8px;
+	}
+
+	* {
+		box-sizing: border-box;
+		margin: 0;
+		padding: 0;
+	}
+
+	body {
+		background-color: var(--color-bg);
+		color: var(--color-text);
+		font-family: var(--font-body), sans-serif;
+		line-height: 1.6;
+		transition: background-color 0.3s ease, color 0.3s ease;
+	}
+
+	h1, h2, h3, h4, h5, h6 {
+		font-family: var(--font-heading), serif;
+		font-weight: 700;
+		line-height: 1.2;
+		color: var(--color-text);
+	}
+</style>

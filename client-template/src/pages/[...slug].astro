@@ -1,0 +1,86 @@
+---
+import Layout from '../layouts/Layout.astro';
+import Hero from '../components/blocks/Hero.astro';
+import Features from '../components/blocks/Features.astro';
+import ProductGrid from '../components/blocks/ProductGrid.astro';
+import Gallery from '../components/blocks/Gallery.astro';
+
+// Récupération des routes statiques lors de la génération (SSG)
+export async function getStaticPaths() {
+  try {
+    const response = await fetch('http://localhost:4000/api/pages');
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const data = await response.json();
+    
+    return data.docs.map((page: any) => {
+      const slug = page.slug === 'home' ? undefined : page.slug;
+      return {
+        params: { slug },
+        props: { page },
+      };
+    });
+  } catch (error: any) {
+    console.error("Erreur lors de la récupération des pages depuis l'API :", error.message);
+    
+    // Page de fallback si l'API est injoignable pendant la phase de build
+    return [
+      {
+        params: { slug: undefined },
+        props: {
+          page: {
+            title: "Accueil (Mode Hors-ligne)",
+            layout: [
+              {
+                blockType: "hero",
+                title: "Meta-Builder de Sites",
+                subtitle: "Le serveur local de l'Orchestrateur (port 4000) semble hors-ligne. Lancez-le pour charger vos blocs dynamiques !",
+                ctaText: "En savoir plus"
+              }
+            ]
+          }
+        }
+      }
+    ];
+  }
+}
+
+const { page } = Astro.props;
+
+// Mapping des types de blocs vers les composants Astro correspondants
+const blockMap: Record<string, any> = {
+  'hero': Hero,
+  'features': Features,
+  'product-grid': ProductGrid,
+  'gallery': Gallery
+};
+---
+
+<Layout title={page.title}>
+  <main>
+    {page.layout && page.layout.map((block: any) => {
+      const Component = blockMap[block.blockType];
+      if (!Component) {
+        return (
+          <div class="unknown-block">
+            <p>Bloc inconnu : <strong>{block.blockType}</strong></p>
+          </div>
+        );
+      }
+      return <Component data={block} />;
+    })}
+  </main>
+</Layout>
+
+<style>
+  .unknown-block {
+    padding: 30px;
+    background-color: #fee2e2;
+    border: 1px dashed #ef4444;
+    color: #b91c1c;
+    text-align: center;
+    margin: 20px;
+    border-radius: var(--border-radius);
+  }
+</style>

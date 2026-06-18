@@ -1,0 +1,8 @@
+{
+  "name": "meta-builder-root",
+  "version": "1.0.0",
+  "description": "Root workspace of the Meta-Builder project",
+  "scripts": {
+    "start": "node start.js"
+  }
+}

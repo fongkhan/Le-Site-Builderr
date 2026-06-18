@@ -1,0 +1,56 @@
+{
+  "docs": [
+    {
+      "title": "Accueil",
+      "slug": "home",
+      "layout": [
+        {
+          "blockType": "hero",
+          "title": "Boulangerie Artisanale Clamart",
+          "subtitle": "Des pains croustillants et des viennoiseries pur beurre cuits sur place tous les jours.",
+          "ctaText": "Découvrir nos produits",
+          "backgroundImage": "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&q=80&w=1200"
+        },
+        {
+          "blockType": "features",
+          "title": "Pourquoi choisir notre boulangerie ?",
+          "items": [
+            {
+              "title": "Farines Bio",
+              "description": "Nous sélectionnons uniquement des farines certifiées biologiques et locales."
+            },
+            {
+              "title": "Savoir-faire",
+              "description": "Nos boulangers respectent des méthodes de fermentation lente sur levain naturel."
+            },
+            {
+              "title": "Chaque matin",
+              "description": "Cuisson tout au long de la journée pour vous garantir une fraîcheur optimale."
+            }
+          ]
+        },
+        {
+          "blockType": "product-grid",
+          "title": "Nos Produits Vedettes",
+          "products": [
+            {
+              "name": "La Baguette de Tradition",
+              "price": "1.30 €",
+              "image": "https://images.unsplash.com/photo-1549931319-a545dcf3bc73?auto=format&fit=crop&q=80&w=400"
+            },
+            {
+              "name": "Le Croissant Pur Beurre",
+              "price": "1.20 €",
+              "image": "https://images.unsplash.com/photo-1555507036-ab1f4038808a?auto=format&fit=crop&q=80&w=400"
+            },
+            {
+              "name": "Le Pain au Chocolat",
+              "price": "1.30 €",
+              "image": "https://images.unsplash.com/photo-1608686207856-001b95cf60ca?auto=format&fit=crop&q=80&w=400"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

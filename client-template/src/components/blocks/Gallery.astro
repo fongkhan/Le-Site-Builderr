@@ -1,0 +1,84 @@
+---
+interface Props {
+  data: {
+    title: string;
+    images: string[];
+  };
+}
+
+const { data } = Astro.props;
+---
+
+<section class="gallery-section">
+  <div class="container">
+    <h2>{data.title}</h2>
+    <div class="gallery-grid">
+      {data.images && data.images.map((imgSrc, index) => (
+        <div class="gallery-item">
+          <img src={imgSrc} alt={`Gallery image ${index + 1}`} loading="lazy" />
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .gallery-section {
+    padding: 80px 20px;
+    background-color: var(--color-bg);
+  }
+
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    text-align: center;
+  }
+
+  .gallery-section h2 {
+    font-size: 2.5rem;
+    margin-bottom: 50px;
+    position: relative;
+    padding-bottom: 15px;
+  }
+
+  .gallery-section h2::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 60px;
+    height: 4px;
+    background-color: var(--color-primary);
+    border-radius: 2px;
+  }
+
+  .gallery-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 20px;
+  }
+
+  .gallery-item {
+    height: 250px;
+    overflow: hidden;
+    border-radius: var(--border-radius);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.05);
+    transition: transform 0.3s ease;
+  }
+
+  .gallery-item img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.5s ease;
+  }
+
+  .gallery-item:hover {
+    transform: scale(1.03);
+  }
+
+  .gallery-item:hover img {
+    transform: scale(1.05);
+  }
+</style>

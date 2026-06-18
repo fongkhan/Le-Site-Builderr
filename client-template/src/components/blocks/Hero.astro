@@ -1,0 +1,86 @@
+---
+interface Props {
+  data: {
+    title: string;
+    subtitle?: string;
+    ctaText?: string;
+    backgroundImage?: string;
+  };
+}
+
+const { data } = Astro.props;
+---
+
+<section class="hero-section" style={data.backgroundImage ? `background-image: linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.7)), url(${data.backgroundImage});` : ''}>
+  <div class="hero-content">
+    <h1>{data.title}</h1>
+    {data.subtitle && <p>{data.subtitle}</p>}
+    {data.ctaText && (
+      <a href="#" class="cta-button">
+        {data.ctaText}
+      </a>
+    )}
+  </div>
+</section>
+
+<style>
+  .hero-section {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 120px 20px;
+    background-size: cover;
+    background-position: center;
+    background-color: var(--color-primary);
+    color: #ffffff;
+    min-height: 500px;
+    position: relative;
+  }
+
+  /* Si pas d'image de fond, on applique un dégradé basé sur le thème */
+  .hero-section:not([style]) {
+    background-image: linear-gradient(135deg, var(--color-primary) 0%, var(--color-text) 100%);
+  }
+
+  .hero-content {
+    max-width: 800px;
+    z-index: 2;
+  }
+
+  .hero-content h1 {
+    font-size: clamp(2.5rem, 5vw, 4rem);
+    margin-bottom: 20px;
+    color: #ffffff; /* Le titre sur le Hero est forcé en blanc pour lisibilité sur fond sombre */
+    text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+  }
+
+  .hero-content p {
+    font-size: clamp(1.1rem, 2vw, 1.5rem);
+    margin-bottom: 40px;
+    color: var(--color-secondary);
+    max-width: 600px;
+    margin-left: auto;
+    margin-right: auto;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+  }
+
+  .cta-button {
+    display: inline-block;
+    padding: 14px 28px;
+    background-color: var(--color-secondary);
+    color: var(--color-text);
+    font-weight: 600;
+    text-decoration: none;
+    border-radius: var(--border-radius);
+    transition: all 0.3s ease;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    font-family: var(--font-body), sans-serif;
+  }
+
+  .cta-button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+    background-color: #ffffff;
+  }
+</style>

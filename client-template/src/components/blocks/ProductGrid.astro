@@ -1,0 +1,147 @@
+---
+interface ProductItem {
+  name: string;
+  price: string;
+  image: string;
+}
+
+interface Props {
+  data: {
+    title: string;
+    products: ProductItem[];
+  };
+}
+
+const { data } = Astro.props;
+---
+
+<section class="products-section">
+  <div class="container">
+    <h2>{data.title}</h2>
+    <div class="products-grid">
+      {data.products && data.products.map((product) => (
+        <div class="product-card">
+          <div class="product-image-container">
+            <img src={product.image} alt={product.name} loading="lazy" />
+          </div>
+          <div class="product-info">
+            <h3>{product.name}</h3>
+            <span class="price">{product.price}</span>
+            <button class="buy-button">Acheter</button>
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .products-section {
+    padding: 80px 20px;
+    background-color: var(--color-secondary);
+  }
+
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    text-align: center;
+  }
+
+  .products-section h2 {
+    font-size: 2.5rem;
+    margin-bottom: 50px;
+    position: relative;
+    padding-bottom: 15px;
+  }
+
+  .products-section h2::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 60px;
+    height: 4px;
+    background-color: var(--color-primary);
+    border-radius: 2px;
+  }
+
+  .products-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 30px;
+  }
+
+  .product-card {
+    background: #ffffff;
+    border-radius: var(--border-radius);
+    overflow: hidden;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
+    transition: all 0.3s ease;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .product-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+  }
+
+  .product-image-container {
+    height: 250px;
+    overflow: hidden;
+    position: relative;
+    background-color: #eee;
+  }
+
+  .product-image-container img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.5s ease;
+  }
+
+  .product-card:hover .product-image-container img {
+    transform: scale(1.08);
+  }
+
+  .product-info {
+    padding: 25px;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+  }
+
+  .product-info h3 {
+    font-size: 1.25rem;
+    margin-bottom: 10px;
+    color: var(--color-text);
+  }
+
+  .price {
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: var(--color-primary);
+    margin-bottom: 20px;
+    font-family: var(--font-heading), serif;
+  }
+
+  .buy-button {
+    margin-top: auto;
+    padding: 10px 20px;
+    background-color: var(--color-primary);
+    color: #ffffff;
+    border: none;
+    border-radius: var(--border-radius);
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    width: 100%;
+    text-align: center;
+  }
+
+  .buy-button:hover {
+    filter: brightness(1.1);
+  }
+</style>
