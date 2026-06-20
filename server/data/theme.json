@@ -1,15 +1,15 @@
 {
   "theme": {
     "colors": {
-      "primary": "#8B5A2B",
-      "secondary": "#F5E6CC",
+      "primary": "#1A1A1A",
+      "secondary": "#D4C5B9",
       "background": "#FAFAFA",
-      "text": "#2D241E"
+      "text": "#2C2C2C"
     },
     "fonts": {
       "heading": "Playfair Display",
       "body": "Inter"
     },
-    "radius": "12px"
+    "radius": "2px"
   }
 }

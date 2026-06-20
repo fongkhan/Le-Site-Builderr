@@ -1,5 +1,7 @@
 ---
+import '../styles/base.css';
 import '../styles/theme.css';
+
 
 interface Props {
 	title?: string;
@@ -28,17 +30,6 @@ const { title = "Mon Site Composable" } = Astro.props;
 </html>
 
 <style is:global>
-	:root {
-		/* Fallbacks par défaut si theme.css n'est pas chargé */
-		--color-primary: #3b82f6;
-		--color-secondary: #eff6ff;
-		--color-bg: #ffffff;
-		--color-text: #1f2937;
-		--font-heading: 'Inter', sans-serif;
-		--font-body: 'Inter', sans-serif;
-		--border-radius: 8px;
-	}
-
 	* {
 		box-sizing: border-box;
 		margin: 0;

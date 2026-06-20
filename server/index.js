@@ -135,23 +135,48 @@ app.post('/api/theme', (req, res) => {
   res.json({ success: true, message: "Thème mis à jour avec succès !" });
 });
 
+// Configuration et clés disponibles
+app.get('/api/config', (req, res) => {
+  res.json({
+    availableProviders: {
+      openai: !!process.env.OPENAI_API_KEY,
+      anthropic: !!process.env.ANTHROPIC_API_KEY,
+      gemini: !!process.env.GEMINI_API_KEY
+    },
+    defaultProvider: process.env.DEFAULT_PROVIDER || 'openai'
+  });
+});
+
 // --- MOCK AI ENDPOINTS ---
 
-// Assistant d'Onboarding (Routage Stack)
+// Assistant d'Onboarding (Routage Stack, Ébauche & Thème)
 app.post('/api/onboard', async (req, res) => {
-  const { prompt, provider } = req.body;
-  if (!prompt) {
-    return res.status(400).json({ error: "Le prompt est requis." });
+  const { name, description, features, ambiance, image, inspirationUrl, provider } = req.body;
+  if (!description) {
+    return res.status(400).json({ error: "La description est requise." });
   }
 
   try {
-    const result = await runOnboard(provider, prompt);
-    res.json(result);
+    const result = await runOnboard(provider, { name, description, features, ambiance, image, inspirationUrl });
+    if (result.pages && result.pages.docs) {
+      fs.writeFileSync(PAGES_FILE, JSON.stringify(result.pages, null, 2), 'utf-8');
+    }
+    if (result.theme) {
+      const themeData = { theme: result.theme };
+      fs.writeFileSync(THEME_FILE, JSON.stringify(themeData, null, 2), 'utf-8');
+      writeThemeCss(themeData);
+    }
+    res.json({
+      qualification: result.qualification,
+      pages: result.pages || defaultPages,
+      theme: result.theme || defaultTheme.theme
+    });
   } catch (error) {
     console.error("Erreur lors de l'onboarding IA :", error.message);
     res.status(500).json({ error: error.message });
   }
 });
+
 
 // Extraction de thème depuis une image/logo
 app.post('/api/extract-design', async (req, res) => {

@@ -70,7 +70,16 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'onboarding' | 'design' | 'cms' | 'deploy'>('onboarding');
 
   // --- STATE ONBOARDING ---
-  const [promptText, setPromptText] = useState('Je veux un site pour ma boulangerie à Clamart, j\'ai deux boutiques et je veux vendre mes croissants en ligne. Je veux pouvoir mettre à jour le menu moi-même.');
+  const [siteName, setSiteName] = useState('Boulangerie Artisanale');
+  const [activityDescription, setActivityDescription] = useState('Des pains croustillants et des viennoiseries pur beurre cuits sur place tous les jours.');
+  const [onboardFeatures, setOnboardFeatures] = useState<FeatureFlags>({
+    blog_or_news: false,
+    e_commerce: true,
+    multi_store: false
+  });
+  const [onboardAmbiance, setOnboardAmbiance] = useState<string>('chaleureux');
+  const [inspirationUrl, setInspirationUrl] = useState('');
+  const [inspirationSourceType, setInspirationSourceType] = useState<'preset' | 'image'>('preset');
   const [onboardingLoading, setOnboardingLoading] = useState(false);
   const [onboardingResult, setOnboardingResult] = useState<OnboardingResult | null>(null);
 
@@ -88,11 +97,13 @@ export default function App() {
     },
     radius: '12px'
   });
-  const [selectedAmbiance, setSelectedAmbiance] = useState<string>('chaleureux');
   const [designSaving, setDesignSaving] = useState(false);
   const [aiProvider, setAiProvider] = useState<'openai' | 'anthropic' | 'gemini'>('openai');
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
-  const [extractingFromImage, setExtractingFromImage] = useState(false);
+  const [savedTheme, setSavedTheme] = useState<Theme | null>(null);
+  const [availableProviders, setAvailableProviders] = useState<{openai: boolean; anthropic: boolean; gemini: boolean}>({ openai: true, anthropic: true, gemini: true });
+
+
 
   // --- STATE CMS ---
   const [pagesData, setPagesData] = useState<PagesData>({ docs: [] });
@@ -115,6 +126,7 @@ export default function App() {
 
   // Fetch initial data
   useEffect(() => {
+    fetchConfig();
     fetchTheme();
     fetchPages();
     fetchBuildStatus();
@@ -130,12 +142,35 @@ export default function App() {
     }
   }, [buildStatus.logs]);
 
+  const fetchConfig = async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/config`);
+      if (res.ok) {
+        const data = await res.json();
+        setAvailableProviders(data.availableProviders);
+        const providers = data.availableProviders;
+        if (providers[data.defaultProvider]) {
+          setAiProvider(data.defaultProvider);
+        } else {
+          const firstAvailable = Object.keys(providers).find(k => providers[k as keyof typeof providers]);
+          if (firstAvailable) {
+            setAiProvider(firstAvailable as any);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("Impossible de récupérer la config du serveur", e);
+    }
+  };
+
   const fetchTheme = async () => {
     try {
       const res = await fetch(`${BACKEND_URL}/api/theme`);
       if (res.ok) {
         const data = await res.json();
-        setTheme(data.theme ? data.theme : defaultThemeMock);
+        const themeVal = data.theme ? data.theme : defaultThemeMock;
+        setTheme(themeVal);
+        setSavedTheme(themeVal);
       }
     } catch (e) {
       console.error("Impossible de récupérer le thème", e);
@@ -180,11 +215,25 @@ export default function App() {
       const res = await fetch(`${BACKEND_URL}/api/onboard`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: promptText, provider: aiProvider })
+        body: JSON.stringify({ 
+          name: siteName,
+          description: activityDescription,
+          features: onboardFeatures,
+          ambiance: inspirationSourceType === 'preset' ? onboardAmbiance : undefined,
+          image: inspirationSourceType === 'image' ? uploadedImage : undefined,
+          inspirationUrl: inspirationUrl || undefined,
+          provider: aiProvider 
+        })
       });
       if (res.ok) {
-        const data = (await res.json()) as OnboardingResult;
-        setOnboardingResult(data);
+        const data = await res.json();
+        setOnboardingResult(data.qualification);
+        setPagesData(data.pages);
+        if (data.theme) {
+          setTheme(data.theme);
+          setSavedTheme(data.theme);
+        }
+        alert("✨ Ébauche de site et design graphique créés avec succès par l'IA !");
       } else {
         const errData = await res.json();
         alert(`Erreur IA : ${errData.error || 'Erreur lors de la qualification.'}`);
@@ -196,26 +245,6 @@ export default function App() {
     }
   };
 
-  const applyAmbiance = async (ambiance: string) => {
-    setSelectedAmbiance(ambiance);
-    try {
-      const res = await fetch(`${BACKEND_URL}/api/extract-design`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ambiance, provider: aiProvider })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setTheme(data.theme);
-      } else {
-        const errData = await res.json();
-        alert(`Erreur IA : ${errData.error || "Erreur lors de l'extraction."}`);
-      }
-    } catch (e) {
-      console.error("Erreur extraction thème", e);
-    }
-  };
-
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -224,35 +253,11 @@ export default function App() {
     reader.onloadend = () => {
       const base64String = reader.result as string;
       setUploadedImage(base64String);
-      extractDesignFromImage(base64String);
     };
     reader.readAsDataURL(file);
   };
 
-  const extractDesignFromImage = async (base64Str: string) => {
-    setExtractingFromImage(true);
-    try {
-      const res = await fetch(`${BACKEND_URL}/api/extract-design`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: base64Str, provider: aiProvider })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setTheme(data.theme);
-        setSelectedAmbiance(''); // Reset ambiance selection
-        alert("🎨 Thème extrait avec succès depuis votre image !");
-      } else {
-        const errData = await res.json();
-        alert(`Erreur lors de l'extraction : ${errData.error || 'Erreur inconnue.'}`);
-      }
-    } catch (e) {
-      alert("Erreur lors de l'extraction de design depuis l'image.");
-    } finally {
-      setExtractingFromImage(false);
-    }
-  };
-
+  // L'extraction visuelle par image est gérée de manière unifiée lors de l'onboarding
 
   const saveTheme = async () => {
     setDesignSaving(true);
@@ -263,12 +268,20 @@ export default function App() {
         body: JSON.stringify({ theme })
       });
       if (res.ok) {
+        setSavedTheme(theme);
         alert("Thème enregistré et appliqué aux fichiers Astro client-template/src/styles/theme.css !");
       }
     } catch (e) {
       alert("Erreur lors de la sauvegarde du thème.");
     } finally {
       setDesignSaving(false);
+    }
+  };
+
+  const resetTheme = () => {
+    if (savedTheme) {
+      setTheme(savedTheme);
+      setUploadedImage(null);
     }
   };
 
@@ -399,18 +412,50 @@ export default function App() {
 
   const activePage = pagesData.docs[selectedPageIdx];
 
+  const isThemeModified = savedTheme && JSON.stringify(theme) !== JSON.stringify(savedTheme);
+
+  const isAiThinking = onboardingLoading;
+  let aiThinkingText = '';
+  if (onboardingLoading) {
+    aiThinkingText = "Génération de l'ébauche, du contenu et du design...";
+  }
+
   return (
     <div className="app-container">
       {/* Header */}
       <header className="header">
-        <div className="logo-container">
-          <div className="logo-icon">M</div>
-          <div>
-            <h1 className="logo-text">MetaSite Builder</h1>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>AI-Driven Composable SaaS</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div className="logo-container">
+            <div className="logo-icon">M</div>
+            <div>
+              <h1 className="logo-text">MetaSite Builder</h1>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>AI-Driven Composable SaaS</span>
+            </div>
           </div>
+          {isAiThinking && (
+            <div 
+              className="pulse-glow animate-slide" 
+              style={{ 
+                display: 'flex', 
+                alignItems: 'center', 
+                gap: 8, 
+                background: 'rgba(99, 102, 241, 0.12)', 
+                border: '1px solid rgba(99, 102, 241, 0.3)', 
+                padding: '6px 14px', 
+                borderRadius: 20,
+                color: '#a5b4fc',
+                fontSize: '0.825rem',
+                fontWeight: 600,
+                marginLeft: 15
+              }}
+            >
+              <span style={{ display: 'inline-block', width: 8, height: 8, background: '#818cf8', borderRadius: '50%', animation: 'pulse 1.5s infinite' }}></span>
+              <span>🧠 Réflexion : {aiThinkingText}</span>
+            </div>
+          )}
         </div>
         <nav className="nav-tabs">
+
           <button 
             className={`nav-tab ${activeTab === 'onboarding' ? 'active' : ''}`}
             onClick={() => setActiveTab('onboarding')}
@@ -446,54 +491,272 @@ export default function App() {
         {activeTab === 'onboarding' && (
           <div className="animate-slide" style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
             <div className="glass-panel">
-              <h2 style={{ marginBottom: 15, fontSize: '1.75rem' }}>1. Décrivez votre projet en langage naturel</h2>
+              <h2 style={{ marginBottom: 15, fontSize: '1.75rem' }}>1. Configurez votre nouveau site web</h2>
               <p style={{ color: 'var(--text-muted)', marginBottom: 20 }}>
-                Notre moteur d'intelligence artificielle analyse votre besoin fonctionnel pour déterminer dynamiquement l'infrastructure optimale et la stack à provisionner sur o2switch.
+                Remplissez les informations ci-dessous. Notre moteur d'intelligence artificielle concevra instantanément l'architecture de la stack, l'ébauche de contenu et le design graphique.
               </p>
 
               {/* Sélecteur de fournisseur d'IA */}
               <div style={{ marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-muted)' }}>Sélectionner le modèle d'IA :</span>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-                  <button 
-                    onClick={() => setAiProvider('openai')} 
-                    className={`btn ${aiProvider === 'openai' ? 'btn-primary' : 'btn-secondary'}`}
-                    style={{ padding: '8px 16px', fontSize: '0.85rem' }}
-                  >
-                    OpenAI (gpt-4o-mini)
-                  </button>
-                  <button 
-                    onClick={() => setAiProvider('anthropic')} 
-                    className={`btn ${aiProvider === 'anthropic' ? 'btn-primary' : 'btn-secondary'}`}
-                    style={{ padding: '8px 16px', fontSize: '0.85rem' }}
-                  >
-                    Anthropic (claude-3-5-sonnet)
-                  </button>
-                  <button 
-                    onClick={() => setAiProvider('gemini')} 
-                    className={`btn ${aiProvider === 'gemini' ? 'btn-primary' : 'btn-secondary'}`}
-                    style={{ padding: '8px 16px', fontSize: '0.85rem' }}
-                  >
-                    Gemini (gemini-1.5-pro)
-                  </button>
+                  {availableProviders.openai && (
+                    <button 
+                      onClick={() => setAiProvider('openai')} 
+                      className={`btn ${aiProvider === 'openai' ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ padding: '8px 16px', fontSize: '0.85rem' }}
+                    >
+                      OpenAI (gpt-4o-mini)
+                    </button>
+                  )}
+                  {availableProviders.anthropic && (
+                    <button 
+                      onClick={() => setAiProvider('anthropic')} 
+                      className={`btn ${aiProvider === 'anthropic' ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ padding: '8px 16px', fontSize: '0.85rem' }}
+                    >
+                      Anthropic (claude-3-5-sonnet)
+                    </button>
+                  )}
+                  {availableProviders.gemini && (
+                    <button 
+                      onClick={() => setAiProvider('gemini')} 
+                      className={`btn ${aiProvider === 'gemini' ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ padding: '8px 16px', fontSize: '0.85rem' }}
+                    >
+                      Gemini (gemini-3.5-flash)
+                    </button>
+                  )}
                 </div>
               </div>
 
-              <textarea 
-                className="input-text"
-                rows={4}
-                value={promptText}
-                onChange={(e) => setPromptText(e.target.value)}
-                placeholder="Exemple: Je veux un portfolio pour mes photos d'art avec une galerie et une page de contact..."
-              />
-              <div style={{ marginTop: 20, display: 'flex', gap: 10 }}>
-                <button 
-                  className="btn btn-primary" 
-                  onClick={handleOnboard}
-                  disabled={onboardingLoading}
-                >
-                  {onboardingLoading ? 'Analyse LLM en cours...' : 'Générer l\'Architecture & la Stack'}
-                </button>
+              <div 
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    handleOnboard();
+                  }
+                }}
+                style={{ display: 'flex', flexDirection: 'column', gap: 20 }}
+              >
+                {/* Site Name and Description */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 15 }}>
+                  <div>
+                    <label style={{ fontSize: '0.875rem', fontWeight: 600, display: 'block', marginBottom: 6 }}>Nom du site / projet :</label>
+                    <input 
+                      type="text" 
+                      className="input-text" 
+                      style={{ padding: '10px 14px' }}
+                      value={siteName} 
+                      onChange={(e) => setSiteName(e.target.value)} 
+                      placeholder="Ex: Salon Coiff'Elle, Boulangerie Clamart..."
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.875rem', fontWeight: 600, display: 'block', marginBottom: 6 }}>Activité et Description :</label>
+                    <textarea 
+                      className="input-text"
+                      rows={3}
+                      value={activityDescription}
+                      onChange={(e) => setActivityDescription(e.target.value)}
+                      placeholder="Décrivez votre activité, vos services ou produits..."
+                    />
+                  </div>
+                </div>
+
+                {/* Features Selection */}
+                <div>
+                  <label style={{ fontSize: '0.875rem', fontWeight: 600, display: 'block', marginBottom: 10 }}>Fonctionnalités requises :</label>
+                  <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                      <input 
+                        type="checkbox" 
+                        checked={onboardFeatures.e_commerce} 
+                        onChange={(e) => setOnboardFeatures({ ...onboardFeatures, e_commerce: e.target.checked })}
+                        style={{ width: 18, height: 18 }}
+                      />
+                      <span>Vente en ligne / Boutique (E-commerce)</span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                      <input 
+                        type="checkbox" 
+                        checked={onboardFeatures.blog_or_news} 
+                        onChange={(e) => setOnboardFeatures({ ...onboardFeatures, blog_or_news: e.target.checked })}
+                        style={{ width: 18, height: 18 }}
+                      />
+                      <span>Blog / Actualités / Réalisations</span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                      <input 
+                        type="checkbox" 
+                        checked={onboardFeatures.multi_store} 
+                        onChange={(e) => setOnboardFeatures({ ...onboardFeatures, multi_store: e.target.checked })}
+                        style={{ width: 18, height: 18 }}
+                      />
+                      <span>Plusieurs boutiques physiques</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Visual Inspiration Source */}
+                <div>
+                  <label style={{ fontSize: '0.875rem', fontWeight: 600, display: 'block', marginBottom: 10 }}>Inspiration Graphique (Design de départ) :</label>
+                  
+                  {/* Selector between preset or image */}
+                  <div style={{ display: 'flex', gap: 10, marginBottom: 15 }}>
+                    <button
+                      type="button"
+                      onClick={() => setInspirationSourceType('preset')}
+                      className={`btn ${inspirationSourceType === 'preset' ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ padding: '6px 12px', fontSize: '0.85rem', flex: 1 }}
+                    >
+                      🎨 Utiliser une ambiance prédéfinie
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setInspirationSourceType('image')}
+                      className={`btn ${inspirationSourceType === 'image' ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ padding: '6px 12px', fontSize: '0.85rem', flex: 1 }}
+                    >
+                      📸 Extraire depuis une image ou un logo (Vision)
+                    </button>
+                  </div>
+
+                  {inspirationSourceType === 'preset' ? (
+                    /* Ambiance Buttons */
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
+                      <button 
+                        type="button"
+                        onClick={() => setOnboardAmbiance('chaleureux')} 
+                        className={`btn ${onboardAmbiance === 'chaleureux' ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ padding: 10, fontSize: '0.9rem' }}
+                      >
+                        🍞 Boulangerie / Chaleureux
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => setOnboardAmbiance('nature')} 
+                        className={`btn ${onboardAmbiance === 'nature' ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ padding: 10, fontSize: '0.9rem' }}
+                      >
+                        🌿 Éco / Nature / Vert
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => setOnboardAmbiance('techno')} 
+                        className={`btn ${onboardAmbiance === 'techno' ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ padding: 10, fontSize: '0.9rem' }}
+                      >
+                        ⚡ SaaS / Techno / Sombre
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => setOnboardAmbiance('minimal')} 
+                        className={`btn ${onboardAmbiance === 'minimal' ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ padding: 10, fontSize: '0.9rem' }}
+                      >
+                        ⚫ Studio / Minimaliste / Chic
+                      </button>
+                    </div>
+                  ) : (
+                    /* Image Upload Drag & Drop Zone */
+                    <div 
+                      style={{
+                        border: '2px dashed var(--border-color)',
+                        borderRadius: 8,
+                        padding: '20px 10px',
+                        textAlign: 'center',
+                        cursor: 'pointer',
+                        background: 'rgba(255,255,255,0.01)',
+                        position: 'relative',
+                        transition: 'all 0.2s',
+                        borderColor: uploadedImage ? 'var(--accent-blue)' : 'var(--border-color)'
+                      }}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        const file = e.dataTransfer.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onloadend = () => {
+                            const base64String = reader.result as string;
+                            setUploadedImage(base64String);
+                          };
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                    >
+                      <input 
+                        type="file" 
+                        accept="image/*" 
+                        onChange={handleImageUpload} 
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          height: '100%',
+                          opacity: 0,
+                          cursor: 'pointer'
+                        }}
+                      />
+                      {uploadedImage ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                          <img src={uploadedImage} alt="Inspiration" style={{ maxHeight: 70, borderRadius: 4, objectFit: 'contain' }} />
+                          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            Logo / Image d'inspiration chargé.
+                          </span>
+                          <button 
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setUploadedImage(null);
+                            }}
+                            className="btn btn-secondary"
+                            style={{ padding: '4px 8px', fontSize: '0.75rem', zIndex: 10, borderColor: 'rgba(244, 63, 94, 0.4)', color: '#f87171' }}
+                          >
+                            Supprimer
+                          </button>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-muted)' }}>
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                            <circle cx="8.5" cy="8.5" r="1.5"/>
+                            <polyline points="21 15 16 10 5 21"/>
+                          </svg>
+                          <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            Glissez-déposez une image / logo ici ou cliquez pour choisir
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Optional Inspiration URL */}
+                <div>
+                  <label style={{ fontSize: '0.875rem', fontWeight: 600, display: 'block', marginBottom: 6 }}>URL d'un site web d'inspiration (Optionnel) :</label>
+                  <input 
+                    type="text" 
+                    className="input-text" 
+                    style={{ padding: '10px 14px' }}
+                    value={inspirationUrl} 
+                    onChange={(e) => setInspirationUrl(e.target.value)} 
+                    placeholder="Ex: apple.com, stripe.com, o2switch.fr..."
+                  />
+                </div>
+
+                <div style={{ marginTop: 10, display: 'flex', gap: 10 }}>
+                  <button 
+                    className="btn btn-primary" 
+                    onClick={handleOnboard}
+                    disabled={onboardingLoading}
+                    style={{ width: '100%', padding: '14px 20px', fontSize: '1.05rem' }}
+                  >
+                    {onboardingLoading ? 'Analyse & Génération par l\'IA...' : '✨ Générer l\'Ébauche & l\'Architecture du Site'}
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -611,117 +874,31 @@ export default function App() {
         {/* TAB 2: DESIGN PREDICTIF */}
         {activeTab === 'design' && (
           <div className="animate-slide grid-2col">
-            {/* Design Extractor Control */}
+            {/* Design Customization Panel */}
             <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-              <h2 style={{ fontSize: '1.75rem' }}>2. Design Prédictif & Extraction Graphique</h2>
+              <h2 style={{ fontSize: '1.75rem' }}>2. Personnalisation du Design & Thème</h2>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', marginBottom: 5 }}>
-                Analysez de vraies images d'inspiration ou générez des chartes graphiques dynamiques avec le modèle d'IA sélectionné (<strong>{aiProvider.toUpperCase()}</strong>).
+                Ajustez manuellement les couleurs, les polices et les arrondis pour peaufiner l'identité visuelle de votre site.
               </p>
 
-              {/* Upload d'image réel */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <label style={{ fontSize: '0.875rem', fontWeight: 600 }}>
-                  📸 Analyser un logo ou une capture d'écran d'inspiration (Vision) :
-                </label>
-                <div 
-                  style={{
-                    border: '2px dashed var(--border-color)',
-                    borderRadius: 8,
-                    padding: '20px 10px',
-                    textAlign: 'center',
-                    cursor: 'pointer',
-                    background: 'rgba(255,255,255,0.01)',
-                    position: 'relative',
-                    transition: 'all 0.2s',
-                    borderColor: extractingFromImage ? 'var(--accent-blue)' : 'var(--border-color)'
-                  }}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    const file = e.dataTransfer.files?.[0];
-                    if (file) {
-                      const reader = new FileReader();
-                      reader.onloadend = () => {
-                        const base64String = reader.result as string;
-                        setUploadedImage(base64String);
-                        extractDesignFromImage(base64String);
-                      };
-                      reader.readAsDataURL(file);
-                    }
-                  }}
-                >
-                  <input 
-                    type="file" 
-                    accept="image/*" 
-                    onChange={handleImageUpload} 
-                    style={{
-                      position: 'absolute',
-                      top: 0,
-                      left: 0,
-                      width: '100%',
-                      height: '100%',
-                      opacity: 0,
-                      cursor: 'pointer'
-                    }}
-                  />
-                  {uploadedImage ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-                      <img src={uploadedImage} alt="Inspiration" style={{ maxHeight: 70, borderRadius: 4, objectFit: 'contain' }} />
-                      <span style={{ fontSize: '0.8rem', color: extractingFromImage ? 'var(--accent-blue)' : 'var(--text-muted)' }}>
-                        {extractingFromImage ? '⚡ Analyse Vision par l\'IA en cours...' : 'Image chargée. Glissez-déposez ou cliquez pour en changer.'}
-                      </span>
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-muted)' }}>
-                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-                        <circle cx="8.5" cy="8.5" r="1.5"/>
-                        <polyline points="21 15 16 10 5 21"/>
-                      </svg>
-                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                        Glissez-déposez une image ici ou cliquez pour choisir
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <label style={{ fontSize: '0.875rem', fontWeight: 600, display: 'block', marginBottom: 8 }}>
-                  Ou générer une ambiance graphique par IA :
-                </label>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-                  <button 
-                    onClick={() => applyAmbiance('chaleureux')} 
-                    className={`btn ${selectedAmbiance === 'chaleureux' ? 'btn-primary' : 'btn-secondary'}`}
-                  >
-                    🍞 Boulangerie / Chaleureux
-                  </button>
-                  <button 
-                    onClick={() => applyAmbiance('nature')} 
-                    className={`btn ${selectedAmbiance === 'nature' ? 'btn-primary' : 'btn-secondary'}`}
-                  >
-                    🌿 Éco / Nature / Vert
-                  </button>
-                  <button 
-                    onClick={() => applyAmbiance('techno')} 
-                    className={`btn ${selectedAmbiance === 'techno' ? 'btn-primary' : 'btn-secondary'}`}
-                  >
-                    ⚡ SaaS / Techno / Sombre
-                  </button>
-                  <button 
-                    onClick={() => applyAmbiance('minimal')} 
-                    className={`btn ${selectedAmbiance === 'minimal' ? 'btn-primary' : 'btn-secondary'}`}
-                  >
-                    ⚫ Studio / Minimaliste / Noir
-                  </button>
-                </div>
-              </div>
-
               {/* Theme Variable Customizers */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 15, borderTop: '1px solid var(--border-color)', paddingTop: 15 }}>
-                <h3 style={{ fontSize: '1.1rem' }}>Ajustement manuel des variables de thème</h3>
+              <div 
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    saveTheme();
+                  }
+                }}
+                style={{ display: 'flex', flexDirection: 'column', gap: 15, borderTop: '1px solid var(--border-color)', paddingTop: 15 }}
+              >
+                <h3 style={{ fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  Ajustement manuel des variables de thème
+                  {isThemeModified && (
+                    <span className="badge animate-slide" style={{ background: 'rgba(244, 63, 94, 0.15)', border: '1px solid rgba(244, 63, 94, 0.3)', color: '#fda4af', padding: '4px 8px', borderRadius: 4, fontSize: '0.75rem', fontWeight: 600 }}>
+                      ⚠️ Brouillon non sauvegardé
+                    </span>
+                  )}
+                </h3>
 
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                   <div>
@@ -836,11 +1013,18 @@ export default function App() {
                 </div>
               </div>
 
-              <div style={{ marginTop: 'auto', display: 'flex', gap: 10 }}>
-                <button className="btn btn-primary" onClick={saveTheme} disabled={designSaving}>
-                  {designSaving ? 'Enregistrement...' : 'Enregistrer le Thème'}
-                </button>
-                <button className="btn btn-secondary" onClick={() => setActiveTab('cms')}>
+              <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button className="btn btn-primary" style={{ flex: 1 }} onClick={saveTheme} disabled={designSaving}>
+                    {designSaving ? 'Enregistrement...' : 'Enregistrer le Thème'}
+                  </button>
+                  {isThemeModified && (
+                    <button className="btn btn-secondary" style={{ borderColor: 'rgba(239, 68, 68, 0.4)', color: '#f87171' }} onClick={resetTheme}>
+                      Réinitialiser
+                    </button>
+                  )}
+                </div>
+                <button className="btn btn-secondary" style={{ width: '100%' }} onClick={() => setActiveTab('cms')}>
                   Passer à l'Éditeur de Pages →
                 </button>
               </div>
@@ -942,7 +1126,16 @@ export default function App() {
 
                       {/* Champs d'édition rapides pour le bloc sélectionné */}
                       {editingBlockIdx === idx ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10, borderTop: '1px solid var(--border-color)', paddingTop: 10 }}>
+                        <div 
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                              e.preventDefault();
+                              savePages(pagesData);
+                              setEditingBlockIdx(null);
+                            }
+                          }}
+                          style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10, borderTop: '1px solid var(--border-color)', paddingTop: 10 }}
+                        >
                           {block.blockType === 'hero' && (
                             <>
                               <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Titre Hero</label>

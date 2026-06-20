@@ -6,48 +6,57 @@
       "layout": [
         {
           "blockType": "hero",
-          "title": "Boulangerie Artisanale",
-          "subtitle": "Des pains croustillants et des viennoiseries pur beurre cuits sur place tous les jours.",
-          "ctaText": "Découvrir nos produits",
-          "backgroundImage": "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&q=80&w=1200"
+          "title": "L'Art du Pain et de l'Image",
+          "subtitle": "Une alliance inédite entre haute boulangerie croustillante et photographie artistique haut de gamme au cœur de notre atelier.",
+          "ctaText": "Découvrir l'Atelier",
+          "backgroundImage": "https://images.unsplash.com/photo-1549931319-a545dcf3bc73?auto=format&fit=crop&q=80&w=1200"
         },
         {
           "blockType": "features",
-          "title": "Pourquoi choisir notre boulangerie ?",
+          "title": "Deux Savoir-Faire, Une Seule Exigence",
           "items": [
             {
-              "title": "Farines Bio",
-              "description": "Nous sélectionnons uniquement des farines certifiées biologiques et locales."
+              "title": "Boulangerie d'Exception",
+              "description": "Des pains au levain naturel et des viennoiseries pur beurre façonnés à la main et cuits sur place chaque matin."
             },
             {
-              "title": "Savoir-faire",
-              "description": "Nos boulangers respectent des méthodes de fermentation lente sur levain naturel."
+              "title": "Studio Photo Chic",
+              "description": "Des séances de portrait d'art, de mode et de création visuelle sur mesure dans une ambiance feutrée et lumineuse."
             },
             {
-              "title": "Chaque matin",
-              "description": "Cuisson tout au long de la journée pour vous garantir une fraîcheur optimale."
+              "title": "Expérience Hybride",
+              "description": "Un concept store unique pensé pour les esthètes, mêlant l'odeur du café chaud et la poésie des tirages argentiques."
             }
           ]
         },
         {
           "blockType": "product-grid",
-          "title": "Nos Produits Vedettes",
+          "title": "Nos Créations & Prestations",
           "products": [
             {
-              "name": "La Baguette de Tradition",
-              "price": "1.30 €",
-              "image": "https://images.unsplash.com/photo-1549931319-a545dcf3bc73?auto=format&fit=crop&q=80&w=400"
+              "name": "Le Pain Signature au Levain",
+              "price": "8.50 €",
+              "image": "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&q=80&w=400"
             },
             {
-              "name": "Le Croissant Pur Beurre",
-              "price": "1.20 €",
-              "image": "https://images.unsplash.com/photo-1555507036-ab1f4038808a?auto=format&fit=crop&q=80&w=400"
+              "name": "Session Portrait d'Art (1h)",
+              "price": "180.00 €",
+              "image": "https://images.unsplash.com/photo-1542038784456-1ea8e935640e?auto=format&fit=crop&q=80&w=400"
             },
             {
-              "name": "Le Pain au Chocolat",
-              "price": "1.30 €",
-              "image": "https://images.unsplash.com/photo-1608686207856-001b95cf60ca?auto=format&fit=crop&q=80&w=400"
+              "name": "Coffret Dégustation & Tirage Limité",
+              "price": "45.00 €",
+              "image": "https://images.unsplash.com/photo-1513151233558-d860c5398176?auto=format&fit=crop&q=80&w=400"
             }
+          ]
+        },
+        {
+          "blockType": "gallery",
+          "title": "Instants Choisis de l'Atelier",
+          "images": [
+            "https://images.unsplash.com/photo-1555507036-ab1f4038808a?auto=format&fit=crop&w=600",
+            "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?auto=format&fit=crop&w=600",
+            "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=600"
           ]
         }
       ]
