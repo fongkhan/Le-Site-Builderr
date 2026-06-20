@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 // Interfaces
 interface FeatureFlags {
@@ -93,7 +93,7 @@ export default function App() {
 
   // --- STATE CMS ---
   const [pagesData, setPagesData] = useState<PagesData>({ docs: [] });
-  const [selectedPageIdx, setSelectedPageIdx] = useState(0);
+  const [selectedPageIdx] = useState(0);
   const [cmsSaving, setCmsSaving] = useState(false);
   const [editingBlockIdx, setEditingBlockIdx] = useState<number | null>(null);
 
@@ -132,7 +132,7 @@ export default function App() {
       const res = await fetch(`${BACKEND_URL}/api/theme`);
       if (res.ok) {
         const data = await res.json();
-        setTheme(data.theme ? data : { theme: defaultThemeMock }).theme;
+        setTheme(data.theme ? data.theme : defaultThemeMock);
       }
     } catch (e) {
       console.error("Impossible de récupérer le thème", e);
@@ -767,7 +767,7 @@ export default function App() {
             
             {/* Blocks List & Settings */}
             <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 20, maxHeight: 'calc(100vh - 160px)', overflowY: 'auto' }}>
-              <h2 style={{ fontSize: '1.5rem' }}>🗃️ CMS Blocks (Payload)</h2>
+              <h2 style={{ fontSize: '1.5rem' }}>🗃️ CMS Blocks (Payload) {cmsSaving && <span style={{ fontSize: '0.8rem', color: 'var(--accent-blue)', marginLeft: 10 }}>💾 Enregistrement...</span>}</h2>
               <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
                 Configurez les sections de votre page. Modifiez leur ordre et leur contenu. Les modifications sont enregistrées sur le serveur local.
               </p>
