@@ -90,6 +90,9 @@ export default function App() {
   });
   const [selectedAmbiance, setSelectedAmbiance] = useState<string>('chaleureux');
   const [designSaving, setDesignSaving] = useState(false);
+  const [aiProvider, setAiProvider] = useState<'openai' | 'anthropic' | 'gemini'>('openai');
+  const [uploadedImage, setUploadedImage] = useState<string | null>(null);
+  const [extractingFromImage, setExtractingFromImage] = useState(false);
 
   // --- STATE CMS ---
   const [pagesData, setPagesData] = useState<PagesData>({ docs: [] });
@@ -177,14 +180,17 @@ export default function App() {
       const res = await fetch(`${BACKEND_URL}/api/onboard`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: promptText })
+        body: JSON.stringify({ prompt: promptText, provider: aiProvider })
       });
       if (res.ok) {
         const data = (await res.json()) as OnboardingResult;
         setOnboardingResult(data);
+      } else {
+        const errData = await res.json();
+        alert(`Erreur IA : ${errData.error || 'Erreur lors de la qualification.'}`);
       }
     } catch (e) {
-      alert("Erreur lors de la qualification. Assurez-vous que le serveur Express tourne sur le port 4000.");
+      alert("Erreur lors de la qualification. Assurez-vous que le serveur Express tourne sur le port 4000 et que vos clés API sont configurées.");
     } finally {
       setOnboardingLoading(false);
     }
@@ -196,16 +202,57 @@ export default function App() {
       const res = await fetch(`${BACKEND_URL}/api/extract-design`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ambiance })
+        body: JSON.stringify({ ambiance, provider: aiProvider })
       });
       if (res.ok) {
         const data = await res.json();
         setTheme(data.theme);
+      } else {
+        const errData = await res.json();
+        alert(`Erreur IA : ${errData.error || "Erreur lors de l'extraction."}`);
       }
     } catch (e) {
       console.error("Erreur extraction thème", e);
     }
   };
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const base64String = reader.result as string;
+      setUploadedImage(base64String);
+      extractDesignFromImage(base64String);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const extractDesignFromImage = async (base64Str: string) => {
+    setExtractingFromImage(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/extract-design`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64Str, provider: aiProvider })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setTheme(data.theme);
+        setSelectedAmbiance(''); // Reset ambiance selection
+        alert("🎨 Thème extrait avec succès depuis votre image !");
+      } else {
+        const errData = await res.json();
+        alert(`Erreur lors de l'extraction : ${errData.error || 'Erreur inconnue.'}`);
+      }
+    } catch (e) {
+      alert("Erreur lors de l'extraction de design depuis l'image.");
+    } finally {
+      setExtractingFromImage(false);
+    }
+  };
+
 
   const saveTheme = async () => {
     setDesignSaving(true);
@@ -403,6 +450,35 @@ export default function App() {
               <p style={{ color: 'var(--text-muted)', marginBottom: 20 }}>
                 Notre moteur d'intelligence artificielle analyse votre besoin fonctionnel pour déterminer dynamiquement l'infrastructure optimale et la stack à provisionner sur o2switch.
               </p>
+
+              {/* Sélecteur de fournisseur d'IA */}
+              <div style={{ marginBottom: 20, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-muted)' }}>Sélectionner le modèle d'IA :</span>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                  <button 
+                    onClick={() => setAiProvider('openai')} 
+                    className={`btn ${aiProvider === 'openai' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ padding: '8px 16px', fontSize: '0.85rem' }}
+                  >
+                    OpenAI (gpt-4o-mini)
+                  </button>
+                  <button 
+                    onClick={() => setAiProvider('anthropic')} 
+                    className={`btn ${aiProvider === 'anthropic' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ padding: '8px 16px', fontSize: '0.85rem' }}
+                  >
+                    Anthropic (claude-3-5-sonnet)
+                  </button>
+                  <button 
+                    onClick={() => setAiProvider('gemini')} 
+                    className={`btn ${aiProvider === 'gemini' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ padding: '8px 16px', fontSize: '0.85rem' }}
+                  >
+                    Gemini (gemini-1.5-pro)
+                  </button>
+                </div>
+              </div>
+
               <textarea 
                 className="input-text"
                 rows={4}
@@ -538,14 +614,83 @@ export default function App() {
             {/* Design Extractor Control */}
             <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
               <h2 style={{ fontSize: '1.75rem' }}>2. Design Prédictif & Extraction Graphique</h2>
-              <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem' }}>
-                Simulez l'analyse visuelle d'un logo ou d'une capture d'écran téléchargée en choisissant une ambiance de design ci-dessous :
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', marginBottom: 5 }}>
+                Analysez de vraies images d'inspiration ou générez des chartes graphiques dynamiques avec le modèle d'IA sélectionné (<strong>{aiProvider.toUpperCase()}</strong>).
               </p>
+
+              {/* Upload d'image réel */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <label style={{ fontSize: '0.875rem', fontWeight: 600 }}>
+                  📸 Analyser un logo ou une capture d'écran d'inspiration (Vision) :
+                </label>
+                <div 
+                  style={{
+                    border: '2px dashed var(--border-color)',
+                    borderRadius: 8,
+                    padding: '20px 10px',
+                    textAlign: 'center',
+                    cursor: 'pointer',
+                    background: 'rgba(255,255,255,0.01)',
+                    position: 'relative',
+                    transition: 'all 0.2s',
+                    borderColor: extractingFromImage ? 'var(--accent-blue)' : 'var(--border-color)'
+                  }}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const file = e.dataTransfer.files?.[0];
+                    if (file) {
+                      const reader = new FileReader();
+                      reader.onloadend = () => {
+                        const base64String = reader.result as string;
+                        setUploadedImage(base64String);
+                        extractDesignFromImage(base64String);
+                      };
+                      reader.readAsDataURL(file);
+                    }
+                  }}
+                >
+                  <input 
+                    type="file" 
+                    accept="image/*" 
+                    onChange={handleImageUpload} 
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      height: '100%',
+                      opacity: 0,
+                      cursor: 'pointer'
+                    }}
+                  />
+                  {uploadedImage ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+                      <img src={uploadedImage} alt="Inspiration" style={{ maxHeight: 70, borderRadius: 4, objectFit: 'contain' }} />
+                      <span style={{ fontSize: '0.8rem', color: extractingFromImage ? 'var(--accent-blue)' : 'var(--text-muted)' }}>
+                        {extractingFromImage ? '⚡ Analyse Vision par l\'IA en cours...' : 'Image chargée. Glissez-déposez ou cliquez pour en changer.'}
+                      </span>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-muted)' }}>
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                        <circle cx="8.5" cy="8.5" r="1.5"/>
+                        <polyline points="21 15 16 10 5 21"/>
+                      </svg>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                        Glissez-déposez une image ici ou cliquez pour choisir
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
 
               <div>
                 <label style={{ fontSize: '0.875rem', fontWeight: 600, display: 'block', marginBottom: 8 }}>
-                  Sélectionner une ambiance visuelle (Simulation Vision LLM)
+                  Ou générer une ambiance graphique par IA :
                 </label>
+
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
                   <button 
                     onClick={() => applyAmbiance('chaleureux')} 

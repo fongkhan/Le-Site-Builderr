@@ -1,3 +1,5 @@
+require('dotenv').config();
+const { runOnboard, runExtractDesign } = require('./ai');
 const express = require('express');
 const cors = require('cors');
 const { exec } = require('child_process');
@@ -136,131 +138,32 @@ app.post('/api/theme', (req, res) => {
 // --- MOCK AI ENDPOINTS ---
 
 // Assistant d'Onboarding (Routage Stack)
-app.post('/api/onboard', (req, res) => {
-  const { prompt } = req.body;
+app.post('/api/onboard', async (req, res) => {
+  const { prompt, provider } = req.body;
   if (!prompt) {
     return res.status(400).json({ error: "Le prompt est requis." });
   }
 
-  const text = prompt.toLowerCase();
-  const features = {
-    blog_or_news: false,
-    e_commerce: false,
-    multi_store: false
-  };
-
-  const stack = {
-    astro_mode: "ssg",
-    need_payload: false,
-    need_medusajs: false,
-    need_stripe: false
-  };
-
-  // Logique de routage dynamique basée sur les mots-clés
-  if (text.includes("vend") || text.includes("boutique") || text.includes("e-commerce") || text.includes("achat") || text.includes("panier") || text.includes("commerce")) {
-    features.e_commerce = true;
-    stack.need_stripe = true;
-    if (text.includes("multi-boutique") || text.includes("stocks") || text.includes("complexe")) {
-      features.multi_store = true;
-      stack.need_payload = true;
-      stack.need_medusajs = true;
-      stack.astro_mode = "hybrid";
-    } else {
-      stack.need_payload = true;
-      stack.astro_mode = "ssg"; // SSG + Stripe Checkout
-    }
+  try {
+    const result = await runOnboard(provider, prompt);
+    res.json(result);
+  } catch (error) {
+    console.error("Erreur lors de l'onboarding IA :", error.message);
+    res.status(500).json({ error: error.message });
   }
-
-  if (text.includes("blog") || text.includes("nouvelles") || text.includes("actualités") || text.includes("articles") || text.includes("portfolio")) {
-    features.blog_or_news = true;
-    stack.need_payload = true;
-  }
-
-  // Si aucun besoin dynamique spécifique mais demande modifiable
-  if (text.includes("modifier") || text.includes("cms") || text.includes("administrer") || text.includes("gestion")) {
-    stack.need_payload = true;
-  }
-
-  // Déduire un nom de site
-  let siteName = "Mon Site Composable";
-  const matchBoulangerie = prompt.match(/(?:pour ma|de la|nommé)\s+([^,.]+)/i);
-  if (matchBoulangerie && matchBoulangerie[1]) {
-    siteName = matchBoulangerie[1].trim();
-  } else if (text.includes("boulangerie")) {
-    siteName = "La Boulangerie de Clamart";
-  }
-
-  res.json({
-    site_name: siteName,
-    features,
-    stack_requirements: stack
-  });
 });
 
 // Extraction de thème depuis une image/logo
-app.post('/api/extract-design', (req, res) => {
-  // Simule une extraction à partir d'un type d'ambiance envoyé
-  const { ambiance } = req.body; // 'nature', 'chaleureux', 'techno', 'minimal'
-  
-  let palette = {
-    primary: "#3B2F2F",
-    secondary: "#F5E6CC",
-    background: "#FFFFFF",
-    text: "#1A1A1A",
-    fonts: { heading: "Playfair Display", body: "Inter" },
-    radius: "8px"
-  };
+app.post('/api/extract-design', async (req, res) => {
+  const { provider, image, ambiance } = req.body;
 
-  if (ambiance === 'nature') {
-    palette = {
-      primary: "#2E5A44",
-      secondary: "#EAE7DC",
-      background: "#F9F8F6",
-      text: "#1E2F23",
-      fonts: { heading: "Outfit", body: "Plus Jakarta Sans" },
-      radius: "16px"
-    };
-  } else if (ambiance === 'techno') {
-    palette = {
-      primary: "#6366F1",
-      secondary: "#312E81",
-      background: "#0F172A",
-      text: "#F8FAFC",
-      fonts: { heading: "Space Grotesk", body: "DM Sans" },
-      radius: "6px"
-    };
-  } else if (ambiance === 'chaleureux') {
-    palette = {
-      primary: "#D97706",
-      secondary: "#FEF3C7",
-      background: "#FFFBEB",
-      text: "#78350F",
-      fonts: { heading: "Lora", body: "Karla" },
-      radius: "20px"
-    };
-  } else if (ambiance === 'minimal') {
-    palette = {
-      primary: "#000000",
-      secondary: "#E5E5E5",
-      background: "#FFFFFF",
-      text: "#111111",
-      fonts: { heading: "Syncopate", body: "Cabinet Grotesk" },
-      radius: "0px"
-    };
+  try {
+    const result = await runExtractDesign(provider, image, ambiance);
+    res.json(result);
+  } catch (error) {
+    console.error("Erreur lors de l'extraction de design IA :", error.message);
+    res.status(500).json({ error: error.message });
   }
-
-  res.json({
-    theme: {
-      colors: {
-        primary: palette.primary,
-        secondary: palette.secondary,
-        background: palette.background,
-        text: palette.text
-      },
-      fonts: palette.fonts,
-      radius: palette.radius
-    }
-  });
 });
 
 
@@ -367,7 +270,7 @@ app.post('/webhook/rebuild', (req, res) => {
   });
 });
 
-const PORT = 4000;
+const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
   console.log(`Serveur Meta-Builder démarré sur http://localhost:${PORT}`);
 });
