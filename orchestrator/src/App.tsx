@@ -506,7 +506,7 @@ export default function App() {
                       className={`btn ${aiProvider === 'openai' ? 'btn-primary' : 'btn-secondary'}`}
                       style={{ padding: '8px 16px', fontSize: '0.85rem' }}
                     >
-                      OpenAI (gpt-4o-mini)
+                      OpenAI
                     </button>
                   )}
                   {availableProviders.anthropic && (
@@ -515,7 +515,7 @@ export default function App() {
                       className={`btn ${aiProvider === 'anthropic' ? 'btn-primary' : 'btn-secondary'}`}
                       style={{ padding: '8px 16px', fontSize: '0.85rem' }}
                     >
-                      Anthropic (claude-3-5-sonnet)
+                      Claude 3.5 Sonnet
                     </button>
                   )}
                   {availableProviders.gemini && (
@@ -524,7 +524,7 @@ export default function App() {
                       className={`btn ${aiProvider === 'gemini' ? 'btn-primary' : 'btn-secondary'}`}
                       style={{ padding: '8px 16px', fontSize: '0.85rem' }}
                     >
-                      Gemini (gemini-3.5-flash)
+                      Gemini 3.5 Flash
                     </button>
                   )}
                 </div>
