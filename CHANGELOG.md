@@ -2,6 +2,22 @@
 
 Toutes les modifications notables apportées à ce projet sont documentées dans ce fichier.
 
+## [1.1.0] - 2026-06-20
+
+### Modifié
+
+- **Relocalisation de l'Inspiration Visuelle (Images & URLs) :**
+  - Déplacement du téléversement d'image/logo (Vision) et du champ URL d'inspiration de l'onglet **Design** vers l'onglet **Onboarding**.
+  - Simplification de l'onglet **Design** (rebaptisé "Personnalisation du Design & Thème") qui sert exclusivement au peaufinage manuel de la charte graphique en WYSIWYG, sans distraction ou redondance.
+
+- **Intégration d'un Appel IA Unifié :**
+  - Refonte du service `/api/onboard` et de `runOnboard` (`server/ai.js`) pour traiter de concert l'activité, l'ambiance choisie, l'image/logo importé (Vision) et l'URL d'inspiration.
+  - L'IA génère en une seule requête l'architecture de la stack, l'ébauche des blocs de la page d'accueil et la charte de couleurs/typos initiale correspondante.
+
+- **Mise à jour du Modèle et Résolution de Quotas :**
+  - Migration de `gemini-2.5-flash` vers `gemini-3.5-flash` dans le backend et le frontend pour éliminer les erreurs HTTP 429 et stabiliser le service.
+  - Sélection dynamique du modèle d'IA dans l'interface en fonction des clés configurées dans le `.env`.
+
 ## [1.0.0] - 2026-06-19
 
 ### Ajouts

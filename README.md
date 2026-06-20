@@ -47,14 +47,15 @@ Pour installer l'ensemble des dépendances et démarrer les serveurs simultaném
 
 ## ⚡ Fonctionnalités Implémentées
 
-### 1. Tunnel d'Onboarding IA & Routage
+### 1. Tunnel d'Onboarding IA & Inspiration Graphique Unifiée
 * Saisie de besoin métier en langage naturel.
-* Moteur de routage déduisant la stack requise (Astro SSG, CMS Payload, Boutique MedusaJS, Stripe) selon des règles d'optimisation de ressources sur hébergement mutualisé.
+* Choix de l'inspiration visuelle directement à l'onboarding : sélection d'une ambiance prédéfinie (Chaleureux, Nature, Techno, Minimaliste), téléversement d'une image/logo (Vision IA) et spécification optionnelle d'un site web d'inspiration (ex: `apple.com`).
+* Appel IA unifié (utilisant `gemini-3.5-flash` par défaut pour contourner les quotas de requêtes) générant conjointement la stack technique qualifiée, l'ébauche de blocs, et la charte graphique initiale (couleurs, polices, arrondi) en une seule étape.
 
-### 2. Design Prédictif & Extraction Graphique
-* Simulation d'analyse d'images/logos par IA.
-* Extraction de thèmes de couleurs harmonieux, choix typographiques de Google Fonts, et border-radius.
-* Édition des variables en WYSIWYG avec écriture automatique dans le fichier de style client `theme.css`.
+### 2. Personnalisation du Design & Peaufinage Manuel
+* Onglet Design 100% manuel dédié aux ajustements fins des tokens CSS (couleur primaire/secondaire, fond, texte, polices de titres/corps de texte, arrondis).
+* Rendu en direct des tokens CSS sur un aperçu interactif.
+* Enregistrement et application automatique dans le fichier de style client `theme.css`.
 
 ### 3. CMS flexible par Blocs (Payload Blocks ↔ Astro Router)
 * Éditeur de blocs de page (Hero, Features, ProductGrid, Gallery).

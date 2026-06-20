@@ -29,28 +29,54 @@ Chaque site client est généré à partir d'une combinaison sur-mesure de trois
 
 ---
 
-## 3. Moteur de Décision IA & Qualification Dynamique
+## 3. Moteur de Décision IA & Qualification Dynamique (Onboarding Unifié)
 
-Plutôt que d'enfermer l'utilisateur dans des offres rigides, l'intégration des LLM permet une configuration d'infrastructure élastique et sur-mesure.
+Plutôt que d'enfermer l'utilisateur dans des étapes éparses et des offres rigides, l'intégration des LLMs (`gemini-3.5-flash`, `gpt-4o-mini`, `claude-3-5-sonnet`) permet une qualification d'infrastructure et une génération d'identité visuelle unifiée lors de la phase unique d'onboarding.
 
-### 3.1 Flux d'Onboarding et Routage d'Infrastructure
-1.  **Entrée Client :** L'utilisateur soumet son texte descriptif (*ex: "Je veux un site pour ma boulangerie à Clamart, j'ai deux boutiques et je veux vendre mes croissants en ligne"*).
-2.  **Analyse LLM :** Le prompt est envoyé à l'API d'un LLM avec une contrainte de sortie au format JSON strict (*Structured Outputs*).
-3.  **Contrat d'Interface JSON :** L'IA retourne un objet qualifiant les besoins fonctionnels et techniques :
+### 3.1 Flux d'Onboarding Unifié & Routage d'Infrastructure
+1. **Entrée Client :** L'utilisateur fournit son nom de projet, son activité en langage naturel, coche les fonctionnalités voulues, et transmet ses inspirations graphiques de départ (choix d'une ambiance prédéfinie, téléversement d'un logo/image pour analyse Vision, et saisie optionnelle d'une URL de site de référence comme `apple.com`).
+2. **Analyse LLM Unifiée :** La requête regroupe l'image (Base64) et les instructions textuelles en une seule passe. Cela permet à l'IA de concevoir simultanément l'architecture technique, de rédiger les textes des blocs de pages et d'extraire la palette de couleurs.
+3. **Contrat d'Interface JSON :** Le serveur API (/api/onboard) transmet le tout et reçoit de l'IA un objet unique contenant la qualification technique, la structure des pages et le thème :
 
 ```json
 {
-  "site_name": "Au Bon Pain de Clamart",
-  "features": {
-    "blog_or_news": true,
-    "e_commerce": true,
-    "multi_store": true
+  "qualification": {
+    "site_name": "Studio Photo Chic",
+    "features": {
+      "blog_or_news": true,
+      "e_commerce": false,
+      "multi_store": false
+    },
+    "stack_requirements": {
+      "astro_mode": "ssg",
+      "need_payload": true,
+      "need_medusajs": false,
+      "need_stripe": false
+    }
   },
-  "stack_requirements": {
-    "astro_mode": "hybrid",
-    "need_payload": true,
-    "need_medusajs": true,
-    "need_stripe": true
+  "pages": {
+    "docs": [
+      {
+        "title": "Accueil",
+        "slug": "home",
+        "layout": [
+          { "blockType": "hero", "title": "...", "subtitle": "...", "ctaText": "..." }
+        ]
+      }
+    ]
+  },
+  "theme": {
+    "colors": {
+      "primary": "#ffffff",
+      "secondary": "#86868b",
+      "background": "#000000",
+      "text": "#f5f5f7"
+    },
+    "fonts": {
+      "heading": "Outfit",
+      "body": "Inter"
+    },
+    "radius": "8px"
   }
 }
 ```
@@ -66,50 +92,32 @@ L'Orchestrateur applique les règles suivantes pour optimiser la consommation de
 
 ---
 
-## 4. Extraction Automatique du Design (Design Prédictif)
+## 4. Personnalisation du Design & Peaufinage Manuel
 
-Le client peut téléverser ses assets graphiques (images, logos, captures d'écran de sites existants, PDF) pour définir l'identité visuelle de son futur site.
+L'analyse d'inspiration graphique (ambiance, vision d'image ou URL de site web) est entièrement exécutée lors de l'onboarding pour générer une proposition esthétique de départ. L'onglet **Design** de l'Orchestrateur sert ensuite exclusivement au peaufinage manuel.
 
-### 4.1 Pipeline d'Analyse Visuelle (Vision LLM)
+### 4.1 Peaufinage WYSIWYG
+* L'utilisateur ajuste lui-même les variables de style clés en direct via des sélecteurs de couleurs, de polices (parmi une liste de Google Fonts prédéfinie) et d'arrondi des bordures (radius).
+* Un panneau de prévisualisation simule en temps réel l'effet des variables CSS sur des composants factices (titres, paragraphes, boutons).
 
-Les fichiers sont soumis à un modèle multimodal (ex: GPT-4o) pour en extraire l'essence graphique. L'IA extrait un JSON standardisé contenant la charte graphique :
+### 4.2 Injection Dynamique dans le Design System (CSS Variables)
 
-```json
-{
-  "theme": {
-    "colors": {
-      "primary": "#3B2F2F",
-      "secondary": "#F5E6CC",
-      "background": "#FFFFFF",
-      "text": "#1A1A1A"
-    },
-    "fonts": {
-      "heading": "Playfair Display",
-      "body": "Inter"
-    },
-    "radius": "8px"
-  }
-}
-```
-
-### 4.2 Injection Dynamique dans le Design System
-
-Les valeurs de la charte graphique générées par l'IA sont écrites par l'Orchestrateur dans un fichier de configuration globale du site du client. Le template Astro utilise ces tokens via des variables CSS natives :
+Lors de la sauvegarde, le thème est sérialisé dans `theme.json` et écrit automatiquement dans le fichier de style d'Astro. Le template client injecte ensuite ces variables :
 
 ```css
-/* src/styles/theme.css */
+/* client-template/src/styles/theme.css */
 :root {
-  --color-primary: #3B2F2F;
-  --color-secondary: #F5E6CC;
-  --color-bg: #FFFFFF;
-  --color-text: #1A1A1A;
-  --font-heading: 'Playfair Display', serif;
+  --color-primary: #ffffff;
+  --color-secondary: #86868b;
+  --color-bg: #000000;
+  --color-text: #f5f5f7;
+  --font-heading: 'Outfit', serif;
   --font-body: 'Inter', sans-serif;
   --border-radius: 8px;
 }
 ```
 
-Tous les composants du site utilisent exclusivement ces variables, garantissant le respect immédiat de l'identité visuelle extraite.
+Tous les composants du site utilisent exclusivement ces variables CSS natives, garantissant le respect immédiat de la charte visuelle.
 
 ---
 
