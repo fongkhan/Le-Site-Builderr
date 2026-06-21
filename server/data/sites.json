@@ -1,0 +1,22 @@
+[
+  {
+    "slug": "boulangerie-artisanale",
+    "name": "Boulangerie Artisanale Clamart",
+    "domain": "boulangerie-clamart.o2switch.site",
+    "documentRoot": "E:/Program Files/git/Le-Site-Builderr/simulated_public_html/boulangerie-artisanale",
+    "stack": "Astro SSG + Payload CMS",
+    "createdWithTool": true,
+    "status": "active",
+    "sslStatus": "active"
+  },
+  {
+    "slug": "test-site",
+    "name": "Test Site",
+    "domain": "test-site.o2switch.site",
+    "documentRoot": "E:/Program Files/git/Le-Site-Builderr/simulated_public_html/test-site",
+    "stack": "Astro SSG",
+    "createdWithTool": true,
+    "status": "active",
+    "sslStatus": "active"
+  }
+]

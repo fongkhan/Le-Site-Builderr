@@ -62,12 +62,32 @@ interface BuildStatus {
   error: string | null;
   lockExists: boolean;
   logs: string;
+  buildingSite?: string | null;
 }
 
 const BACKEND_URL = 'http://localhost:4000';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'onboarding' | 'design' | 'cms' | 'deploy'>('onboarding');
+  const [activeTab, setActiveTab] = useState<'cpanel' | 'onboarding' | 'design' | 'cms' | 'deploy'>('cpanel');
+
+  // --- STATE CPANEL ---
+  const [sites, setSites] = useState<any[]>([]);
+  const [activeSiteSlug, setActiveSiteSlug] = useState<string>('');
+  const [scannedSites, setScannedSites] = useState<any[]>([]);
+  const [scanningLoading, setScanningLoading] = useState(false);
+  const [newSiteName, setNewSiteName] = useState('');
+  const [newSiteDomain, setNewSiteDomain] = useState('');
+  const [newSiteStack, setNewSiteStack] = useState('Astro SSG');
+  const [newSiteLoading, setNewSiteLoading] = useState(false);
+  const [deleteFilesOnRemove, setDeleteFilesOnRemove] = useState(true);
+
+  // File Manager Modal State
+  const [fileManagerSite, setFileManagerSite] = useState<any | null>(null);
+  const [fileList, setFileList] = useState<any[]>([]);
+  const [fileListLoading, setFileListLoading] = useState(false);
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+  const [selectedFileContent, setSelectedFileContent] = useState<string | null>(null);
+  const [selectedFileLoading, setSelectedFileLoading] = useState(false);
 
   // --- STATE ONBOARDING ---
   const [siteName, setSiteName] = useState('Boulangerie Artisanale');
@@ -103,8 +123,6 @@ export default function App() {
   const [savedTheme, setSavedTheme] = useState<Theme | null>(null);
   const [availableProviders, setAvailableProviders] = useState<{openai: boolean; anthropic: boolean; gemini: boolean}>({ openai: true, anthropic: true, gemini: true });
 
-
-
   // --- STATE CMS ---
   const [pagesData, setPagesData] = useState<PagesData>({ docs: [] });
   const [selectedPageIdx] = useState(0);
@@ -118,7 +136,8 @@ export default function App() {
     lastCompleted: null,
     error: null,
     lockExists: false,
-    logs: ''
+    logs: '',
+    buildingSite: null
   });
   const [deployLoading, setDeployLoading] = useState(false);
   
@@ -127,8 +146,7 @@ export default function App() {
   // Fetch initial data
   useEffect(() => {
     fetchConfig();
-    fetchTheme();
-    fetchPages();
+    fetchSites();
     fetchBuildStatus();
 
     // Poll build status every 2 seconds
@@ -137,10 +155,32 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (activeSiteSlug) {
+      fetchTheme();
+      fetchPages();
+    }
+  }, [activeSiteSlug]);
+
+  useEffect(() => {
     if (logsEndRef.current) {
       logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [buildStatus.logs]);
+
+  const fetchSites = async () => {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/sites`);
+      if (res.ok) {
+        const data = await res.json();
+        setSites(data);
+        if (data.length > 0 && !activeSiteSlug) {
+          setActiveSiteSlug(data[0].slug);
+        }
+      }
+    } catch (e) {
+      console.error("Impossible de récupérer la liste des sites", e);
+    }
+  };
 
   const fetchConfig = async () => {
     try {
@@ -164,8 +204,9 @@ export default function App() {
   };
 
   const fetchTheme = async () => {
+    if (!activeSiteSlug) return;
     try {
-      const res = await fetch(`${BACKEND_URL}/api/theme`);
+      const res = await fetch(`${BACKEND_URL}/api/theme?site=${activeSiteSlug}`);
       if (res.ok) {
         const data = await res.json();
         const themeVal = data.theme ? data.theme : defaultThemeMock;
@@ -178,8 +219,9 @@ export default function App() {
   };
 
   const fetchPages = async () => {
+    if (!activeSiteSlug) return;
     try {
-      const res = await fetch(`${BACKEND_URL}/api/pages`);
+      const res = await fetch(`${BACKEND_URL}/api/pages?site=${activeSiteSlug}`);
       if (res.ok) {
         const data = await res.json();
         setPagesData(data);
@@ -209,6 +251,128 @@ export default function App() {
 
   // --- ACTIONS ---
 
+  const openFileManager = async (site: any) => {
+    setFileManagerSite(site);
+    setFileListLoading(true);
+    setSelectedFileContent(null);
+    setSelectedFilePath(null);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/sites/${site.slug}/files`);
+      if (res.ok) {
+        const data = await res.json();
+        setFileList(data);
+      }
+    } catch (e) {
+      console.error("Erreur de chargement des fichiers", e);
+    } finally {
+      setFileListLoading(false);
+    }
+  };
+
+  const viewFile = async (filePath: string) => {
+    if (!fileManagerSite) return;
+    setSelectedFilePath(filePath);
+    setSelectedFileLoading(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/sites/${fileManagerSite.slug}/files/view?path=${encodeURIComponent(filePath)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSelectedFileContent(data.content);
+      } else {
+        setSelectedFileContent("Impossible d'afficher le contenu (binaire ou fichier trop volumineux).");
+      }
+    } catch (e) {
+      setSelectedFileContent("Erreur de lecture du fichier.");
+    } finally {
+      setSelectedFileLoading(false);
+    }
+  };
+
+  const deleteSite = async (slug: string, deleteFiles: boolean) => {
+    if (!confirm(`Êtes-vous sûr de vouloir supprimer le site "${slug}" ?`)) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/sites/${slug}?deleteFiles=${deleteFiles}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        alert("Site supprimé avec succès de la base cPanel.");
+        fetchSites();
+        if (activeSiteSlug === slug) {
+          setActiveSiteSlug('');
+        }
+      }
+    } catch (e) {
+      alert("Erreur lors de la suppression du site.");
+    }
+  };
+
+  const scanSites = async () => {
+    setScanningLoading(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/sites/scan`, {
+        method: 'POST'
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setScannedSites(data);
+        if (data.length === 0) {
+          alert("Aucun nouveau site détecté dans /public_html.");
+        }
+      }
+    } catch (e) {
+      alert("Erreur lors du scan.");
+    } finally {
+      setScanningLoading(false);
+    }
+  };
+
+  const importSite = async (scanned: any) => {
+    const stack = prompt("Stack technique de ce site (ex. Astro SSG, HTML statique) :", "HTML statique");
+    if (stack === null) return;
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/sites/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...scanned, stack })
+      });
+      if (res.ok) {
+        alert(`Site "${scanned.name}" importé avec succès dans cPanel !`);
+        fetchSites();
+        setScannedSites(scannedSites.filter(s => s.slug !== scanned.slug));
+      }
+    } catch (e) {
+      alert("Erreur lors de l'importation.");
+    }
+  };
+
+  const createSite = async () => {
+    if (!newSiteName) return alert("Le nom du site est requis.");
+    setNewSiteLoading(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/sites`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newSiteName, domain: newSiteDomain, stack: newSiteStack })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        alert(`Site "${data.site.name}" créé avec succès !`);
+        setNewSiteName('');
+        setNewSiteDomain('');
+        fetchSites();
+        setActiveSiteSlug(data.site.slug);
+        setActiveTab('design'); // Switch to customize design
+      } else {
+        const err = await res.json();
+        alert(`Erreur : ${err.error}`);
+      }
+    } catch (e) {
+      alert("Erreur lors de la création du site.");
+    } finally {
+      setNewSiteLoading(false);
+    }
+  };
+
   const handleOnboard = async () => {
     setOnboardingLoading(true);
     try {
@@ -233,7 +397,11 @@ export default function App() {
           setTheme(data.theme);
           setSavedTheme(data.theme);
         }
-        alert("✨ Ébauche de site et design graphique créés avec succès par l'IA !");
+        if (data.site) {
+          fetchSites();
+          setActiveSiteSlug(data.site.slug);
+        }
+        alert(`✨ Le site "${data.site ? data.site.name : siteName}" et son design graphique ont été créés avec succès par l'IA !`);
       } else {
         const errData = await res.json();
         alert(`Erreur IA : ${errData.error || 'Erreur lors de la qualification.'}`);
@@ -257,12 +425,11 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
-  // L'extraction visuelle par image est gérée de manière unifiée lors de l'onboarding
-
   const saveTheme = async () => {
+    if (!activeSiteSlug) return;
     setDesignSaving(true);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/theme`, {
+      const res = await fetch(`${BACKEND_URL}/api/theme?site=${activeSiteSlug}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ theme })
@@ -286,9 +453,10 @@ export default function App() {
   };
 
   const savePages = async (updatedData: PagesData) => {
+    if (!activeSiteSlug) return;
     setCmsSaving(true);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/pages`, {
+      const res = await fetch(`${BACKEND_URL}/api/pages?site=${activeSiteSlug}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedData)
@@ -304,16 +472,16 @@ export default function App() {
   };
 
   const triggerDeploy = async () => {
+    if (!activeSiteSlug) return;
     setDeployLoading(true);
     try {
-      const res = await fetch(`${BACKEND_URL}/webhook/rebuild`, {
+      const res = await fetch(`${BACKEND_URL}/webhook/rebuild?site=${activeSiteSlug}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });
       if (res.status === 429) {
         alert("🔒 Build refusé : Un build est déjà en cours ! Le système de verrouillage (lockfile) a correctement bloqué la requête concurrente.");
       } else if (res.ok) {
-        // Le build a démarré
         fetchBuildStatus();
       }
     } catch (e) {
@@ -324,7 +492,6 @@ export default function App() {
   };
 
   const simulateConcurrency = async () => {
-    // Envoie deux requêtes de build simultanées pour tester le lockfile
     triggerDeploy();
     setTimeout(triggerDeploy, 100);
   };
@@ -454,39 +621,362 @@ export default function App() {
             </div>
           )}
         </div>
-        <nav className="nav-tabs">
-
-          <button 
-            className={`nav-tab ${activeTab === 'onboarding' ? 'active' : ''}`}
-            onClick={() => setActiveTab('onboarding')}
-          >
-            <SparklesIcon /> Onboarding IA
-          </button>
-          <button 
-            className={`nav-tab ${activeTab === 'design' ? 'active' : ''}`}
-            onClick={() => setActiveTab('design')}
-          >
-            <PaletteIcon /> Design Prédictif
-          </button>
-          <button 
-            className={`nav-tab ${activeTab === 'cms' ? 'active' : ''}`}
-            onClick={() => setActiveTab('cms')}
-          >
-            <BlocksIcon /> Éditeur de Blocs (CMS)
-          </button>
-          <button 
-            className={`nav-tab ${activeTab === 'deploy' ? 'active' : ''}`}
-            onClick={() => setActiveTab('deploy')}
-          >
-            <CpuIcon /> Déploiement o2switch
-            {buildStatus.inProgress && <span className="indicator-live pulse-glow" style={{ background: '#10b981', width: 8, height: 8, borderRadius: '50%', marginLeft: 4 }}></span>}
-          </button>
-        </nav>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 15 }}>
+          {sites.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600 }}>Site Actif :</span>
+              <select 
+                value={activeSiteSlug} 
+                onChange={(e) => setActiveSiteSlug(e.target.value)}
+                style={{ 
+                  background: 'rgba(255,255,255,0.05)', 
+                  border: '1px solid var(--border-color)', 
+                  color: 'white', 
+                  padding: '6px 12px', 
+                  borderRadius: 6,
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  outline: 'none'
+                }}
+              >
+                {sites.map(s => (
+                  <option key={s.slug} value={s.slug} style={{ background: '#0f172a' }}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <nav className="nav-tabs">
+            <button 
+              className={`nav-tab ${activeTab === 'cpanel' ? 'active' : ''}`}
+              onClick={() => setActiveTab('cpanel')}
+            >
+              <CPanelIcon /> cPanel Dashboard
+            </button>
+            <button 
+              className={`nav-tab ${activeTab === 'onboarding' ? 'active' : ''}`}
+              onClick={() => setActiveTab('onboarding')}
+            >
+              <SparklesIcon /> Onboarding IA
+            </button>
+            <button 
+              className={`nav-tab ${activeTab === 'design' ? 'active' : ''}`}
+              onClick={() => setActiveTab('design')}
+              disabled={!activeSiteSlug}
+            >
+              <PaletteIcon /> Design Prédictif
+            </button>
+            <button 
+              className={`nav-tab ${activeTab === 'cms' ? 'active' : ''}`}
+              onClick={() => setActiveTab('cms')}
+              disabled={!activeSiteSlug}
+            >
+              <BlocksIcon /> Éditeur de Blocs (CMS)
+            </button>
+            <button 
+              className={`nav-tab ${activeTab === 'deploy' ? 'active' : ''}`}
+              onClick={() => setActiveTab('deploy')}
+              disabled={!activeSiteSlug}
+            >
+              <CpuIcon /> Déploiement o2switch
+              {buildStatus.inProgress && <span className="indicator-live pulse-glow" style={{ background: '#10b981', width: 8, height: 8, borderRadius: '50%', marginLeft: 4 }}></span>}
+            </button>
+          </nav>
+        </div>
       </header>
 
       {/* Main Content */}
       <main className="main-content">
         
+        {/* TAB 0: CPANEL DASHBOARD */}
+        {activeTab === 'cpanel' && (
+          <div className="animate-slide" style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
+            {/* cPanel Stats Banner */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 20 }}>
+              <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 8, borderLeft: '4px solid var(--accent-blue)' }}>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>Sites Enregistrés</span>
+                <span style={{ fontSize: '2rem', fontWeight: 800 }}>{sites.length}</span>
+                <span style={{ fontSize: '0.75rem', color: 'var(--accent-emerald)' }}>● Tous en ligne</span>
+              </div>
+              <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 8, borderLeft: '4px solid var(--accent-purple)' }}>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>Espace Disque (cPanel)</span>
+                <span style={{ fontSize: '2rem', fontWeight: 800 }}>1.45 MB <span style={{ fontSize: '1rem', fontWeight: 500, color: 'var(--text-muted)' }}>/ 10 GB</span></span>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>0.01% utilisé</span>
+              </div>
+              <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 8, borderLeft: '4px solid var(--accent-emerald)' }}>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>Sécurité SSL</span>
+                <span style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--accent-emerald)', margin: 'auto 0' }}>🔒 Let's Encrypt</span>
+                <span style={{ fontSize: '0.75rem', color: 'var(--accent-emerald)' }}>Actif (Auto-renouvellement)</span>
+              </div>
+              <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 8, borderLeft: '4px solid var(--accent-rose)' }}>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>Build Courant</span>
+                {buildStatus.inProgress ? (
+                  <>
+                    <span style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--accent-blue)', animation: 'pulse 1.5s infinite', margin: 'auto 0' }}>⚙️ Recompilation...</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Site : {buildStatus.buildingSite}</span>
+                  </>
+                ) : (
+                  <>
+                    <span style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-muted)', margin: 'auto 0' }}>Prêt 🔓</span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Aucun build actif</span>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Quick Actions Panel: Scan & Add */}
+            <div className="grid-2col">
+              {/* Quick Scan /home/public_html */}
+              <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
+                <h3 style={{ fontSize: '1.25rem', borderBottom: '1px solid var(--border-color)', paddingBottom: 10 }}>
+                  🔍 Détecter d'autres sites (/public_html)
+                </h3>
+                <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                  Scannez le répertoire racine pour identifier des dossiers de sites web non répertoriés utilisant la même stack technique (contenant un fichier <code>index.html</code>) et importez-les dans le dashboard.
+                </p>
+                <button 
+                  className="btn btn-secondary" 
+                  style={{ width: 'fit-content' }} 
+                  onClick={scanSites} 
+                  disabled={scanningLoading}
+                >
+                  {scanningLoading ? "Recherche en cours..." : "Scanner le répertoire public_html"}
+                </button>
+
+                {scannedSites.length > 0 && (
+                  <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--accent-purple)' }}>
+                      Dossiers détectés et non répertoriés :
+                    </span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {scannedSites.map(scanned => (
+                        <div 
+                          key={scanned.slug} 
+                          style={{ 
+                            display: 'flex', 
+                            justifyContent: 'space-between', 
+                            alignItems: 'center', 
+                            background: 'rgba(255,255,255,0.02)', 
+                            border: '1px solid var(--border-color)', 
+                            borderRadius: 8, 
+                            padding: '8px 12px' 
+                          }}
+                        >
+                          <div>
+                            <strong style={{ fontSize: '0.9rem', color: 'white' }}>{scanned.name}</strong>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Chemin : <code>{scanned.documentRoot}</code></div>
+                          </div>
+                          <button 
+                            className="btn btn-secondary" 
+                            style={{ padding: '6px 12px', fontSize: '0.8rem', borderColor: 'rgba(168,85,247,0.4)', color: '#d8b4fe' }}
+                            onClick={() => importSite(scanned)}
+                          >
+                            Importer
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Quick Create Site */}
+              <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
+                <h3 style={{ fontSize: '1.25rem', borderBottom: '1px solid var(--border-color)', paddingBottom: 10 }}>
+                  🆕 Enregistrer un nouveau site
+                </h3>
+                <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
+                  Enregistrez manuellement un nouveau site dans la base cPanel et initialisez sa configuration.
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Nom du Site</label>
+                    <input 
+                      type="text" 
+                      className="input-text" 
+                      style={{ padding: 8, fontSize: '0.875rem' }} 
+                      value={newSiteName} 
+                      onChange={(e) => setNewSiteName(e.target.value)} 
+                      placeholder="Coiffeur Lyon"
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Domaine personnalisé (Optionnel)</label>
+                    <input 
+                      type="text" 
+                      className="input-text" 
+                      style={{ padding: 8, fontSize: '0.875rem' }} 
+                      value={newSiteDomain} 
+                      onChange={(e) => setNewSiteDomain(e.target.value)} 
+                      placeholder="coiffeur.lyon.site"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Stack technique</label>
+                  <select 
+                    value={newSiteStack}
+                    onChange={(e) => setNewSiteStack(e.target.value)}
+                    style={{ width: '100%', background: '#0f172a', border: '1px solid var(--border-color)', color: 'white', padding: 8, borderRadius: 4, fontSize: '0.875rem' }}
+                  >
+                    <option value="Astro SSG">Astro SSG (Recommandé)</option>
+                    <option value="Astro Hybride + Payload + Medusa">Astro Hybride + CMS</option>
+                    <option value="Static HTML">HTML/CSS Statique</option>
+                  </select>
+                </div>
+                <button 
+                  className="btn btn-primary" 
+                  style={{ width: '100%', marginTop: 'auto' }} 
+                  onClick={createSite}
+                  disabled={newSiteLoading}
+                >
+                  {newSiteLoading ? "Création..." : "Initialiser et Enregistrer"}
+                </button>
+              </div>
+            </div>
+
+            {/* Sites List Panel */}
+            <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+              <h3 style={{ fontSize: '1.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: 10 }}>
+                🌐 Liste des sites hébergés (Structure cPanel)
+              </h3>
+              
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '2px solid var(--border-color)', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+                      <th style={{ padding: '12px 10px' }}>Site / Projet</th>
+                      <th style={{ padding: '12px 10px' }}>Domaine / Lien de test</th>
+                      <th style={{ padding: '12px 10px' }}>Racine document root</th>
+                      <th style={{ padding: '12px 10px' }}>Stack Technique</th>
+                      <th style={{ padding: '12px 10px' }}>SSL</th>
+                      <th style={{ padding: '12px 10px' }}>Source</th>
+                      <th style={{ padding: '12px 10px' }}>Statut</th>
+                      <th style={{ padding: '12px 10px', textAlign: 'right' }}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sites.map(site => {
+                      const isActive = activeSiteSlug === site.slug;
+                      return (
+                        <tr 
+                          key={site.slug} 
+                          style={{ 
+                            borderBottom: '1px solid var(--border-color)', 
+                            background: isActive ? 'rgba(99, 102, 241, 0.03)' : 'transparent',
+                            fontSize: '0.9rem' 
+                          }}
+                        >
+                          <td style={{ padding: '16px 10px', fontWeight: 600 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                              {site.name}
+                              {isActive && (
+                                <span style={{ background: 'rgba(99,102,241,0.2)', border: '1px solid var(--accent-blue)', color: '#a5b4fc', fontSize: '0.7rem', padding: '2px 6px', borderRadius: 10, fontWeight: 700 }}>
+                                  ACTIF
+                                </span>
+                              )}
+                            </div>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>slug: {site.slug}</span>
+                          </td>
+                          <td style={{ padding: '16px 10px' }}>
+                            <a 
+                              href={`${BACKEND_URL}/sites/${site.slug}/index.html`} 
+                              target="_blank" 
+                              rel="noreferrer"
+                              style={{ color: 'var(--accent-blue)', textDecoration: 'none', fontWeight: 500 }}
+                            >
+                              {site.domain} ↗
+                            </a>
+                          </td>
+                          <td style={{ padding: '16px 10px', fontFamily: 'monospace', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                            /public_html/{site.slug}
+                          </td>
+                          <td style={{ padding: '16px 10px' }}>
+                            <span className="badge" style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', padding: '2px 8px', borderRadius: 4, fontSize: '0.8rem' }}>
+                              {site.stack}
+                            </span>
+                          </td>
+                          <td style={{ padding: '16px 10px', color: 'var(--accent-emerald)', fontWeight: 600 }}>
+                            {site.sslStatus === 'active' ? '🔒 Let\'s Encrypt' : '⚠ Non sécurisé'}
+                          </td>
+                          <td style={{ padding: '16px 10px', fontSize: '0.8rem' }}>
+                            {site.createdWithTool ? (
+                              <span style={{ color: '#c084fc' }}>🛠️ Généré</span>
+                            ) : (
+                              <span style={{ color: 'var(--text-muted)' }}>📁 Importé</span>
+                            )}
+                          </td>
+                          <td style={{ padding: '16px 10px' }}>
+                            <span 
+                              style={{ 
+                                display: 'inline-block',
+                                width: 8,
+                                height: 8,
+                                borderRadius: '50%',
+                                background: site.status === 'active' ? 'var(--accent-emerald)' : 
+                                            site.status === 'error' ? 'var(--accent-rose)' : '#fbbf24',
+                                marginRight: 6
+                              }}
+                            />
+                            <span style={{ textTransform: 'capitalize' }}>
+                              {site.status === 'active' ? 'Actif (Déployé)' : 
+                               site.status === 'error' ? 'Erreur build' : 'Brouillon'}
+                            </span>
+                          </td>
+                          <td style={{ padding: '16px 10px', textAlign: 'right' }}>
+                            <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                              {!isActive && (
+                                <button 
+                                  className="btn btn-secondary" 
+                                  style={{ padding: '4px 10px', fontSize: '0.8rem' }}
+                                  onClick={() => setActiveSiteSlug(site.slug)}
+                                >
+                                  Activer
+                                </button>
+                              )}
+                              <button 
+                                className="btn btn-secondary" 
+                                style={{ padding: '4px 10px', fontSize: '0.8rem' }}
+                                onClick={() => openFileManager(site)}
+                              >
+                                📁 Fichiers
+                              </button>
+                              <button 
+                                className="btn btn-secondary" 
+                                style={{ padding: '4px 10px', fontSize: '0.8rem', borderColor: 'rgba(244,63,94,0.4)', color: '#f87171' }}
+                                onClick={() => deleteSite(site.slug, deleteFilesOnRemove)}
+                              >
+                                Supprimer
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Deletion configuration */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                <input 
+                  type="checkbox" 
+                  id="chk-delete-files"
+                  checked={deleteFilesOnRemove}
+                  onChange={(e) => setDeleteFilesOnRemove(e.target.checked)}
+                  style={{ width: 16, height: 16 }}
+                />
+                <label htmlFor="chk-delete-files" style={{ cursor: 'pointer' }}>
+                  Lors de la suppression d'un site, supprimer également ses fichiers physiques dans le dossier <code>/simulated_public_html/</code>.
+                </label>
+              </div>
+
+            </div>
+          </div>
+        )}
+
         {/* TAB 1: ONBOARDING IA */}
         {activeTab === 'onboarding' && (
           <div className="animate-slide" style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
@@ -1424,6 +1914,167 @@ export default function App() {
           </div>
         )}
 
+      {/* FILE MANAGER MODAL */}
+      {fileManagerSite && (
+        <div 
+          className="animate-slide"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            background: 'rgba(5, 7, 12, 0.85)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: 20
+          }}
+        >
+          <div 
+            className="glass-panel" 
+            style={{ 
+              width: '100%', 
+              maxWidth: '950px', 
+              height: '80vh', 
+              display: 'flex', 
+              flexDirection: 'column', 
+              gap: 0,
+              padding: 0,
+              overflow: 'hidden',
+              borderColor: 'rgba(99, 102, 241, 0.3)'
+            }}
+          >
+            {/* Modal Header */}
+            <div 
+              style={{ 
+                padding: '16px 24px', 
+                borderBottom: '1px solid var(--border-color)', 
+                display: 'flex', 
+                justifyContent: 'space-between', 
+                alignItems: 'center',
+                background: 'rgba(0,0,0,0.2)'
+              }}
+            >
+              <div>
+                <h3 style={{ fontSize: '1.2rem', color: 'white' }}>
+                  📁 Gestionnaire de Fichiers cPanel
+                </h3>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                  Site : <strong>{fileManagerSite.name}</strong> | Racine : <code>/public_html/{fileManagerSite.slug}/</code>
+                </span>
+              </div>
+              <button 
+                className="btn btn-secondary" 
+                style={{ padding: '6px 12px', fontSize: '0.85rem' }} 
+                onClick={() => setFileManagerSite(null)}
+              >
+                Fermer
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div style={{ display: 'grid', gridTemplateColumns: '350px 1fr', flex: 1, overflow: 'hidden' }}>
+              {/* Files list panel */}
+              <div 
+                style={{ 
+                  borderRight: '1px solid var(--border-color)', 
+                  overflowY: 'auto', 
+                  padding: 15,
+                  background: 'rgba(0,0,0,0.1)'
+                }}
+              >
+                <h4 style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: 12, fontWeight: 700 }}>
+                  STRUCTURE DU DOSSIER
+                </h4>
+                {fileListLoading ? (
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem', textAlign: 'center', padding: 20 }}>
+                    Chargement des fichiers...
+                  </div>
+                ) : fileList.length === 0 ? (
+                  <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', padding: 20 }}>
+                    Le dossier est vide. Lancez la recompilation dans l'onglet Déploiement pour générer les fichiers.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {fileList.map(file => (
+                      <div 
+                        key={file.path} 
+                        style={{ 
+                          display: 'flex', 
+                          alignItems: 'center', 
+                          justifyContent: 'space-between', 
+                          padding: '6px 8px', 
+                          borderRadius: 4, 
+                          background: selectedFilePath === file.path ? 'rgba(99,102,241,0.15)' : 'transparent',
+                          cursor: file.isDir ? 'default' : 'pointer',
+                          fontSize: '0.85rem',
+                          userSelect: 'none'
+                        }}
+                        onClick={() => {
+                          if (!file.isDir) viewFile(file.path);
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, overflow: 'hidden' }}>
+                          <span style={{ fontSize: '1rem' }}>{file.isDir ? '📁' : '📄'}</span>
+                          <span 
+                            style={{ 
+                              textOverflow: 'ellipsis', 
+                              overflow: 'hidden', 
+                              whiteSpace: 'nowrap',
+                              color: file.isDir ? '#93c5fd' : 'white',
+                              textDecoration: file.isDir ? 'none' : 'underline',
+                              fontWeight: file.isDir ? '600' : 'normal'
+                            }}
+                          >
+                            {file.path}
+                          </span>
+                        </div>
+                        {!file.isDir && (
+                          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                            {(file.size / 1024).toFixed(1)} KB
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Code viewer pane */}
+              <div style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column', background: '#05070c' }}>
+                <div 
+                  style={{ 
+                    padding: '10px 20px', 
+                    background: 'rgba(255,255,255,0.01)', 
+                    borderBottom: '1px solid rgba(255,255,255,0.05)', 
+                    fontSize: '0.85rem',
+                    color: 'var(--text-muted)'
+                  }}
+                >
+                  Code Source : {selectedFilePath ? <code>{selectedFilePath}</code> : 'Aucun fichier sélectionné'}
+                </div>
+                <div style={{ flex: 1, overflow: 'auto', padding: 20, fontFamily: 'Courier New, monospace', fontSize: '0.85rem', whiteSpace: 'pre-wrap' }}>
+                  {selectedFileLoading ? (
+                    <div style={{ color: 'var(--accent-blue)', textAlign: 'center', padding: 40 }}>
+                      Lecture du fichier en cours...
+                    </div>
+                  ) : selectedFileContent !== null ? (
+                    <pre style={{ margin: 0, color: '#34d399' }}>{selectedFileContent}</pre>
+                  ) : (
+                    <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: 40 }}>
+                      Sélectionnez un fichier HTML, CSS, ou JS dans la liste de gauche pour afficher son contenu.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       </main>
     </div>
   );
@@ -1473,6 +2124,18 @@ function CpuIcon() {
       <line x1="20" y1="15" x2="23" y2="15"/>
       <line x1="1" y1="9" x2="4" y2="9"/>
       <line x1="1" y1="15" x2="4" y2="15"/>
+    </svg>
+  );
+}
+
+function CPanelIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+      <line x1="9" y1="3" x2="9" y2="21"/>
+      <line x1="15" y1="3" x2="15" y2="21"/>
+      <line x1="3" y1="9" x2="21" y2="9"/>
+      <line x1="3" y1="15" x2="21" y2="15"/>
     </svg>
   );
 }
