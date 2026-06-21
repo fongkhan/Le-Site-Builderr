@@ -75,14 +75,28 @@ export default function App() {
   const [activeSiteSlug, setActiveSiteSlug] = useState<string>('');
   const [scannedSites, setScannedSites] = useState<any[]>([]);
   const [scanningLoading, setScanningLoading] = useState(false);
+  const [scanPath, setScanPath] = useState('simulated_public_html');
   const [newSiteName, setNewSiteName] = useState('');
   const [newSiteDomain, setNewSiteDomain] = useState('');
   const [newSiteStack, setNewSiteStack] = useState('Astro SSG');
+  const [newSiteDocumentRoot, setNewSiteDocumentRoot] = useState('');
+  const [newSiteRepositoryPath, setNewSiteRepositoryPath] = useState('');
+  const [showAdvancedCreate, setShowAdvancedCreate] = useState(false);
   const [newSiteLoading, setNewSiteLoading] = useState(false);
   const [deleteFilesOnRemove, setDeleteFilesOnRemove] = useState(true);
 
+  // Edit Site Modal State
+  const [editSite, setEditSite] = useState<any | null>(null);
+  const [editSiteName, setEditSiteName] = useState('');
+  const [editSiteDomain, setEditSiteDomain] = useState('');
+  const [editSiteDocumentRoot, setEditSiteDocumentRoot] = useState('');
+  const [editSiteRepositoryPath, setEditSiteRepositoryPath] = useState('');
+  const [editSiteStack, setEditSiteStack] = useState('Astro SSG');
+  const [editSiteLoading, setEditSiteLoading] = useState(false);
+
   // File Manager Modal State
   const [fileManagerSite, setFileManagerSite] = useState<any | null>(null);
+  const [fileManagerType, setFileManagerType] = useState<'documentRoot' | 'repository'>('documentRoot');
   const [fileList, setFileList] = useState<any[]>([]);
   const [fileListLoading, setFileListLoading] = useState(false);
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
@@ -251,13 +265,37 @@ export default function App() {
 
   // --- ACTIONS ---
 
-  const openFileManager = async (site: any) => {
+  // Re-load file manager list when type or site slug changes
+  useEffect(() => {
+    if (fileManagerSite) {
+      const reloadFiles = async () => {
+        setFileListLoading(true);
+        setSelectedFileContent(null);
+        setSelectedFilePath(null);
+        try {
+          const res = await fetch(`${BACKEND_URL}/api/sites/${fileManagerSite.slug}/files?type=${fileManagerType}`);
+          if (res.ok) {
+            const data = await res.json();
+            setFileList(data);
+          }
+        } catch (e) {
+          console.error("Erreur de rechargement des fichiers", e);
+        } finally {
+          setFileListLoading(false);
+        }
+      };
+      reloadFiles();
+    }
+  }, [fileManagerType, fileManagerSite?.slug]);
+
+  const openFileManager = async (site: any, type: 'documentRoot' | 'repository' = 'documentRoot') => {
     setFileManagerSite(site);
+    setFileManagerType(type);
     setFileListLoading(true);
     setSelectedFileContent(null);
     setSelectedFilePath(null);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/sites/${site.slug}/files`);
+      const res = await fetch(`${BACKEND_URL}/api/sites/${site.slug}/files?type=${type}`);
       if (res.ok) {
         const data = await res.json();
         setFileList(data);
@@ -274,7 +312,7 @@ export default function App() {
     setSelectedFilePath(filePath);
     setSelectedFileLoading(true);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/sites/${fileManagerSite.slug}/files/view?path=${encodeURIComponent(filePath)}`);
+      const res = await fetch(`${BACKEND_URL}/api/sites/${fileManagerSite.slug}/files/view?path=${encodeURIComponent(filePath)}&type=${fileManagerType}`);
       if (res.ok) {
         const data = await res.json();
         setSelectedFileContent(data.content);
@@ -306,18 +344,62 @@ export default function App() {
     }
   };
 
+  const handleEditClick = (site: any) => {
+    setEditSite(site);
+    setEditSiteName(site.name);
+    setEditSiteDomain(site.domain);
+    setEditSiteDocumentRoot(site.documentRoot);
+    setEditSiteRepositoryPath(site.repositoryPath || '');
+    setEditSiteStack(site.stack);
+  };
+
+  const saveEditSite = async () => {
+    if (!editSite) return;
+    setEditSiteLoading(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/sites/${editSite.slug}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: editSiteName,
+          domain: editSiteDomain,
+          documentRoot: editSiteDocumentRoot,
+          repositoryPath: editSiteRepositoryPath,
+          stack: editSiteStack
+        })
+      });
+      if (res.ok) {
+        alert("Configuration du site mise à jour avec succès.");
+        setEditSite(null);
+        fetchSites();
+      } else {
+        const err = await res.json();
+        alert(`Erreur : ${err.error}`);
+      }
+    } catch (e) {
+      alert("Erreur de mise à jour.");
+    } finally {
+      setEditSiteLoading(false);
+    }
+  };
+
   const scanSites = async () => {
     setScanningLoading(true);
     try {
       const res = await fetch(`${BACKEND_URL}/api/sites/scan`, {
-        method: 'POST'
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scanPath })
       });
       if (res.ok) {
         const data = await res.json();
         setScannedSites(data);
         if (data.length === 0) {
-          alert("Aucun nouveau site détecté dans /public_html.");
+          alert("Aucun nouveau site détecté dans le répertoire spécifié.");
         }
+      } else {
+        const err = await res.json();
+        alert(`Erreur : ${err.error}`);
       }
     } catch (e) {
       alert("Erreur lors du scan.");
@@ -327,13 +409,23 @@ export default function App() {
   };
 
   const importSite = async (scanned: any) => {
-    const stack = prompt("Stack technique de ce site (ex. Astro SSG, HTML statique) :", "HTML statique");
+    const stack = prompt("Stack technique de ce site :", scanned.stack || "HTML statique");
     if (stack === null) return;
+    const docRoot = prompt("Chemin Document Root :", scanned.documentRoot);
+    if (docRoot === null) return;
+    const repoPath = prompt("Chemin Repository (CMS/Back-end - Optionnel) :", scanned.repositoryPath || "");
+    if (repoPath === null) return;
+
     try {
       const res = await fetch(`${BACKEND_URL}/api/sites/import`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...scanned, stack })
+        body: JSON.stringify({ 
+          ...scanned, 
+          stack, 
+          documentRoot: docRoot, 
+          repositoryPath: repoPath 
+        })
       });
       if (res.ok) {
         alert(`Site "${scanned.name}" importé avec succès dans cPanel !`);
@@ -352,16 +444,25 @@ export default function App() {
       const res = await fetch(`${BACKEND_URL}/api/sites`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newSiteName, domain: newSiteDomain, stack: newSiteStack })
+        body: JSON.stringify({ 
+          name: newSiteName, 
+          domain: newSiteDomain, 
+          stack: newSiteStack,
+          documentRoot: newSiteDocumentRoot || undefined,
+          repositoryPath: newSiteRepositoryPath || undefined
+        })
       });
       if (res.ok) {
         const data = await res.json();
         alert(`Site "${data.site.name}" créé avec succès !`);
         setNewSiteName('');
         setNewSiteDomain('');
+        setNewSiteDocumentRoot('');
+        setNewSiteRepositoryPath('');
+        setShowAdvancedCreate(false);
         fetchSites();
         setActiveSiteSlug(data.site.slug);
-        setActiveTab('design'); // Switch to customize design
+        setActiveTab('design');
       } else {
         const err = await res.json();
         alert(`Erreur : ${err.error}`);
@@ -728,22 +829,35 @@ export default function App() {
 
             {/* Quick Actions Panel: Scan & Add */}
             <div className="grid-2col">
-              {/* Quick Scan /home/public_html */}
+              {/* Quick Scan with custom path */}
               <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
                 <h3 style={{ fontSize: '1.25rem', borderBottom: '1px solid var(--border-color)', paddingBottom: 10 }}>
-                  🔍 Détecter d'autres sites (/public_html)
+                  🔍 Détecter d'autres sites
                 </h3>
                 <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-                  Scannez le répertoire racine pour identifier des dossiers de sites web non répertoriés utilisant la même stack technique (contenant un fichier <code>index.html</code>) et importez-les dans le dashboard.
+                  Scannez un répertoire pour identifier des dossiers de sites web non répertoriés (contenant <code>index.html</code> pour un build statique ou <code>package.json</code> pour un dépôt source).
                 </p>
-                <button 
-                  className="btn btn-secondary" 
-                  style={{ width: 'fit-content' }} 
-                  onClick={scanSites} 
-                  disabled={scanningLoading}
-                >
-                  {scanningLoading ? "Recherche en cours..." : "Scanner le répertoire public_html"}
-                </button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Chemin à scanner (absolu ou relatif)</label>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input 
+                      type="text" 
+                      className="input-text" 
+                      style={{ padding: 8, fontSize: '0.875rem', flex: 1 }} 
+                      value={scanPath} 
+                      onChange={(e) => setScanPath(e.target.value)} 
+                      placeholder="Ex: simulated_public_html"
+                    />
+                    <button 
+                      className="btn btn-secondary" 
+                      onClick={scanSites} 
+                      disabled={scanningLoading}
+                      style={{ whiteSpace: 'nowrap' }}
+                    >
+                      {scanningLoading ? "Recherche..." : "Scanner"}
+                    </button>
+                  </div>
+                </div>
 
                 {scannedSites.length > 0 && (
                   <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -766,7 +880,12 @@ export default function App() {
                         >
                           <div>
                             <strong style={{ fontSize: '0.9rem', color: 'white' }}>{scanned.name}</strong>
-                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Chemin : <code>{scanned.documentRoot}</code></div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                              WebRoot : <code>{scanned.documentRoot}</code>
+                              {scanned.repositoryPath && (
+                                <> | Repo : <code>{scanned.repositoryPath}</code></>
+                              )}
+                            </div>
                           </div>
                           <button 
                             className="btn btn-secondary" 
@@ -826,6 +945,45 @@ export default function App() {
                     <option value="Static HTML">HTML/CSS Statique</option>
                   </select>
                 </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 5 }}>
+                  <button 
+                    type="button"
+                    className="btn-link"
+                    style={{ fontSize: '0.8rem', color: 'var(--accent-blue)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                    onClick={() => setShowAdvancedCreate(!showAdvancedCreate)}
+                  >
+                    {showAdvancedCreate ? "▲ Masquer les chemins personnalisés" : "▼ Configurer des chemins personnalisés (o2switch)"}
+                  </button>
+                </div>
+
+                {showAdvancedCreate && (
+                  <div className="animate-slide" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10, background: 'rgba(255,255,255,0.01)', padding: '12px', borderRadius: 8, border: '1px dashed var(--border-color)' }}>
+                    <div>
+                      <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Dossier Web public (Document Root)</label>
+                      <input 
+                        type="text" 
+                        className="input-text" 
+                        style={{ padding: 8, fontSize: '0.875rem' }} 
+                        value={newSiteDocumentRoot} 
+                        onChange={(e) => setNewSiteDocumentRoot(e.target.value)} 
+                        placeholder="Ex: C:/site/simulated_public_html/mon-site"
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Dossier Code Source (Repository - Payload/Medusa)</label>
+                      <input 
+                        type="text" 
+                        className="input-text" 
+                        style={{ padding: 8, fontSize: '0.875rem' }} 
+                        value={newSiteRepositoryPath} 
+                        onChange={(e) => setNewSiteRepositoryPath(e.target.value)} 
+                        placeholder="Ex: C:/site/repositories/mon-site-backend"
+                      />
+                    </div>
+                  </div>
+                )}
+
                 <button 
                   className="btn btn-primary" 
                   style={{ width: '100%', marginTop: 'auto' }} 
@@ -849,7 +1007,7 @@ export default function App() {
                     <tr style={{ borderBottom: '2px solid var(--border-color)', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
                       <th style={{ padding: '12px 10px' }}>Site / Projet</th>
                       <th style={{ padding: '12px 10px' }}>Domaine / Lien de test</th>
-                      <th style={{ padding: '12px 10px' }}>Racine document root</th>
+                      <th style={{ padding: '12px 10px' }}>Racine & Sources (o2switch paths)</th>
                       <th style={{ padding: '12px 10px' }}>Stack Technique</th>
                       <th style={{ padding: '12px 10px' }}>SSL</th>
                       <th style={{ padding: '12px 10px' }}>Source</th>
@@ -890,8 +1048,19 @@ export default function App() {
                               {site.domain} ↗
                             </a>
                           </td>
-                          <td style={{ padding: '16px 10px', fontFamily: 'monospace', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                            /public_html/{site.slug}
+                          <td style={{ padding: '16px 10px', fontSize: '0.8rem' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              <div>
+                                <span style={{ color: 'var(--accent-blue)', fontWeight: 600 }}>WebRoot :</span>{' '}
+                                <code style={{ color: '#93c5fd' }}>{site.documentRoot}</code>
+                              </div>
+                              {site.repositoryPath && (
+                                <div>
+                                  <span style={{ color: '#c084fc', fontWeight: 600 }}>Repo :</span>{' '}
+                                  <code style={{ color: '#e9d5ff' }}>{site.repositoryPath}</code>
+                                </div>
+                              )}
+                            </div>
                           </td>
                           <td style={{ padding: '16px 10px' }}>
                             <span className="badge" style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border-color)', padding: '2px 8px', borderRadius: 4, fontSize: '0.8rem' }}>
@@ -926,7 +1095,7 @@ export default function App() {
                             </span>
                           </td>
                           <td style={{ padding: '16px 10px', textAlign: 'right' }}>
-                            <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                            <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                               {!isActive && (
                                 <button 
                                   className="btn btn-secondary" 
@@ -936,6 +1105,13 @@ export default function App() {
                                   Activer
                                 </button>
                               )}
+                              <button 
+                                className="btn btn-secondary" 
+                                style={{ padding: '4px 10px', fontSize: '0.8rem', borderColor: 'rgba(99,102,241,0.4)', color: '#a5b4fc' }}
+                                onClick={() => handleEditClick(site)}
+                              >
+                                ✏️ Modifier
+                              </button>
                               <button 
                                 className="btn btn-secondary" 
                                 style={{ padding: '4px 10px', fontSize: '0.8rem' }}
@@ -1963,7 +2139,7 @@ export default function App() {
                   📁 Gestionnaire de Fichiers cPanel
                 </h3>
                 <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                  Site : <strong>{fileManagerSite.name}</strong> | Racine : <code>/public_html/{fileManagerSite.slug}/</code>
+                  Site : <strong>{fileManagerSite.name}</strong>
                 </span>
               </div>
               <button 
@@ -1973,6 +2149,46 @@ export default function App() {
               >
                 Fermer
               </button>
+            </div>
+
+            {/* Folder Mode Switcher */}
+            <div 
+              style={{ 
+                padding: '10px 24px', 
+                background: 'rgba(255,255,255,0.02)', 
+                borderBottom: '1px solid var(--border-color)',
+                display: 'flex',
+                gap: 15,
+                alignItems: 'center',
+                flexWrap: 'wrap'
+              }}
+            >
+              <button
+                className={`btn ${fileManagerType === 'documentRoot' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ padding: '6px 14px', fontSize: '0.8rem' }}
+                onClick={() => setFileManagerType('documentRoot')}
+              >
+                🌐 Dossier Web Public (Document Root)
+              </button>
+              
+              <button
+                className={`btn ${fileManagerType === 'repository' ? 'btn-primary' : 'btn-secondary'}`}
+                style={{ padding: '6px 14px', fontSize: '0.8rem' }}
+                onClick={() => {
+                  if (!fileManagerSite.repositoryPath) {
+                    alert("Ce site n'a pas de dossier de repository source configuré. Modifiez le site pour en rajouter un.");
+                    return;
+                  }
+                  setFileManagerType('repository');
+                }}
+                disabled={!fileManagerSite.repositoryPath}
+              >
+                💻 Code Source (Repository / CMS)
+              </button>
+
+              <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                Chemin : <code>{fileManagerType === 'repository' ? fileManagerSite.repositoryPath : fileManagerSite.documentRoot}</code>
+              </span>
             </div>
 
             {/* Modal Body */}
@@ -1995,7 +2211,9 @@ export default function App() {
                   </div>
                 ) : fileList.length === 0 ? (
                   <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', padding: 20 }}>
-                    Le dossier est vide. Lancez la recompilation dans l'onglet Déploiement pour générer les fichiers.
+                    {fileManagerType === 'documentRoot' 
+                      ? "Le dossier public est vide. Lancez la recompilation dans l'onglet Déploiement pour générer les fichiers."
+                      : "Le dossier du dépôt est vide ou n'existe pas. Assurez-vous que le chemin est correct."}
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -2054,7 +2272,7 @@ export default function App() {
                     color: 'var(--text-muted)'
                   }}
                 >
-                  Code Source : {selectedFilePath ? <code>{selectedFilePath}</code> : 'Aucun fichier sélectionné'}
+                  Contenu : {selectedFilePath ? <code>{selectedFilePath}</code> : 'Aucun fichier sélectionné'}
                 </div>
                 <div style={{ flex: 1, overflow: 'auto', padding: 20, fontFamily: 'Courier New, monospace', fontSize: '0.85rem', whiteSpace: 'pre-wrap' }}>
                   {selectedFileLoading ? (
@@ -2065,11 +2283,136 @@ export default function App() {
                     <pre style={{ margin: 0, color: '#34d399' }}>{selectedFileContent}</pre>
                   ) : (
                     <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: 40 }}>
-                      Sélectionnez un fichier HTML, CSS, ou JS dans la liste de gauche pour afficher son contenu.
+                      Sélectionnez un fichier dans la liste de gauche pour afficher son contenu.
                     </div>
                   )}
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT SITE MODAL */}
+      {editSite && (
+        <div 
+          className="animate-slide"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            background: 'rgba(5, 7, 12, 0.85)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: 20
+          }}
+        >
+          <div 
+            className="glass-panel" 
+            style={{ 
+              width: '100%', 
+              maxWidth: '600px', 
+              display: 'flex', 
+              flexDirection: 'column', 
+              gap: 20,
+              borderColor: 'rgba(99, 102, 241, 0.3)'
+            }}
+          >
+            <div 
+              style={{ 
+                borderBottom: '1px solid var(--border-color)', 
+                paddingBottom: 15,
+                display: 'flex', 
+                justifyContent: 'space-between', 
+                alignItems: 'center'
+              }}
+            >
+              <h3 style={{ fontSize: '1.25rem', color: 'white' }}>
+                ✏️ Modifier la configuration du site
+              </h3>
+              <button 
+                className="btn btn-secondary" 
+                style={{ padding: '6px 12px', fontSize: '0.85rem' }} 
+                onClick={() => setEditSite(null)}
+              >
+                Fermer
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
+              <div>
+                <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Nom du site *</label>
+                <input 
+                  type="text" 
+                  className="input-text" 
+                  value={editSiteName} 
+                  onChange={(e) => setEditSiteName(e.target.value)} 
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Domaine personnalisé</label>
+                <input 
+                  type="text" 
+                  className="input-text" 
+                  value={editSiteDomain} 
+                  onChange={(e) => setEditSiteDomain(e.target.value)} 
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Document Root (Dossier Web public)</label>
+                <input 
+                  type="text" 
+                  className="input-text" 
+                  value={editSiteDocumentRoot} 
+                  onChange={(e) => setEditSiteDocumentRoot(e.target.value)} 
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Repository Path (Code Payload/Medusa - Optionnel)</label>
+                <input 
+                  type="text" 
+                  className="input-text" 
+                  value={editSiteRepositoryPath} 
+                  onChange={(e) => setEditSiteRepositoryPath(e.target.value)} 
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)', display: 'block', marginBottom: 4 }}>Stack technique</label>
+                <select 
+                  value={editSiteStack}
+                  onChange={(e) => setEditSiteStack(e.target.value)}
+                  style={{ width: '100%', background: '#0f172a', border: '1px solid var(--border-color)', color: 'white', padding: 10, borderRadius: 4, fontSize: '0.9rem' }}
+                >
+                  <option value="Astro SSG">Astro SSG</option>
+                  <option value="Astro Hybride + Payload + Medusa">Astro Hybride + CMS</option>
+                  <option value="Static HTML">HTML/CSS Statique</option>
+                </select>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', borderTop: '1px solid var(--border-color)', paddingTop: 15, marginTop: 10 }}>
+              <button 
+                className="btn btn-secondary" 
+                onClick={() => setEditSite(null)}
+              >
+                Annuler
+              </button>
+              <button 
+                className="btn btn-primary" 
+                onClick={saveEditSite}
+                disabled={editSiteLoading}
+              >
+                {editSiteLoading ? "Enregistrement..." : "Enregistrer"}
+              </button>
             </div>
           </div>
         </div>

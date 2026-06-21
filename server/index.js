@@ -99,6 +99,7 @@ if (!fs.existsSync(SITES_FILE)) {
       name: "Boulangerie Artisanale Clamart",
       domain: "boulangerie-clamart.o2switch.site",
       documentRoot: path.join(PUBLIC_HTML_DIR, 'boulangerie-artisanale').replace(/\\/g, '/'),
+      repositoryPath: "",
       stack: "Astro SSG + Payload CMS",
       createdWithTool: true,
       status: "active",
@@ -178,7 +179,7 @@ app.get('/api/sites', (req, res) => {
 
 // Create manual site
 app.post('/api/sites', (req, res) => {
-  const { name, domain, stack } = req.body;
+  const { name, domain, stack, documentRoot, repositoryPath } = req.body;
   if (!name) return res.status(400).json({ error: "Le nom du site est requis." });
 
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
@@ -193,7 +194,8 @@ app.post('/api/sites', (req, res) => {
       slug,
       name,
       domain: domain || `${slug}.o2switch.site`,
-      documentRoot: path.join(PUBLIC_HTML_DIR, slug).replace(/\\/g, '/'),
+      documentRoot: (documentRoot || path.join(PUBLIC_HTML_DIR, slug)).replace(/\\/g, '/'),
+      repositoryPath: (repositoryPath || "").replace(/\\/g, '/'),
       stack: stack || "Astro SSG",
       createdWithTool: true,
       status: "draft",
@@ -203,11 +205,36 @@ app.post('/api/sites', (req, res) => {
     sites.push(newSite);
     fs.writeFileSync(SITES_FILE, JSON.stringify(sites, null, 2), 'utf-8');
 
-    // Initialize files for this site
+    // Initialize config files for this site
     fs.writeFileSync(getSitePagesFile(slug), JSON.stringify(defaultPages, null, 2), 'utf-8');
     fs.writeFileSync(getSiteThemeFile(slug), JSON.stringify(defaultTheme, null, 2), 'utf-8');
 
     res.json({ success: true, site: newSite });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Update manual site metadata
+app.put('/api/sites/:slug', (req, res) => {
+  const { slug } = req.params;
+  const { name, domain, documentRoot, repositoryPath, stack, sslStatus, status } = req.body;
+
+  try {
+    const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
+    const site = sites.find(s => s.slug === slug);
+    if (!site) return res.status(404).json({ error: "Site non trouvé." });
+
+    if (name) site.name = name;
+    if (domain) site.domain = domain;
+    if (documentRoot) site.documentRoot = documentRoot.replace(/\\/g, '/');
+    if (repositoryPath !== undefined) site.repositoryPath = repositoryPath ? repositoryPath.replace(/\\/g, '/') : "";
+    if (stack) site.stack = stack;
+    if (sslStatus) site.sslStatus = sslStatus;
+    if (status) site.status = status;
+
+    fs.writeFileSync(SITES_FILE, JSON.stringify(sites, null, 2), 'utf-8');
+    res.json({ success: true, site });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -246,44 +273,62 @@ app.delete('/api/sites/:slug', (req, res) => {
   }
 });
 
-// Scan folder for unregistered sites
+// Scan folder for unregistered sites (with customizable scanPath)
 app.post('/api/sites/scan', (req, res) => {
+  const scanPath = req.body.scanPath || req.query.scanPath || PUBLIC_HTML_DIR;
+  
   try {
     const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
-    const registeredSlugs = sites.map(s => s.slug);
+    const registeredRoots = sites.map(s => path.resolve(s.documentRoot).toLowerCase());
+    const registeredRepos = sites.filter(s => s.repositoryPath).map(s => path.resolve(s.repositoryPath).toLowerCase());
 
-    if (!fs.existsSync(PUBLIC_HTML_DIR)) {
-      fs.mkdirSync(PUBLIC_HTML_DIR, { recursive: true });
+    const targetDir = path.resolve(scanPath);
+    if (!fs.existsSync(targetDir)) {
+      return res.status(400).json({ error: "Le chemin spécifié n'existe pas." });
     }
 
-    const dirs = fs.readdirSync(PUBLIC_HTML_DIR, { withFileTypes: true })
+    const dirs = fs.readdirSync(targetDir, { withFileTypes: true })
       .filter(dirent => dirent.isDirectory())
       .map(dirent => dirent.name);
 
     const scanned = [];
     for (const dirName of dirs) {
-      if (!registeredSlugs.includes(dirName)) {
-        const dirPath = path.join(PUBLIC_HTML_DIR, dirName);
-        const hasIndex = fs.existsSync(path.join(dirPath, 'index.html'));
-        if (hasIndex) {
-          scanned.push({
-            slug: dirName,
-            name: dirName.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
-            documentRoot: dirPath.replace(/\\/g, '/'),
-            domain: `${dirName}.o2switch.site`
-          });
-        }
+      const dirPath = path.join(targetDir, dirName);
+      const resolvedPath = path.resolve(dirPath);
+      
+      // Skip folders already registered
+      if (registeredRoots.includes(resolvedPath.toLowerCase()) || registeredRepos.includes(resolvedPath.toLowerCase())) {
+        continue;
+      }
+
+      const hasIndex = fs.existsSync(path.join(dirPath, 'index.html'));
+      const hasPackage = fs.existsSync(path.join(dirPath, 'package.json'));
+
+      if (hasIndex || hasPackage) {
+        let detectedStack = "Static HTML";
+        if (hasIndex && hasPackage) detectedStack = "Astro Site (Source + Build)";
+        else if (hasPackage) detectedStack = "Node.js / CMS Repository";
+        else if (hasIndex) detectedStack = "Static Build / HTML";
+
+        scanned.push({
+          slug: dirName,
+          name: dirName.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+          documentRoot: resolvedPath.replace(/\\/g, '/'),
+          repositoryPath: hasPackage ? resolvedPath.replace(/\\/g, '/') : "",
+          domain: `${dirName}.o2switch.site`,
+          stack: detectedStack
+        });
       }
     }
     res.json(scanned);
   } catch (e) {
-    res.status(500).json({ error: "Erreur lors du scan du répertoire." });
+    res.status(500).json({ error: `Erreur lors du scan du répertoire : ${e.message}` });
   }
 });
 
 // Import scanned site
 app.post('/api/sites/import', (req, res) => {
-  const { slug, name, domain, stack } = req.body;
+  const { slug, name, domain, stack, documentRoot, repositoryPath } = req.body;
   if (!slug) return res.status(400).json({ error: "Le slug est requis pour l'import." });
 
   try {
@@ -296,7 +341,8 @@ app.post('/api/sites/import', (req, res) => {
       slug,
       name: name || slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
       domain: domain || `${slug}.o2switch.site`,
-      documentRoot: path.join(PUBLIC_HTML_DIR, slug).replace(/\\/g, '/'),
+      documentRoot: (documentRoot || path.join(PUBLIC_HTML_DIR, slug)).replace(/\\/g, '/'),
+      repositoryPath: (repositoryPath || "").replace(/\\/g, '/'),
       stack: stack || "Plain HTML (Importé)",
       createdWithTool: false,
       status: "active",
@@ -311,16 +357,18 @@ app.post('/api/sites/import', (req, res) => {
   }
 });
 
-// List files of a specific site for file manager
+// List files of a specific site for file manager (supports documentRoot or repository browsing)
 app.get('/api/sites/:slug/files', (req, res) => {
   const { slug } = req.params;
+  const pathType = req.query.type || 'documentRoot'; // 'documentRoot' or 'repository'
+  
   try {
     const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
     const site = sites.find(s => s.slug === slug);
     if (!site) return res.status(404).json({ error: "Site non trouvé." });
 
-    const rootDir = site.documentRoot;
-    if (!fs.existsSync(rootDir)) {
+    const rootDir = pathType === 'repository' ? site.repositoryPath : site.documentRoot;
+    if (!rootDir || !fs.existsSync(rootDir)) {
       return res.json([]);
     }
 
@@ -328,9 +376,15 @@ app.get('/api/sites/:slug/files', (req, res) => {
       let results = [];
       const list = fs.readdirSync(dir);
       for (const file of list) {
+        // Skip node_modules, git, and Astro caching folders inside repos for performance
+        if (pathType === 'repository' && (file === 'node_modules' || file === '.git' || file === '.astro')) {
+          continue;
+        }
+
         const filePath = path.join(dir, file);
         const stat = fs.statSync(filePath);
         const relativePath = path.relative(baseDir, filePath).replace(/\\/g, '/');
+        
         if (stat.isDirectory()) {
           results.push({
             name: file,
@@ -338,6 +392,12 @@ app.get('/api/sites/:slug/files', (req, res) => {
             isDir: true,
             mtime: stat.mtime
           });
+
+          // Limit depth in repos to prevent browser memory exhaust
+          const depth = relativePath.split('/').length;
+          if (pathType === 'repository' && depth > 3) {
+            continue;
+          }
           results = results.concat(walkDir(filePath, baseDir));
         } else {
           results.push({
@@ -355,7 +415,7 @@ app.get('/api/sites/:slug/files', (req, res) => {
     const files = walkDir(rootDir);
     res.json(files);
   } catch (e) {
-    res.status(500).json({ error: "Erreur lors de la lecture des fichiers." });
+    res.status(500).json({ error: `Erreur lors de la lecture des fichiers : ${e.message}` });
   }
 });
 
@@ -363,6 +423,8 @@ app.get('/api/sites/:slug/files', (req, res) => {
 app.get('/api/sites/:slug/files/view', (req, res) => {
   const { slug } = req.params;
   const relativePath = req.query.path;
+  const pathType = req.query.type || 'documentRoot'; // 'documentRoot' or 'repository'
+  
   if (!relativePath) return res.status(400).json({ error: "Le chemin du fichier est requis." });
 
   try {
@@ -370,9 +432,14 @@ app.get('/api/sites/:slug/files/view', (req, res) => {
     const site = sites.find(s => s.slug === slug);
     if (!site) return res.status(404).json({ error: "Site non trouvé." });
 
-    const filePath = path.join(site.documentRoot, relativePath);
+    const rootDir = pathType === 'repository' ? site.repositoryPath : site.documentRoot;
+    if (!rootDir || !fs.existsSync(rootDir)) {
+      return res.status(404).json({ error: "Dossier racine introuvable." });
+    }
+
+    const filePath = path.join(rootDir, relativePath);
     // Security check to avoid path traversal
-    const rel = path.relative(site.documentRoot, filePath);
+    const rel = path.relative(rootDir, filePath);
     if (rel.startsWith('..') || path.isAbsolute(rel)) {
       return res.status(403).json({ error: "Accès interdit." });
     }
@@ -382,14 +449,14 @@ app.get('/api/sites/:slug/files/view', (req, res) => {
     }
 
     const stats = fs.statSync(filePath);
-    if (stats.size > 150 * 1024) {
+    if (stats.size > 200 * 1024) {
       return res.status(400).json({ error: "Fichier trop volumineux pour l'affichage." });
     }
 
     const content = fs.readFileSync(filePath, 'utf-8');
     res.json({ content });
   } catch (e) {
-    res.status(500).json({ error: "Impossible de lire le fichier." });
+    res.status(500).json({ error: `Impossible de lire le fichier : ${e.message}` });
   }
 });
 
@@ -480,6 +547,7 @@ app.post('/api/onboard', async (req, res) => {
       name: siteName,
       domain: `${finalSlug}.o2switch.site`,
       documentRoot: path.join(PUBLIC_HTML_DIR, finalSlug).replace(/\\/g, '/'),
+      repositoryPath: path.join(path.dirname(PUBLIC_HTML_DIR), 'repositories', finalSlug).replace(/\\/g, '/'), // Setup backend repository under repositories/
       stack: result.qualification.stack_requirements.need_medusajs ? "Astro Hybride + Payload + Medusa" :
              result.qualification.stack_requirements.need_payload ? "Astro SSG + Payload CMS" : "Astro SSG",
       createdWithTool: true,
@@ -628,7 +696,7 @@ app.post('/webhook/rebuild', (req, res) => {
     }
 
     fs.appendFileSync(LOGS_FILE, `\n[${new Date().toLocaleTimeString()}] RÉSULTAT DU BUILD ASTRO :\n${stdout}\n`);
-    fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] Astro compilé. Copie des fichiers vers simulated_public_html/${siteSlug}...\n`);
+    fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] Astro compilé. Copie des fichiers vers ${site.documentRoot}...\n`);
 
     // 4. Déploiement des fichiers statiques dans le dossier web du site
     try {
@@ -641,7 +709,7 @@ app.post('/webhook/rebuild', (req, res) => {
       fs.rmSync(siteDestDir, { recursive: true, force: true });
       fs.mkdirSync(siteDestDir, { recursive: true });
 
-      // Copier dist/ vers simulated_public_html/<siteSlug>/
+      // Copier dist/ vers siteDestDir
       fs.cpSync(DIST_DIR, siteDestDir, { recursive: true, force: true });
 
       fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] DÉPLOIEMENT SUCCÈS : Fichiers synchronisés vers ${siteDestDir} !\n`);
