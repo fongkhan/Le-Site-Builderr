@@ -6,6 +6,15 @@ const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
+// --- GESTION DES ERREURS DE CONNEXION BASE DE DONNÉES (ÉVITE LE CRASH) ---
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('⚠️ [BDD] Rejet de promesse intercepté (PostgreSQL est peut-être hors-ligne) :', reason.message || reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('⚠️ [BDD] Exception interceptée (PostgreSQL est peut-être hors-ligne) :', err.message || err);
+});
+
 const app = express();
 app.use(cors());
 app.use(express.json());

@@ -1,45 +1,21 @@
 const { buildConfig } = require('payload/config');
 const { webpackBundler } = require('@payloadcms/bundler-webpack');
 const { slateEditor } = require('@payloadcms/richtext-slate');
+const { postgresAdapter } = require('@payloadcms/db-postgres');
 const path = require('path');
 
-// Database adapter selection
-let dbAdapter;
-const dbUri = process.env.DATABASE_URI || '';
-
-if (dbUri.startsWith('mongodb')) {
-  const { mongooseAdapter } = require('@payloadcms/db-mongodb');
-  dbAdapter = mongooseAdapter({
-    url: dbUri,
-  });
-} else {
-  try {
-    const { postgresAdapter } = require('@payloadcms/db-postgres');
-    dbAdapter = postgresAdapter({
-      client: {
-        connectionString: dbUri || 'postgresql://127.0.0.1:5432/metabuilder',
-      },
-    });
-  } catch (err) {
-    console.warn("⚠️ Le module @payloadcms/db-postgres n'est pas disponible. Tentative avec @payloadcms/db-mongodb...");
-    try {
-      const { mongooseAdapter } = require('@payloadcms/db-mongodb');
-      dbAdapter = mongooseAdapter({
-        url: dbUri || 'mongodb://127.0.0.1:27017/metabuilder',
-      });
-    } catch (mongoErr) {
-      console.error("❌ Aucun adaptateur de base de données Payload n'a pu être chargé.");
-      throw new Error("Veuillez installer @payloadcms/db-postgres ou @payloadcms/db-mongodb.");
-    }
-  }
-}
+const dbUri = process.env.DATABASE_URI || 'postgresql://postgres:postgrespassword@127.0.0.1:5438/metabuilder_db';
 
 module.exports = buildConfig({
   admin: {
     bundler: webpackBundler(),
   },
   editor: slateEditor({}),
-  db: dbAdapter,
+  db: postgresAdapter({
+    pool: {
+      connectionString: dbUri,
+    },
+  }),
   collections: [
     {
       slug: 'users',
