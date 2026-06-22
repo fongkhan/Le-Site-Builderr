@@ -9,6 +9,10 @@
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "payload": "^2.30.0",
+    "@payloadcms/db-mongodb": "^1.7.0",
+    "@payloadcms/bundler-webpack": "^1.0.6",
+    "@payloadcms/richtext-slate": "^1.5.2"
   }
 }

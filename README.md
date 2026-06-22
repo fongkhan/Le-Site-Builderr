@@ -8,7 +8,7 @@ Ce projet est un prototype fonctionnel d'une plateforme SaaS d'industrialisation
 
 Le projet est conçu en trois couches principales :
 1. **L'Orchestrateur (SaaS UI) :** Application React / Vite avec une esthétique sombre premium. Elle sert de tableau de bord pour l'onboarding IA, l'édition de design et le CMS par blocs.
-2. **Le Serveur de Provisioning (Backend) :** Serveur Node.js / Express assurant la gestion des données, l'API d'extraction d'ambiances et la gestion du webhook de build avec verrou.
+2. **Le Serveur de Provisioning (Backend avec Payload CMS) :** Serveur Node.js / Express intégrant Payload CMS v2 de manière optionnelle (avec fallback automatique en mode fichier JSON). Il assure la gestion des données (fichiers ou PostgreSQL/MongoDB), l'extraction d'ambiances par IA et le webhook de build avec verrou.
 3. **Le Template Client (Astro) :** Projet Astro (SSG/Hybride) configuré pour injecter dynamiquement les tokens de design et charger les pages générées à partir des blocs de contenu.
 
 ---
@@ -66,6 +66,11 @@ Pour installer l'ensemble des dépendances et démarrer les serveurs simultaném
 * Verrouillage physique via un fichier `build.lock` empêchant toute compilation simultanée (concurrence).
 * Retour HTTP 429 lors de tentatives de build concurrentes pour protéger les quotas de ressources o2switch.
 * Déploiement automatisé du bundle statique vers un dossier cible de production.
+
+### 5. Intégration de Payload CMS Réel & Provisioning sans Git (Nouveau)
+* Démarrage optionnel et tolérant aux pannes de Payload CMS v2 connecté à PostgreSQL ou MongoDB (configuré via `DATABASE_URI` dans le `.env`).
+* Modélisation de collections d'administration Payload pour les sites, pages (avec blocks), thèmes et utilisateurs.
+* Provisioning instantané des sources du site client par duplication locale de fichiers (`fs.cpSync`), éliminant tout besoin de clonage ou d'authentification Git.
 
 ---
 

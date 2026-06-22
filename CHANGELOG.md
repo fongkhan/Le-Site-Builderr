@@ -2,6 +2,20 @@
 
 Toutes les modifications notables apportées à ce projet sont documentées dans ce fichier.
 
+## [1.2.0] - 2026-06-23
+
+### Ajouts
+
+- **Intégration de Payload CMS réel (avec fallback)** :
+  - Ajout d'une configuration Payload CMS complète [payload.config.js](file:///e:/Program%20Files/git/Le-Site-Builderr/server/payload.config.js) avec collections `sites`, `pages` (champs Blocks flexibles), `themes` et `users`.
+  - Lancement conditionnel de Payload au boot du serveur Express ([server/index.js](file:///e:/Program%20Files/git/Le-Site-Builderr/server/index.js)) : si aucune base de données n'est configurée dans le fichier `.env` via `DATABASE_URI`, le serveur affiche un avertissement et bascule de manière transparente sur le mode simulation JSON.
+  - Lecture et écriture dynamiques des pages et du thème sur la base de données locale (PostgreSQL ou MongoDB) si connectée.
+  
+- **Provisioning de code sans Git (Copie locale)** :
+  - Remplacement de la stratégie Git par de la copie locale (`fs.cpSync`) via la fonction `provisionRepository`.
+  - Duplication propre du template Astro client vers le dossier source configuré sans le dossier `.git`, `node_modules`, `.astro` ou `dist`.
+  - Gain drastique en rapidité, bande passante et sobriété énergétique, idéal pour l'hébergement mutualisé.
+
 ## [1.1.0] - 2026-06-20
 
 ### Modifié

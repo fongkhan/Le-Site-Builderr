@@ -1,0 +1,44 @@
+{
+  "docs": [
+    {
+      "title": "Accueil",
+      "slug": "home",
+      "layout": [
+        {
+          "blockType": "hero",
+          "title": "Fongkhan Stream • L'Expérience Gaming Ultime",
+          "subtitle": "Rejoignez l'aventure en direct sur Twitch et YouTube. Sessions de gameplay intenses, analyses hardware et communauté survoltée.",
+          "ctaText": "Rejoindre le Live",
+          "backgroundImage": "https://images.unsplash.com/photo-1542751371-adc38448a05e?auto=format&fit=crop&q=80&w=1200"
+        },
+        {
+          "blockType": "features",
+          "title": "Où me retrouver ?",
+          "items": [
+            {
+              "title": "Twitch Live",
+              "description": "Des streams interactifs tous les soirs à partir de 20h. Gameplay, chat en direct et défis communautaires."
+            },
+            {
+              "title": "YouTube Replays",
+              "description": "Retrouvez les meilleurs moments, des guides détaillés, des vlogs et des vidéos exclusives chaque semaine."
+            },
+            {
+              "title": "Actus & Blog",
+              "description": "Suivez mes dernières configurations PC, tests de jeux et annonces d'événements directement sur ce site."
+            }
+          ]
+        },
+        {
+          "blockType": "gallery",
+          "title": "L'Univers Fongkhan",
+          "images": [
+            "https://images.unsplash.com/photo-1603481588273-2f908a9a7a1b?auto=format&fit=crop&w=300",
+            "https://images.unsplash.com/photo-1560253023-3ec5d502959f?auto=format&fit=crop&w=300",
+            "https://images.unsplash.com/photo-1550745165-9bc0b252726f?auto=format&fit=crop&w=300"
+          ]
+        }
+      ]
+    }
+  ]
+}

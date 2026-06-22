@@ -10,6 +10,28 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// --- INITIALISATION CONDITIONNELLE DE PAYLOAD CMS ---
+let payloadInstance = null;
+if (process.env.DATABASE_URI) {
+  try {
+    process.env.PAYLOAD_CONFIG_PATH = path.resolve(__dirname, 'payload.config.js');
+    const payload = require('payload');
+    payload.init({
+      secret: process.env.PAYLOAD_SECRET || 'fallback-secret-payload-key-12345678',
+      express: app,
+      onInit: () => {
+        payloadInstance = payload;
+        console.log(`✔ [Payload CMS] Initialisé sur la base de données.`);
+      }
+    });
+  } catch (err) {
+    console.error("❌ [Payload CMS] Erreur lors de l'initialisation :", err.message);
+    console.log("💡 Assurez-vous d'avoir exécuté 'npm install' dans le dossier server.");
+  }
+} else {
+  console.log("💡 [Payload CMS] DATABASE_URI non définie dans le fichier .env. Mode simulation JSON actif.");
+}
+
 // Dossier de données et chemins
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) {
@@ -36,6 +58,26 @@ function getSitePagesFile(slug) {
 
 function getSiteThemeFile(slug) {
   return path.join(DATA_DIR, `site_${slug}_theme.json`);
+}
+
+function provisionRepository(repoPath) {
+  if (repoPath && !fs.existsSync(repoPath)) {
+    try {
+      fs.mkdirSync(repoPath, { recursive: true });
+      // Copier le client-template localement pour que l'utilisateur ait le code source complet du site client sans Git
+      fs.cpSync(ASTRO_PROJECT_DIR, repoPath, {
+        recursive: true,
+        filter: (src) => {
+          // Ne pas copier node_modules, .astro, dist ou .git
+          const base = path.basename(src);
+          return base !== 'node_modules' && base !== '.astro' && base !== 'dist' && base !== '.git';
+        }
+      });
+      console.log(`[Provisioning] Dépôt local copié sans Git dans : ${repoPath}`);
+    } catch (err) {
+      console.error(`[Provisioning] Erreur de copie du dépôt local : ${err.message}`);
+    }
+  }
 }
 
 // Initialiser les structures par défaut
@@ -205,6 +247,9 @@ app.post('/api/sites', (req, res) => {
     sites.push(newSite);
     fs.writeFileSync(SITES_FILE, JSON.stringify(sites, null, 2), 'utf-8');
 
+    // Provision local files repository without Git
+    provisionRepository(newSite.repositoryPath);
+
     // Initialize config files for this site
     fs.writeFileSync(getSitePagesFile(slug), JSON.stringify(defaultPages, null, 2), 'utf-8');
     fs.writeFileSync(getSiteThemeFile(slug), JSON.stringify(defaultTheme, null, 2), 'utf-8');
@@ -351,6 +396,10 @@ app.post('/api/sites/import', (req, res) => {
 
     sites.push(newSite);
     fs.writeFileSync(SITES_FILE, JSON.stringify(sites, null, 2), 'utf-8');
+
+    // Provision local files repository without Git
+    provisionRepository(newSite.repositoryPath);
+
     res.json({ success: true, site: newSite });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -463,10 +512,44 @@ app.get('/api/sites/:slug/files/view', (req, res) => {
 // --- ENDPOINTS CMS ---
 
 // Pages
-app.get('/api/pages', (req, res) => {
+app.get('/api/pages', async (req, res) => {
   const siteSlug = getSiteFromRequest(req);
-  const sitePagesFile = getSitePagesFile(siteSlug);
 
+  if (payloadInstance) {
+    try {
+      const siteRes = await payloadInstance.find({
+        collection: 'sites',
+        where: { slug: { equals: siteSlug } },
+        limit: 1
+      });
+      if (siteRes.docs.length > 0) {
+        const siteId = siteRes.docs[0].id;
+        const pagesRes = await payloadInstance.find({
+          collection: 'pages',
+          where: { site: { equals: siteId } }
+        });
+        if (pagesRes.docs.length > 0) {
+          return res.json({
+            docs: pagesRes.docs.map(page => ({
+              title: page.title,
+              slug: page.slug,
+              layout: page.layout ? page.layout.map(block => {
+                const { id, ...fields } = block;
+                return {
+                  blockType: block.blockType,
+                  ...fields
+                };
+              }) : []
+            }))
+          });
+        }
+      }
+    } catch (dbError) {
+      console.error("Erreur lecture pages de Payload, fallback JSON:", dbError.message);
+    }
+  }
+
+  const sitePagesFile = getSitePagesFile(siteSlug);
   if (!fs.existsSync(sitePagesFile)) {
     return res.json(defaultPages);
   }
@@ -475,19 +558,120 @@ app.get('/api/pages', (req, res) => {
   res.json(JSON.parse(data));
 });
 
-app.post('/api/pages', (req, res) => {
+app.post('/api/pages', async (req, res) => {
   const siteSlug = getSiteFromRequest(req);
-  const sitePagesFile = getSitePagesFile(siteSlug);
 
+  if (payloadInstance) {
+    try {
+      let siteRes = await payloadInstance.find({
+        collection: 'sites',
+        where: { slug: { equals: siteSlug } },
+        limit: 1
+      });
+      let siteDoc;
+      if (siteRes.docs.length === 0) {
+        const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
+        const localSite = sites.find(s => s.slug === siteSlug) || { name: siteSlug, domain: `${siteSlug}.o2switch.site` };
+        siteDoc = await payloadInstance.create({
+          collection: 'sites',
+          data: {
+            slug: siteSlug,
+            name: localSite.name,
+            domain: localSite.domain,
+            stack: localSite.stack || "Astro SSG + Payload CMS",
+            documentRoot: localSite.documentRoot,
+            repositoryPath: localSite.repositoryPath
+          }
+        });
+      } else {
+        siteDoc = siteRes.docs[0];
+      }
+
+      if (req.body.docs && Array.isArray(req.body.docs)) {
+        for (const pageInput of req.body.docs) {
+          const pageRes = await payloadInstance.find({
+            collection: 'pages',
+            where: {
+              and: [
+                { site: { equals: siteDoc.id } },
+                { slug: { equals: pageInput.slug } }
+              ]
+            },
+            limit: 1
+          });
+
+          const pageData = {
+            title: pageInput.title,
+            slug: pageInput.slug,
+            site: siteDoc.id,
+            layout: pageInput.layout ? pageInput.layout.map(block => {
+              const { blockType, id, ...fields } = block;
+              return {
+                blockType: blockType,
+                ...fields
+              };
+            }) : []
+          };
+
+          if (pageRes.docs.length > 0) {
+            await payloadInstance.update({
+              collection: 'pages',
+              id: pageRes.docs[0].id,
+              data: pageData
+            });
+          } else {
+            await payloadInstance.create({
+              collection: 'pages',
+              data: pageData
+            });
+          }
+        }
+      }
+    } catch (dbError) {
+      console.error("Erreur écriture pages dans Payload:", dbError.message);
+    }
+  }
+
+  const sitePagesFile = getSitePagesFile(siteSlug);
   fs.writeFileSync(sitePagesFile, JSON.stringify(req.body, null, 2), 'utf-8');
   res.json({ success: true, message: "Pages enregistrées avec succès !" });
 });
 
 // Thème
-app.get('/api/theme', (req, res) => {
+app.get('/api/theme', async (req, res) => {
   const siteSlug = getSiteFromRequest(req);
-  const siteThemeFile = getSiteThemeFile(siteSlug);
 
+  if (payloadInstance) {
+    try {
+      const siteRes = await payloadInstance.find({
+        collection: 'sites',
+        where: { slug: { equals: siteSlug } },
+        limit: 1
+      });
+      if (siteRes.docs.length > 0) {
+        const siteId = siteRes.docs[0].id;
+        const themeRes = await payloadInstance.find({
+          collection: 'themes',
+          where: { site: { equals: siteId } },
+          limit: 1
+        });
+        if (themeRes.docs.length > 0) {
+          const t = themeRes.docs[0];
+          return res.json({
+            theme: {
+              colors: t.colors,
+              fonts: t.fonts,
+              radius: t.radius
+            }
+          });
+        }
+      }
+    } catch (dbError) {
+      console.error("Erreur lecture theme de Payload, fallback JSON:", dbError.message);
+    }
+  }
+
+  const siteThemeFile = getSiteThemeFile(siteSlug);
   if (!fs.existsSync(siteThemeFile)) {
     return res.json(defaultTheme);
   }
@@ -496,13 +680,71 @@ app.get('/api/theme', (req, res) => {
   res.json(JSON.parse(data));
 });
 
-app.post('/api/theme', (req, res) => {
+app.post('/api/theme', async (req, res) => {
   const siteSlug = getSiteFromRequest(req);
-  const siteThemeFile = getSiteThemeFile(siteSlug);
+  const themeData = req.body;
 
-  fs.writeFileSync(siteThemeFile, JSON.stringify(req.body, null, 2), 'utf-8');
+  if (payloadInstance) {
+    try {
+      let siteRes = await payloadInstance.find({
+        collection: 'sites',
+        where: { slug: { equals: siteSlug } },
+        limit: 1
+      });
+      let siteDoc;
+      if (siteRes.docs.length === 0) {
+        const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
+        const localSite = sites.find(s => s.slug === siteSlug) || { name: siteSlug, domain: `${siteSlug}.o2switch.site` };
+        siteDoc = await payloadInstance.create({
+          collection: 'sites',
+          data: {
+            slug: siteSlug,
+            name: localSite.name,
+            domain: localSite.domain,
+            stack: localSite.stack || "Astro SSG + Payload CMS",
+            documentRoot: localSite.documentRoot,
+            repositoryPath: localSite.repositoryPath
+          }
+        });
+      } else {
+        siteDoc = siteRes.docs[0];
+      }
+
+      const themeRes = await payloadInstance.find({
+        collection: 'themes',
+        where: { site: { equals: siteDoc.id } },
+        limit: 1
+      });
+
+      const tInput = themeData.theme;
+      const themePayloadData = {
+        site: siteDoc.id,
+        colors: tInput.colors,
+        fonts: tInput.fonts,
+        radius: tInput.radius
+      };
+
+      if (themeRes.docs.length > 0) {
+        await payloadInstance.update({
+          collection: 'themes',
+          id: themeRes.docs[0].id,
+          data: themePayloadData
+        });
+      } else {
+        await payloadInstance.create({
+          collection: 'themes',
+          data: themePayloadData
+        });
+      }
+    } catch (dbError) {
+      console.error("Erreur écriture theme dans Payload:", dbError.message);
+    }
+  }
+
+  const siteThemeFile = getSiteThemeFile(siteSlug);
+  fs.writeFileSync(siteThemeFile, JSON.stringify(themeData, null, 2), 'utf-8');
   // Écrit aussi le CSS d'Astro
-  writeThemeCss(req.body);
+  writeThemeCss(themeData);
   res.json({ success: true, message: "Thème mis à jour avec succès !" });
 });
 
@@ -557,6 +799,9 @@ app.post('/api/onboard', async (req, res) => {
 
     sites.push(newSite);
     fs.writeFileSync(SITES_FILE, JSON.stringify(sites, null, 2), 'utf-8');
+
+    // Provision local files repository without Git
+    provisionRepository(newSite.repositoryPath);
 
     // Save pages and theme specifically for this site
     if (result.pages && result.pages.docs) {

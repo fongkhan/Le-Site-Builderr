@@ -19,5 +19,16 @@
     "createdWithTool": true,
     "status": "active",
     "sslStatus": "active"
+  },
+  {
+    "slug": "fongkhan-landing-page",
+    "name": "fongkhan-Landing-page",
+    "domain": "fongkhan-landing-page.o2switch.site",
+    "documentRoot": "E:/Program Files/git/Le-Site-Builderr/simulated_public_html/fongkhan-landing-page",
+    "repositoryPath": "E:/Program Files/git/Le-Site-Builderr/repositories/fongkhan-landing-page",
+    "stack": "Astro SSG + Payload CMS",
+    "createdWithTool": true,
+    "status": "active",
+    "sslStatus": "active"
   }
 ]
