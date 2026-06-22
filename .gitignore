@@ -18,6 +18,9 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 server/data/build-logs.txt
+server/data/site_*
+server/data/sites.json
+repositories/
 
 # Local environment variables
 .env
