@@ -527,7 +527,7 @@ app.get('/api/pages', async (req, res) => {
   if (payloadInstance) {
     try {
       const siteRes = await payloadInstance.find({
-        collection: 'sites',
+        collection: 'payload_sites',
         where: { slug: { equals: siteSlug } },
         limit: 1
       });
@@ -573,7 +573,7 @@ app.post('/api/pages', async (req, res) => {
   if (payloadInstance) {
     try {
       let siteRes = await payloadInstance.find({
-        collection: 'sites',
+        collection: 'payload_sites',
         where: { slug: { equals: siteSlug } },
         limit: 1
       });
@@ -582,7 +582,7 @@ app.post('/api/pages', async (req, res) => {
         const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
         const localSite = sites.find(s => s.slug === siteSlug) || { name: siteSlug, domain: `${siteSlug}.o2switch.site` };
         siteDoc = await payloadInstance.create({
-          collection: 'sites',
+          collection: 'payload_sites',
           data: {
             slug: siteSlug,
             name: localSite.name,
@@ -653,7 +653,7 @@ app.get('/api/theme', async (req, res) => {
   if (payloadInstance) {
     try {
       const siteRes = await payloadInstance.find({
-        collection: 'sites',
+        collection: 'payload_sites',
         where: { slug: { equals: siteSlug } },
         limit: 1
       });
@@ -696,7 +696,7 @@ app.post('/api/theme', async (req, res) => {
   if (payloadInstance) {
     try {
       let siteRes = await payloadInstance.find({
-        collection: 'sites',
+        collection: 'payload_sites',
         where: { slug: { equals: siteSlug } },
         limit: 1
       });
@@ -705,7 +705,7 @@ app.post('/api/theme', async (req, res) => {
         const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
         const localSite = sites.find(s => s.slug === siteSlug) || { name: siteSlug, domain: `${siteSlug}.o2switch.site` };
         siteDoc = await payloadInstance.create({
-          collection: 'sites',
+          collection: 'payload_sites',
           data: {
             slug: siteSlug,
             name: localSite.name,

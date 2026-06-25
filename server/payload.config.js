@@ -26,7 +26,7 @@ module.exports = buildConfig({
       fields: [],
     },
     {
-      slug: 'sites',
+      slug: 'payload_sites',
       admin: {
         useAsTitle: 'name',
       },
@@ -79,7 +79,7 @@ module.exports = buildConfig({
         {
           name: 'site',
           type: 'relationship',
-          relationTo: 'sites',
+          relationTo: 'payload_sites',
           required: true,
         },
         {
@@ -147,7 +147,7 @@ module.exports = buildConfig({
         {
           name: 'site',
           type: 'relationship',
-          relationTo: 'sites',
+          relationTo: 'payload_sites',
           required: true,
           unique: true,
         },

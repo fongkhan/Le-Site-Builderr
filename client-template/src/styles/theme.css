@@ -1,10 +1,10 @@
 /* Généré automatiquement par l'Orchestrateur */
 :root {
-  --color-primary: #D97706;
-  --color-secondary: #FEF3C7;
-  --color-bg: #FAF9F5;
-  --color-text: #292524;
-  --font-heading: 'Lora', serif;
-  --font-body: 'Plus Jakarta Sans', sans-serif;
-  --border-radius: 8px;
+  --color-primary: #8B5A2B;
+  --color-secondary: #F5E6CC;
+  --color-bg: #FAFAFA;
+  --color-text: #2D241E;
+  --font-heading: 'Playfair Display', serif;
+  --font-body: 'Inter', sans-serif;
+  --border-radius: 12px;
 }
