@@ -120,6 +120,30 @@ const defaultPages = {
             { name: "Le Croissant Pur Beurre", price: "1.20 €", image: "https://images.unsplash.com/photo-1555507036-ab1f4038808a?auto=format&fit=crop&q=80&w=400" },
             { name: "Le Pain au Chocolat", price: "1.30 €", image: "https://images.unsplash.com/photo-1608686207856-001b95cf60ca?auto=format&fit=crop&q=80&w=400" }
           ]
+        },
+        {
+          blockType: "testimonials",
+          title: "Ce que nos clients disent",
+          testimonials: [
+            { quote: "Le meilleur pain de la région ! Croustillant et savoureux.", author: "Marie Dupont", role: "Cliente régulière", avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=150" },
+            { quote: "Des viennoiseries au vrai goût de beurre. Un régal chaque matin.", author: "Jean Martin", role: "Habitant de Clamart", avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=150" }
+          ]
+        },
+        {
+          blockType: "faq",
+          title: "Questions Fréquentes",
+          items: [
+            { question: "Proposez-vous des produits sans gluten ?", answer: "Nous fabriquons principalement des pains au levain traditionnel contenant du gluten, mais nous avons une gamme de gâteaux sans farine de blé." },
+            { question: "Quels sont vos horaires de cuisson ?", answer: "Nos fournées ont lieu à 7h00, 11h30 et 16h30 pour vous garantir du pain chaud toute la journée." }
+          ]
+        },
+        {
+          blockType: "pricing",
+          title: "Nos Formules Petit-Déjeuner",
+          plans: [
+            { name: "Formule Matin", price: "4.50 €", description: "Pour bien commencer la journée.", features: [{ feature: "1 Viennoiserie" }, { feature: "1 Café ou Thé" }, { feature: "1/2 Baguette beurre" }], ctaText: "Commander", isPopular: false },
+            { name: "Formule Brunch", price: "12.50 €", description: "Le week-end ou pour les gourmands.", features: [{ feature: "2 Viennoiseries" }, { feature: "1 Jus de fruits frais" }, { feature: "1 Pain chaud au choix" }, { feature: "Assiette jambon-fromage" }], ctaText: "Réserver", isPopular: true }
+          ]
         }
       ]
     }
@@ -544,6 +568,9 @@ app.get('/api/pages', async (req, res) => {
               slug: page.slug,
               layout: page.layout ? page.layout.map(block => {
                 const { id, ...fields } = block;
+                if (block.blockType === 'gallery' && fields.images) {
+                  fields.images = fields.images.map(img => typeof img === 'object' && img !== null ? img.url : img);
+                }
                 return {
                   blockType: block.blockType,
                   ...fields
@@ -615,6 +642,9 @@ app.post('/api/pages', async (req, res) => {
             site: siteDoc.id,
             layout: pageInput.layout ? pageInput.layout.map(block => {
               const { blockType, id, ...fields } = block;
+              if (blockType === 'gallery' && fields.images) {
+                fields.images = fields.images.map(img => typeof img === 'string' ? { url: img } : img);
+              }
               return {
                 blockType: blockType,
                 ...fields

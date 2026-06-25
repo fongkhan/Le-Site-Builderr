@@ -58,6 +58,136 @@
             "https://images.unsplash.com/photo-1492691527719-9d1e07e534b4?auto=format&fit=crop&w=600",
             "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=600"
           ]
+        },
+        {
+          "blockType": "faq",
+          "title": "Questions Fréquentes",
+          "items": [
+            {
+              "question": "Proposez-vous des produits sans gluten ?",
+              "answer": "Nous fabriquons principalement des pains au levain traditionnel contenant du gluten, mais nous avons une gamme de gâteaux sans farine de blé."
+            },
+            {
+              "question": "Quels sont vos horaires de cuisson ?",
+              "answer": "Nos fournées ont lieu à 7h00, 11h30 et 16h30 pour vous garantir du pain chaud toute la journée."
+            }
+          ]
+        },
+        {
+          "blockType": "pricing",
+          "title": "Nos Formules Petit-Déjeuner",
+          "plans": [
+            {
+              "name": "Formule Matin",
+              "price": "4.50 €",
+              "description": "Pour bien commencer la journée.",
+              "features": [
+                {
+                  "feature": "1 Viennoiserie"
+                },
+                {
+                  "feature": "1 Café ou Thé"
+                },
+                {
+                  "feature": "1/2 Baguette beurre"
+                }
+              ],
+              "ctaText": "Commander",
+              "isPopular": false
+            },
+            {
+              "name": "Formule Brunch",
+              "price": "12.50 €",
+              "description": "Le week-end ou pour les gourmands.",
+              "features": [
+                {
+                  "feature": "2 Viennoiseries"
+                },
+                {
+                  "feature": "1 Jus de fruits frais"
+                },
+                {
+                  "feature": "1 Pain chaud au choix"
+                },
+                {
+                  "feature": "Assiette jambon-fromage"
+                }
+              ],
+              "ctaText": "Réserver",
+              "isPopular": true
+            }
+          ]
+        },
+        {
+          "blockType": "product-grid",
+          "title": "Produits Disponibles",
+          "products": [
+            {
+              "name": "Produit A",
+              "price": "10.00 €",
+              "image": "https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=300"
+            }
+          ]
+        },
+        {
+          "blockType": "gallery",
+          "title": "Galerie Photos",
+          "images": [
+            "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=300",
+            "https://images.unsplash.com/photo-1555507036-ab1f4038808a?auto=format&fit=crop&w=300"
+          ]
+        },
+        {
+          "blockType": "hero",
+          "title": "Nouveau titre Hero",
+          "subtitle": "Une description intéressante ici.",
+          "ctaText": "Bouton d'action",
+          "backgroundImage": ""
+        },
+        {
+          "blockType": "pricing",
+          "title": "Nos Formules Petit-Déjeuner",
+          "plans": [
+            {
+              "name": "Formule Matin",
+              "price": "4.50 €",
+              "description": "Pour bien commencer la journée.",
+              "features": [
+                {
+                  "feature": "1 Viennoiserie"
+                },
+                {
+                  "feature": "1 Café ou Thé"
+                },
+                {
+                  "feature": "1/2 Baguette beurre"
+                }
+              ],
+              "ctaText": "Commander",
+              "isPopular": false
+            },
+            {
+              "name": "Formule Brunch",
+              "price": "12.50 €",
+              "description": "Le week-end ou pour les gourmands.",
+              "features": [
+                {
+                  "feature": "2 Viennoiseries"
+                },
+                {
+                  "feature": "1 Jus de fruits frais"
+                },
+                {
+                  "feature": "1 Pain chaud au choix"
+                },
+                {
+                  "feature": "Assiette jambon-fromage"
+                }
+              ],
+              "ctaText": "Réserver",
+              "isPopular": true
+            }
+          ]
         }
       ]
     }

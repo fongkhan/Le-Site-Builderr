@@ -4,11 +4,14 @@ import Hero from '../components/blocks/Hero.astro';
 import Features from '../components/blocks/Features.astro';
 import ProductGrid from '../components/blocks/ProductGrid.astro';
 import Gallery from '../components/blocks/Gallery.astro';
+import Testimonials from '../components/blocks/Testimonials.astro';
+import FAQ from '../components/blocks/FAQ.astro';
+import Pricing from '../components/blocks/Pricing.astro';
 
 // Récupération des routes statiques lors de la génération (SSG)
 export async function getStaticPaths() {
   try {
-    const response = await fetch('http://localhost:4000/api/pages');
+    const response = await fetch('http://127.0.0.1:4000/api/pages');
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
@@ -53,7 +56,10 @@ const blockMap: Record<string, any> = {
   'hero': Hero,
   'features': Features,
   'product-grid': ProductGrid,
-  'gallery': Gallery
+  'gallery': Gallery,
+  'testimonials': Testimonials,
+  'faq': FAQ,
+  'pricing': Pricing
 };
 ---
 

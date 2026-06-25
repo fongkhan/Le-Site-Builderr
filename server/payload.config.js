@@ -137,6 +137,60 @@ module.exports = buildConfig({
                 },
               ],
             },
+            {
+              slug: 'testimonials',
+              fields: [
+                { name: 'title', type: 'text' },
+                {
+                  name: 'testimonials',
+                  type: 'array',
+                  fields: [
+                    { name: 'quote', type: 'textarea' },
+                    { name: 'author', type: 'text' },
+                    { name: 'role', type: 'text' },
+                    { name: 'avatar', type: 'text' },
+                  ],
+                },
+              ],
+            },
+            {
+              slug: 'faq',
+              fields: [
+                { name: 'title', type: 'text' },
+                {
+                  name: 'items',
+                  type: 'array',
+                  fields: [
+                    { name: 'question', type: 'text' },
+                    { name: 'answer', type: 'textarea' },
+                  ],
+                },
+              ],
+            },
+            {
+              slug: 'pricing',
+              fields: [
+                { name: 'title', type: 'text' },
+                {
+                  name: 'plans',
+                  type: 'array',
+                  fields: [
+                    { name: 'name', type: 'text' },
+                    { name: 'price', type: 'text' },
+                    { name: 'description', type: 'text' },
+                    {
+                      name: 'features',
+                      type: 'array',
+                      fields: [
+                        { name: 'feature', type: 'text' },
+                      ],
+                    },
+                    { name: 'ctaText', type: 'text' },
+                    { name: 'isPopular', type: 'checkbox' },
+                  ],
+                },
+              ],
+            },
           ],
         },
       ],

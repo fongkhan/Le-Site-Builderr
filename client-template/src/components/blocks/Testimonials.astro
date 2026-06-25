@@ -1,0 +1,148 @@
+---
+interface TestimonialItem {
+  quote: string;
+  author: string;
+  role: string;
+  avatar: string;
+}
+
+interface Props {
+  data: {
+    title: string;
+    testimonials: TestimonialItem[];
+  };
+}
+
+const { data } = Astro.props;
+---
+
+<section class="testimonials-section">
+  <div class="container">
+    <h2>{data.title}</h2>
+    <div class="testimonials-grid">
+      {data.testimonials && data.testimonials.map((testi) => (
+        <div class="testimonial-card">
+          <div class="quote-mark">“</div>
+          <p class="quote-text">{testi.quote}</p>
+          <div class="author-info">
+            {testi.avatar && (
+              <img class="avatar" src={testi.avatar} alt={testi.author} />
+            )}
+            <div class="author-meta">
+              <h3>{testi.author}</h3>
+              <p>{testi.role}</p>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .testimonials-section {
+    padding: 80px 20px;
+    background-color: var(--color-bg);
+  }
+
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    text-align: center;
+  }
+
+  .testimonials-section h2 {
+    font-size: 2.5rem;
+    margin-bottom: 50px;
+    position: relative;
+    padding-bottom: 15px;
+  }
+
+  .testimonials-section h2::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 60px;
+    height: 4px;
+    background-color: var(--color-primary);
+    border-radius: 2px;
+  }
+
+  .testimonials-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 30px;
+    margin-top: 20px;
+  }
+
+  .testimonial-card {
+    background: #ffffff;
+    padding: 40px 30px;
+    border-radius: var(--border-radius);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+    border: 1px solid rgba(0, 0, 0, 0.05);
+    transition: all 0.3s ease;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+  }
+
+  .testimonial-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+    border-color: var(--color-primary);
+  }
+
+  .quote-mark {
+    font-size: 4rem;
+    color: var(--color-secondary);
+    font-family: serif;
+    line-height: 1;
+    position: absolute;
+    top: 15px;
+    right: 30px;
+    opacity: 0.5;
+  }
+
+  .quote-text {
+    color: #4b5563;
+    font-size: 1rem;
+    line-height: 1.6;
+    font-style: italic;
+    margin-bottom: 30px;
+    flex: 1;
+    position: relative;
+    z-index: 1;
+  }
+
+  .author-info {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    border-top: 1px solid rgba(0, 0, 0, 0.05);
+    padding-top: 20px;
+  }
+
+  .avatar {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid var(--color-secondary);
+  }
+
+  .author-meta h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin: 0 0 4px 0;
+  }
+
+  .author-meta p {
+    font-size: 0.85rem;
+    color: #9ca3af;
+    margin: 0;
+  }
+</style>

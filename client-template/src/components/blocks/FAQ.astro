@@ -1,0 +1,131 @@
+---
+interface FAQItem {
+  question: string;
+  answer: string;
+}
+
+interface Props {
+  data: {
+    title: string;
+    items: FAQItem[];
+  };
+}
+
+const { data } = Astro.props;
+---
+
+<section class="faq-section">
+  <div class="container">
+    <h2>{data.title}</h2>
+    <div class="faq-list">
+      {data.items && data.items.map((item) => (
+        <details class="faq-item">
+          <summary class="faq-question">
+            <span>{item.question}</span>
+            <span class="chevron">▼</span>
+          </summary>
+          <div class="faq-answer">
+            <p>{item.answer}</p>
+          </div>
+        </details>
+      ))}
+    </div>
+  </div>
+</section>
+
+<style>
+  .faq-section {
+    padding: 80px 20px;
+    background-color: var(--color-bg);
+  }
+
+  .container {
+    max-width: 800px;
+    margin: 0 auto;
+    text-align: center;
+  }
+
+  .faq-section h2 {
+    font-size: 2.5rem;
+    margin-bottom: 50px;
+    position: relative;
+    padding-bottom: 15px;
+  }
+
+  .faq-section h2::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 60px;
+    height: 4px;
+    background-color: var(--color-primary);
+    border-radius: 2px;
+  }
+
+  .faq-list {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    text-align: left;
+  }
+
+  .faq-item {
+    background: #ffffff;
+    border-radius: var(--border-radius);
+    border: 1px solid rgba(0, 0, 0, 0.05);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.02);
+    overflow: hidden;
+    transition: all 0.3s ease;
+  }
+
+  .faq-item[open] {
+    border-color: var(--color-primary);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+  }
+
+  .faq-question {
+    padding: 20px 25px;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--color-text);
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    list-style: none;
+    user-select: none;
+    transition: background-color 0.2s ease;
+  }
+
+  .faq-question::-webkit-details-marker {
+    display: none;
+  }
+
+  .faq-question:hover {
+    background-color: rgba(0, 0, 0, 0.01);
+  }
+
+  .chevron {
+    font-size: 0.8rem;
+    color: var(--color-primary);
+    transition: transform 0.3s ease;
+  }
+
+  .faq-item[open] .chevron {
+    transform: rotate(180deg);
+  }
+
+  .faq-answer {
+    padding: 0 25px 20px 25px;
+    border-top: 1px solid rgba(0, 0, 0, 0.02);
+  }
+
+  .faq-answer p {
+    color: #4b5563;
+    font-size: 0.95rem;
+    line-height: 1.6;
+    margin: 15px 0 0 0;
+  }
+</style>

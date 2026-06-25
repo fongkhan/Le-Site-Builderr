@@ -40,9 +40,18 @@ interface Block {
   subtitle?: string;
   ctaText?: string;
   backgroundImage?: string;
-  items?: { title: string; description: string }[];
+  items?: { title?: string; description?: string; question?: string; answer?: string }[];
   products?: { name: string; price: string; image: string }[];
   images?: string[];
+  testimonials?: { quote: string; author: string; role: string; avatar: string }[];
+  plans?: {
+    name: string;
+    price: string;
+    description: string;
+    features: { feature: string }[];
+    ctaText: string;
+    isPopular: boolean;
+  }[];
 }
 
 interface PageDoc {
@@ -647,6 +656,33 @@ export default function App() {
         images: [
           'https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=300',
           'https://images.unsplash.com/photo-1555507036-ab1f4038808a?auto=format&fit=crop&w=300'
+        ]
+      };
+    } else if (type === 'testimonials') {
+      newBlock = {
+        blockType: 'testimonials',
+        title: 'Ce que nos clients disent',
+        testimonials: [
+          { quote: 'Le meilleur pain de la région ! Croustillant et savoureux.', author: 'Marie Dupont', role: 'Cliente régulière', avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=150' },
+          { quote: 'Des viennoiseries au vrai goût de beurre. Un régal chaque matin.', author: 'Jean Martin', role: 'Habitant de Clamart', avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=150' }
+        ]
+      };
+    } else if (type === 'faq') {
+      newBlock = {
+        blockType: 'faq',
+        title: 'Questions Fréquentes',
+        items: [
+          { question: 'Proposez-vous des produits sans gluten ?', answer: 'Nous fabriquons principalement des pains au levain traditionnel contenant du gluten, mais nous avons une gamme de gâteaux sans farine de blé.' },
+          { question: 'Quels sont vos horaires de cuisson ?', answer: 'Nos fournées ont lieu à 7h00, 11h30 et 16h30 pour vous garantir du pain chaud toute la journée.' }
+        ]
+      };
+    } else if (type === 'pricing') {
+      newBlock = {
+        blockType: 'pricing',
+        title: 'Nos Formules Petit-Déjeuner',
+        plans: [
+          { name: 'Formule Matin', price: '4.50 €', description: 'Pour bien commencer la journée.', features: [{ feature: '1 Viennoiserie' }, { feature: '1 Café ou Thé' }, { feature: '1/2 Baguette beurre' }], ctaText: 'Commander', isPopular: false },
+          { name: 'Formule Brunch', price: '12.50 €', description: 'Le week-end ou pour les gourmands.', features: [{ feature: '2 Viennoiseries' }, { feature: '1 Jus de fruits frais' }, { feature: '1 Pain chaud au choix' }, { feature: 'Assiette jambon-fromage' }], ctaText: 'Réserver', isPopular: true }
         ]
       };
     }
@@ -1851,6 +1887,74 @@ export default function App() {
                             </>
                           )}
 
+                          {block.blockType === 'testimonials' && (
+                            <>
+                              <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Titre du Bloc</label>
+                              <input type="text" className="input-text" style={{ padding: 6, fontSize: '0.875rem' }} value={block.title || ''} onChange={(e) => handleBlockChange(idx, 'title', e.target.value)} />
+                              {block.testimonials && block.testimonials.map((testi, testiIdx) => (
+                                <div key={testiIdx} style={{ border: '1px solid rgba(255,255,255,0.05)', padding: 6, borderRadius: 4, marginTop: 4 }}>
+                                  <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Témoignage {testiIdx+1}</label>
+                                  <textarea className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} value={testi.quote} onChange={(e) => handleBlockNestedChange(idx, 'testimonials', testiIdx, 'quote', e.target.value)} />
+                                  <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Auteur" value={testi.author} onChange={(e) => handleBlockNestedChange(idx, 'testimonials', testiIdx, 'author', e.target.value)} />
+                                  <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Rôle" value={testi.role} onChange={(e) => handleBlockNestedChange(idx, 'testimonials', testiIdx, 'role', e.target.value)} />
+                                  <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem' }} placeholder="Avatar (URL)" value={testi.avatar} onChange={(e) => handleBlockNestedChange(idx, 'testimonials', testiIdx, 'avatar', e.target.value)} />
+                                </div>
+                              ))}
+                            </>
+                          )}
+
+                          {block.blockType === 'faq' && (
+                            <>
+                              <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Titre du Bloc</label>
+                              <input type="text" className="input-text" style={{ padding: 6, fontSize: '0.875rem' }} value={block.title || ''} onChange={(e) => handleBlockChange(idx, 'title', e.target.value)} />
+                              {block.items && block.items.map((item, itemIdx) => (
+                                <div key={itemIdx} style={{ border: '1px solid rgba(255,255,255,0.05)', padding: 6, borderRadius: 4, marginTop: 4 }}>
+                                  <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Question {itemIdx+1}</label>
+                                  <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Question" value={item.question || ''} onChange={(e) => handleBlockNestedChange(idx, 'items', itemIdx, 'question', e.target.value)} />
+                                  <textarea className="input-text" style={{ padding: 4, fontSize: '0.825rem' }} placeholder="Réponse" value={item.answer || ''} onChange={(e) => handleBlockNestedChange(idx, 'items', itemIdx, 'answer', e.target.value)} />
+                                </div>
+                              ))}
+                            </>
+                          )}
+
+                          {block.blockType === 'pricing' && (
+                            <>
+                              <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Titre du Bloc</label>
+                              <input type="text" className="input-text" style={{ padding: 6, fontSize: '0.875rem' }} value={block.title || ''} onChange={(e) => handleBlockChange(idx, 'title', e.target.value)} />
+                              {block.plans && block.plans.map((plan, planIdx) => (
+                                <div key={planIdx} style={{ border: '1px solid rgba(255,255,255,0.05)', padding: 6, borderRadius: 4, marginTop: 4 }}>
+                                  <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Plan {planIdx+1}</label>
+                                  <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Nom du plan" value={plan.name} onChange={(e) => handleBlockNestedChange(idx, 'plans', planIdx, 'name', e.target.value)} />
+                                  <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Prix" value={plan.price} onChange={(e) => handleBlockNestedChange(idx, 'plans', planIdx, 'price', e.target.value)} />
+                                  <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Description" value={plan.description} onChange={(e) => handleBlockNestedChange(idx, 'plans', planIdx, 'description', e.target.value)} />
+                                  
+                                  <label style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'block', marginTop: 4 }}>Caractéristiques (séparées par des virgules)</label>
+                                  <input 
+                                    type="text" 
+                                    className="input-text" 
+                                    style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} 
+                                    value={plan.features ? plan.features.map((f: any) => f.feature).join(', ') : ''} 
+                                    onChange={(e) => {
+                                      const feats = e.target.value.split(',').map(s => ({ feature: s.trim() })).filter(f => f.feature.length > 0);
+                                      handleBlockNestedChange(idx, 'plans', planIdx, 'features', feats);
+                                    }} 
+                                  />
+
+                                  <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Texte CTA" value={plan.ctaText} onChange={(e) => handleBlockNestedChange(idx, 'plans', planIdx, 'ctaText', e.target.value)} />
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                                    <input 
+                                      type="checkbox" 
+                                      id={`popular-${idx}-${planIdx}`}
+                                      checked={plan.isPopular || false} 
+                                      onChange={(e) => handleBlockNestedChange(idx, 'plans', planIdx, 'isPopular', e.target.checked)} 
+                                    />
+                                    <label htmlFor={`popular-${idx}-${planIdx}`} style={{ fontSize: '0.75rem', color: 'white', cursor: 'pointer' }}>Plan populaire</label>
+                                  </div>
+                                </div>
+                              ))}
+                            </>
+                          )}
+
                           <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '0.875rem', marginTop: 5 }} onClick={() => { savePages(pagesData); setEditingBlockIdx(null); }}>
                             Fermer & Sauvegarder
                           </button>
@@ -1877,6 +1981,9 @@ export default function App() {
                   <button className="btn btn-secondary" style={{ padding: 8, fontSize: '0.8rem' }} onClick={() => addBlock('features')}>+ Features</button>
                   <button className="btn btn-secondary" style={{ padding: 8, fontSize: '0.8rem' }} onClick={() => addBlock('product-grid')}>+ ProductGrid</button>
                   <button className="btn btn-secondary" style={{ padding: 8, fontSize: '0.8rem' }} onClick={() => addBlock('gallery')}>+ Gallery</button>
+                  <button className="btn btn-secondary" style={{ padding: 8, fontSize: '0.8rem' }} onClick={() => addBlock('testimonials')}>+ Témoignages</button>
+                  <button className="btn btn-secondary" style={{ padding: 8, fontSize: '0.8rem' }} onClick={() => addBlock('faq')}>+ FAQ</button>
+                  <button className="btn btn-secondary" style={{ padding: 8, fontSize: '0.8rem' }} onClick={() => addBlock('pricing')}>+ Tarifs</button>
                 </div>
               </div>
 
@@ -1991,6 +2098,155 @@ export default function App() {
                           {block.images && block.images.map((img, subIdx) => (
                             <div key={subIdx} style={{ height: 100, overflow: 'hidden', borderRadius: theme.radius }}>
                               <img src={img} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  if (block.blockType === 'testimonials') {
+                    return (
+                      <div key={index} style={{ padding: '40px 20px', backgroundColor: theme.colors.background }}>
+                        <h2 style={{ textAlign: 'center', marginBottom: 30, fontFamily: `'${theme.fonts.heading}', serif`, color: theme.colors.text }}>
+                          {block.title}
+                        </h2>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 20 }}>
+                          {block.testimonials && block.testimonials.map((testi, subIdx) => (
+                            <div 
+                              key={subIdx} 
+                              style={{ 
+                                background: '#ffffff', 
+                                border: '1px solid rgba(0,0,0,0.05)', 
+                                padding: 20, 
+                                borderRadius: theme.radius, 
+                                boxShadow: '0 4px 12px rgba(0,0,0,0.03)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 12
+                              }}
+                            >
+                              <p style={{ color: '#4b5563', fontSize: '0.9rem', fontStyle: 'italic', flex: 1, margin: 0 }}>
+                                "{testi.quote}"
+                              </p>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                {testi.avatar && (
+                                  <img src={testi.avatar} alt={testi.author} style={{ width: 40, height: 40, borderRadius: '50%', objectFit: 'cover' }} />
+                                )}
+                                <div>
+                                  <h4 style={{ margin: 0, color: theme.colors.text, fontSize: '0.9rem', fontWeight: 600 }}>{testi.author}</h4>
+                                  <span style={{ fontSize: '0.75rem', color: '#9ca3af' }}>{testi.role}</span>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  if (block.blockType === 'faq') {
+                    return (
+                      <div key={index} style={{ padding: '40px 20px', backgroundColor: theme.colors.secondary + '11' }}>
+                        <h2 style={{ textAlign: 'center', marginBottom: 30, fontFamily: `'${theme.fonts.heading}', serif`, color: theme.colors.text }}>
+                          {block.title}
+                        </h2>
+                        <div style={{ maxWidth: 600, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                          {block.items && block.items.map((item, subIdx) => (
+                            <div 
+                              key={subIdx} 
+                              style={{ 
+                                background: '#ffffff', 
+                                border: '1px solid rgba(0,0,0,0.05)', 
+                                padding: 16, 
+                                borderRadius: theme.radius, 
+                                boxShadow: '0 2px 6px rgba(0,0,0,0.02)'
+                              }}
+                            >
+                              <h4 style={{ color: theme.colors.text, fontSize: '0.95rem', fontWeight: 600, display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: 0 }}>
+                                <span>{item.question}</span>
+                                <span style={{ color: theme.colors.primary }}>▼</span>
+                              </h4>
+                              <p style={{ color: '#4b5563', fontSize: '0.85rem', marginTop: 8, lineHeight: 1.5, margin: '8px 0 0 0' }}>
+                                {item.answer}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  if (block.blockType === 'pricing') {
+                    return (
+                      <div key={index} style={{ padding: '40px 20px', backgroundColor: theme.colors.background }}>
+                        <h2 style={{ textAlign: 'center', marginBottom: 30, fontFamily: `'${theme.fonts.heading}', serif`, color: theme.colors.text }}>
+                          {block.title}
+                        </h2>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 20, maxWidth: 800, margin: '0 auto', alignItems: 'stretch' }}>
+                          {block.plans && block.plans.map((plan, subIdx) => (
+                            <div 
+                              key={subIdx} 
+                              style={{ 
+                                background: '#ffffff', 
+                                border: plan.isPopular ? `2px solid ${theme.colors.primary}` : '1px solid rgba(0,0,0,0.05)', 
+                                padding: 24, 
+                                borderRadius: theme.radius, 
+                                boxShadow: plan.isPopular ? '0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1)' : '0 4px 6px -1px rgba(0, 0, 0, 0.05)',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                position: 'relative',
+                                transform: plan.isPopular ? 'scale(1.03)' : 'none',
+                                zIndex: plan.isPopular ? 2 : 1
+                              }}
+                            >
+                              {plan.isPopular && (
+                                <span 
+                                  style={{ 
+                                    position: 'absolute', 
+                                    top: -12, 
+                                    left: '50%', 
+                                    transform: 'translateX(-50%)', 
+                                    backgroundColor: theme.colors.primary, 
+                                    color: '#ffffff', 
+                                    padding: '2px 10px', 
+                                    borderRadius: 12, 
+                                    fontSize: '0.7rem', 
+                                    fontWeight: 700, 
+                                    textTransform: 'uppercase' 
+                                  }}
+                                >
+                                  Populaire
+                                </span>
+                              )}
+                              <h3 style={{ margin: 0, fontSize: '1.2rem', color: theme.colors.text }}>{plan.name}</h3>
+                              <p style={{ color: '#6b7280', fontSize: '0.8rem', marginTop: 4, minHeight: 32, margin: '4px 0 0 0' }}>{plan.description}</p>
+                              <div style={{ display: 'flex', alignItems: 'baseline', marginTop: 15, marginBottom: 15 }}>
+                                <span style={{ fontSize: '2rem', fontWeight: 800, color: theme.colors.text }}>{plan.price}</span>
+                              </div>
+                              <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 20px 0', display: 'flex', flexDirection: 'column', gap: 8, flex: 1 }}>
+                                {plan.features && plan.features.map((f, fIdx) => (
+                                  <li key={fIdx} style={{ fontSize: '0.825rem', color: '#4b5563', display: 'flex', alignItems: 'center', gap: 6 }}>
+                                    <span style={{ color: theme.colors.primary, fontWeight: 'bold' }}>✓</span>
+                                    <span>{f.feature}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                              <button 
+                                style={{ 
+                                  width: '100%', 
+                                  border: 'none', 
+                                  backgroundColor: plan.isPopular ? theme.colors.primary : theme.colors.secondary, 
+                                  color: plan.isPopular ? '#ffffff' : theme.colors.text, 
+                                  borderRadius: theme.radius, 
+                                  padding: '10px 14px', 
+                                  fontWeight: 600, 
+                                  cursor: 'pointer',
+                                  fontSize: '0.875rem' 
+                                }}
+                              >
+                                {plan.ctaText}
+                              </button>
                             </div>
                           ))}
                         </div>
