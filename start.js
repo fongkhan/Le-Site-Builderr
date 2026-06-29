@@ -4,7 +4,7 @@ const path = require('path');
 console.log('=== DÉMARRAGE DE LA STACK META-BUILDER ===');
 
 // 1. Démarrer le serveur Express (Port 4000)
-const serverProcess = spawn('node', ['index.js'], {
+const serverProcess = spawn('npx', ['tsx', 'index.js'], {
   cwd: path.join(__dirname, 'server'),
   shell: true,
   stdio: 'inherit'

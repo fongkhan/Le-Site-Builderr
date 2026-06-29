@@ -11,7 +11,7 @@ import Pricing from '../components/blocks/Pricing.astro';
 // Récupération des routes statiques lors de la génération (SSG)
 export async function getStaticPaths() {
   try {
-    const response = await fetch('http://127.0.0.1:4000/api/pages');
+    const response = await fetch('http://127.0.0.1:4000/api/site-pages');
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }

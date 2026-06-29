@@ -244,7 +244,7 @@ export default function App() {
   const fetchPages = async () => {
     if (!activeSiteSlug) return;
     try {
-      const res = await fetch(`${BACKEND_URL}/api/pages?site=${activeSiteSlug}`);
+      const res = await fetch(`${BACKEND_URL}/api/site-pages?site=${activeSiteSlug}`);
       if (res.ok) {
         const data = await res.json();
         setPagesData(data);
@@ -566,7 +566,7 @@ export default function App() {
     if (!activeSiteSlug) return;
     setCmsSaving(true);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/pages?site=${activeSiteSlug}`, {
+      const res = await fetch(`${BACKEND_URL}/api/site-pages?site=${activeSiteSlug}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedData)

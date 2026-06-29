@@ -1,4 +1,14 @@
 require('dotenv').config();
+
+// --- MONKEYPATCH FOR ESM / CJS INTEROP IN NEXT 15 ---
+try {
+  const env = require('@next/env');
+  if (env && !env.default) {
+    const wrapper = { ...env, default: env };
+    require.cache[require.resolve('@next/env')] = { exports: wrapper };
+  }
+} catch (e) {}
+
 const { runOnboard, runExtractDesign } = require('./ai');
 const express = require('express');
 const cors = require('cors');
@@ -15,30 +25,104 @@ process.on('uncaughtException', (err) => {
   console.error('⚠️ [BDD] Exception interceptée (PostgreSQL est peut-être hors-ligne) :', err.message || err);
 });
 
+const next = require('next');
+const { getPayload } = require('payload');
+
+const dev = process.env.NODE_ENV !== 'production';
+const nextApp = next({ dev, dir: __dirname });
+const handle = nextApp.getRequestHandler();
+
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// --- INITIALISATION CONDITIONNELLE DE PAYLOAD CMS ---
-let payloadInstance = null;
-if (process.env.DATABASE_URI) {
-  try {
-    process.env.PAYLOAD_CONFIG_PATH = path.resolve(__dirname, 'payload.config.js');
-    const payload = require('payload');
-    payload.init({
-      secret: process.env.PAYLOAD_SECRET || 'fallback-secret-payload-key-12345678',
-      express: app,
-      onInit: () => {
-        payloadInstance = payload;
-        console.log(`✔ [Payload CMS] Initialisé sur la base de données.`);
-      }
-    });
-  } catch (err) {
-    console.error("❌ [Payload CMS] Erreur lors de l'initialisation :", err.message);
-    console.log("💡 Assurez-vous d'avoir exécuté 'npm install' dans le dossier server.");
+// Debug logger middleware
+app.use((req, res, next) => {
+  if (req.url.includes('NaN') || req.url.includes('api')) {
+    console.log(`🔍 [HTTP] ${req.method} ${req.url}`);
   }
-} else {
-  console.log("💡 [Payload CMS] DATABASE_URI non définie dans le fichier .env. Mode simulation JSON actif.");
+  next();
+});
+
+// --- INITIALISATION CONDITIONNELLE DE PAYLOAD CMS V3 ---
+let payloadInstance = null;
+async function seedUsers(payload) {
+  try {
+    // 1. Super Admin
+    const adminRes = await payload.find({
+      collection: 'users',
+      where: { email: { equals: 'admin@admin.com' } }
+    });
+    if (adminRes.docs.length > 0) {
+      await payload.update({
+        collection: 'users',
+        id: adminRes.docs[0].id,
+        data: {
+          roles: ['admin'],
+          password: 'password123'
+        }
+      });
+      console.log("✔ [Seeding] admin@admin.com mis à jour.");
+    } else {
+      await payload.create({
+        collection: 'users',
+        data: {
+          email: 'admin@admin.com',
+          roles: ['admin'],
+          password: 'password123'
+        }
+      });
+      console.log("✔ [Seeding] admin@admin.com créé.");
+    }
+
+    // 2. Client User
+    const clientRes = await payload.find({
+      collection: 'users',
+      where: { email: { equals: 'client@client.com' } }
+    });
+    if (clientRes.docs.length > 0) {
+      await payload.update({
+        collection: 'users',
+        id: clientRes.docs[0].id,
+        data: {
+          roles: ['client'],
+          sites: [1], // ID for boulangerie-artisanale
+          password: 'password123'
+        }
+      });
+      console.log("✔ [Seeding] client@client.com mis à jour.");
+    } else {
+      await payload.create({
+        collection: 'users',
+        data: {
+          email: 'client@client.com',
+          roles: ['client'],
+          sites: [1], // ID for boulangerie-artisanale
+          password: 'password123'
+        }
+      });
+      console.log("✔ [Seeding] client@client.com créé.");
+    }
+  } catch (seedErr) {
+    console.error("❌ [Seeding] Erreur de seeding des utilisateurs :", seedErr.message);
+  }
+}
+
+async function initPayload() {
+  if (process.env.DATABASE_URI) {
+    try {
+      const config = require('./payload.config.ts').default;
+      payloadInstance = await getPayload({
+        config,
+      });
+      console.log(`✔ [Payload CMS] Initialisé sur la base de données.`);
+      await seedUsers(payloadInstance);
+    } catch (err) {
+      console.error("❌ [Payload CMS] Erreur lors de l'initialisation :", err.message);
+    }
+  } else {
+    console.log("💡 [Payload CMS] DATABASE_URI non définie dans le fichier .env. Mode simulation JSON actif.");
+  }
 }
 
 // Dossier de données et chemins
@@ -545,7 +629,7 @@ app.get('/api/sites/:slug/files/view', (req, res) => {
 // --- ENDPOINTS CMS ---
 
 // Pages
-app.get('/api/pages', async (req, res) => {
+app.get('/api/site-pages', async (req, res) => {
   const siteSlug = getSiteFromRequest(req);
 
   if (payloadInstance) {
@@ -594,7 +678,7 @@ app.get('/api/pages', async (req, res) => {
   res.json(JSON.parse(data));
 });
 
-app.post('/api/pages', async (req, res) => {
+app.post('/api/site-pages', async (req, res) => {
   const siteSlug = getSiteFromRequest(req);
 
   if (payloadInstance) {
@@ -1031,7 +1115,15 @@ function updateSiteStatus(slug, status) {
   }
 }
 
+// Next.js fallback route
+app.all('*', (req, res) => {
+  return handle(req, res);
+});
+
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => {
-  console.log(`Serveur Meta-Builder démarré sur http://localhost:${PORT}`);
+nextApp.prepare().then(async () => {
+  await initPayload();
+  app.listen(PORT, () => {
+    console.log(`Serveur Meta-Builder démarré sur http://localhost:${PORT}`);
+  });
 });

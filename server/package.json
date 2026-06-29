@@ -4,18 +4,27 @@
   "description": "Backend API & Webhook lockfile server for Meta-Builder",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "tsx index.js"
   },
   "dependencies": {
+    "@payloadcms/db-postgres": "^3.2.0",
+    "@payloadcms/next": "^3.2.0",
+    "@payloadcms/richtext-lexical": "^3.2.0",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^4.21.2",
-    "payload": "^2.30.0",
-    "@payloadcms/db-postgres": "^0.8.0",
-    "@payloadcms/bundler-webpack": "^1.0.6",
-    "@payloadcms/richtext-slate": "^1.5.2"
+    "graphql": "^17.0.1",
+    "next": "^15.1.0",
+    "payload": "^3.2.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   },
-  "overrides": {
-    "drizzle-kit": "0.23.2"
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.24",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tsx": "^4.7.1",
+    "typescript": "^5.3.3"
   }
 }
