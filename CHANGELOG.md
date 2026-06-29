@@ -2,6 +2,27 @@
 
 Toutes les modifications notables apportées à ce projet sont documentées dans ce fichier.
 
+## [1.3.0] - 2026-06-30
+
+### Ajouts
+
+- **Migration vers Payload CMS v3 & Next.js 15** :
+  - Mise à niveau des dépendances vers `payload^3.2.0`, `next^15.1.0` et `react^19.0.0` dans [package.json](file:///e:/Program%20Files/git/Le-Site-Builderr/server/package.json).
+  - Refondation de la configuration vers TypeScript dans [payload.config.ts](file:///e:/Program%20Files/git/Le-Site-Builderr/server/payload.config.ts) en utilisant le Lexical Editor (`@payloadcms/richtext-lexical`) et l'adaptateur Postgres (`@payloadcms/db-postgres`).
+  - Configuration de l'App Router Next.js sous `server/app/(payload)` avec [layout.tsx](file:///e:/Program%20Files/git/Le-Site-Builderr/server/app/\(payload\)/layout.tsx) (intégrant `RootLayout` et un handler de `serverFunction`), [page.tsx](file:///e:/Program%20Files/git/Le-Site-Builderr/server/app/\(payload\)/admin/%5B%5B...segments%5D%5D/page.tsx) et l'API catch-all [route.ts](file:///e:/Program%20Files/git/Le-Site-Builderr/server/app/api/%5B...payload%5D/route.ts).
+  - Intégration de Next.js dans le serveur Express personnalisé ([server/index.js](file:///e:/Program%20Files/git/Le-Site-Builderr/server/index.js)) avec initialisation `nextApp.prepare()` et redirection catch-all.
+  - Ajout d'un monkeypatch au boot pour corriger les conflits CJS/ESM liés à l'import de `@next/env` sous Node.js 22.
+
+- **Système de restriction d'accès client (Multi-tenant)** :
+  - Ajout de champs de contrôle (`roles` et `sites`) à la collection `users`.
+  - Implémentation de fonctions de filtrage d'accès (`isAdminOrSiteClient`, `isAdminOrOwnSite`, `canCreatePage`, `canCreateTheme`) pour restreindre les opérations de lecture, modification et suppression des pages/thèmes aux seuls sites associés au client.
+  - Seeding automatique au démarrage du serveur : création de `admin@admin.com` (Super Admin) et de `client@client.com` (Client restreint au site ID `1` `boulangerie-artisanale`).
+
+### Modifié
+
+- **Résolution du conflit d'API `/api/pages`** :
+  - Renommage des routes d'API personnalisées de l'orchestrateur vers `/api/site-pages` pour éviter d'écraser les endpoints natifs de Payload CMS.
+
 ## [1.2.0] - 2026-06-23
 
 ### Ajouts
