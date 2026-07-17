@@ -126,8 +126,18 @@ En dev, le front proxifie `/api`, `/webhook`, `/preview`, `/admin` et `/_next` v
 * Panel d'administration Payload complet pour la gestion des comptes et des données.
 
 ### 6. Quotas IA & réinitialisation de mot de passe
-* **Quota IA journalier** par compte client (`AI_DAILY_QUOTA`, surchargeable par compte dans le panel Payload) ; les admins sont illimités. Le solde restant est affiché à l'onboarding.
+* **Quota IA journalier** par compte client (`AI_DAILY_QUOTA`, surchargeable par compte dans le panel Payload) ; les admins sont illimités. Le solde restant est affiché à l'onboarding. Réservation atomique (sérialisée) : deux requêtes concurrentes ne peuvent pas dépasser la limite.
 * **Mot de passe oublié** : lien « Mot de passe oublié ? » → email de réinitialisation (SMTP ou, sans SMTP, lien loggé en console en mode dev) → page de nouveau mot de passe.
+
+### 7. Durcissement HTTP & robustesse
+* **helmet** (en-têtes de sécurité ; CSP désactivée pour préserver l'admin Payload/Next) + **rate-limiting** : anti brute-force sur le login (seuls les échecs comptent), anti-abus sur l'onboarding IA et le webhook de build. `TRUST_PROXY` active la confiance au reverse-proxy pour l'IP client (off par défaut).
+* **Confinement des chemins** : `documentRoot`/`repositoryPath` sont validés (jamais hors `public_html`/`repositories`) et les slugs vides sont rejetés — impossible de viser un dossier arbitraire au déploiement/suppression.
+* **Déploiement atomique** (copie vers dossier temporaire puis `rename` + rollback) et **verrou anti-concurrence** en mémoire fermant la fenêtre TOCTOU entre deux builds.
+* **Validation de thème** (couleurs hexadécimales, dimensions, polices en allowlist) avant écriture du CSS — anti-injection.
+* Les réponses `500` ne divulguent pas les détails internes ; une exception non-capturée arrête le process en production (relance par le superviseur).
+
+### Note dépendances — version de Next.js
+`@payloadcms/next@3.86` contraint Next à `>=15.4.11 <15.5.0` (puis `>=16.2.6`). Le projet est donc **épinglé à la dernière 15.4 disponible (`~15.4.11`)**, qui inclut déjà les correctifs de sécurité de la branche 15.4 (bien au-delà de CVE-2025-29927). Passer à Next 15.5/16 nécessiterait une montée coordonnée de Payload et de `@payloadcms/next` : migration majeure, hors périmètre de ce durcissement.
 
 ---
 
