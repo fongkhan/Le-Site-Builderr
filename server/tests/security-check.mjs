@@ -114,6 +114,16 @@ if (admin.token) {
   check('Chemins : POST /api/sites/import repositoryPath="/root" -> 400', (await req('/api/sites/import', { method: 'POST', body: { slug: 'x-import', repositoryPath: '/root' }, token: admin.token })).status === 400);
 }
 
+// ---- Robustesse : validation de thème avant écriture (Lot 2) ----
+if (admin.token) {
+  const baseTheme = { colors: { primary: '#8B5A2B', secondary: '#F5E6CC', background: '#FAFAFA', text: '#2D241E' }, fonts: { heading: 'Playfair Display', body: 'Inter' }, radius: '12px' };
+  const postTheme = (theme) => req('/api/theme?site=boulangerie-artisanale', { method: 'POST', body: { theme }, token: admin.token });
+  check('Thème : POST valide -> 200', (await postTheme(baseTheme)).status === 200);
+  check('Thème : radius injectant du CSS -> 400', (await postTheme({ ...baseTheme, radius: '12px;} body{display:none}' })).status === 400);
+  check('Thème : couleur non-hex -> 400', (await postTheme({ ...baseTheme, colors: { ...baseTheme.colors, primary: 'url(javascript:1)' } })).status === 400);
+  check('Thème : police hors allowlist -> 400', (await postTheme({ ...baseTheme, fonts: { heading: 'Comic Sans', body: 'Inter' } })).status === 400);
+}
+
 // ---- Persistance : Payload est la source de vérité des sites ----
 if (admin.token) {
   const put = await req('/api/sites/boulangerie-artisanale', { method: 'PUT', body: { status: 'active' }, token: admin.token });

@@ -14,6 +14,7 @@ const auth = require('./auth');
 const sitesStore = require('./sites-store');
 const aiQuota = require('./ai-quota');
 const { generateSlug, assertSafePath } = require('./lib/paths');
+const { validateTheme } = require('./lib/theme');
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -350,7 +351,10 @@ async function getSiteFromRequest(req) {
 
 // Fonction pour synchroniser le thème JSON vers le fichier CSS Astro
 function writeThemeCss(themeData) {
-  const t = themeData.theme;
+  // Défense en profondeur : un siteThemeFile corrompu ou légué (antérieur à la
+  // validation d'entrée) ne doit jamais injecter de CSS ni casser le build.
+  const candidate = themeData && themeData.theme;
+  const t = validateTheme(candidate).ok ? candidate : defaultTheme.theme;
   const cssContent = `/* Généré automatiquement par l'Orchestrateur */
 :root {
   --color-primary: ${t.colors.primary};
@@ -848,6 +852,13 @@ app.get('/api/theme', auth.authenticate, auth.requireAuth, auth.requireSiteAcces
 app.post('/api/theme', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site), async (req, res) => {
   const siteSlug = req.query.site;
   const themeData = req.body;
+
+  // Valider avant toute écriture : les valeurs finissent interpolées dans theme.css
+  // (injection CSS possible) et une police hors-liste casse le rendu du site généré.
+  const validation = validateTheme(themeData && themeData.theme);
+  if (!validation.ok) {
+    return res.status(400).json({ error: validation.error });
+  }
 
   if (payloadInstance) {
     try {
