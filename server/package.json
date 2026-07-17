@@ -4,7 +4,8 @@
   "description": "Backend API & Webhook lockfile server for Meta-Builder",
   "main": "index.js",
   "scripts": {
-    "start": "tsx index.js"
+    "start": "tsx index.js",
+    "test": "node --test tests/unit/*.test.mjs"
   },
   "dependencies": {
     "@payloadcms/db-postgres": "^3.2.0",
