@@ -8,7 +8,14 @@ import { Access } from 'payload'
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
 
-const dbUri = process.env.DATABASE_URI || 'postgresql://postgres:postgrespassword@127.0.0.1:5438/metabuilder_db'
+if (!process.env.DATABASE_URI) {
+  throw new Error('DATABASE_URI manquante : Payload CMS ne peut pas démarrer sans base de données.')
+}
+if (!process.env.PAYLOAD_SECRET || process.env.PAYLOAD_SECRET.length < 16) {
+  throw new Error('PAYLOAD_SECRET manquant ou trop court (16 caractères minimum) : définissez-le dans le fichier .env.')
+}
+
+const dbUri = process.env.DATABASE_URI
 
 // Access Control Helpers
 const isAdmin = ({ req: { user } }: any) => {
@@ -53,6 +60,17 @@ const canCreatePage: Access = ({ req: { user, data } }: any) => {
   return false
 }
 
+// Un admin accède à tous les comptes, un client uniquement au sien
+const isAdminOrSelf: Access = ({ req: { user } }) => {
+  if (!user) return false
+  if (user.roles && user.roles.includes('admin')) return true
+  return {
+    id: {
+      equals: user.id,
+    },
+  }
+}
+
 const canCreateTheme: Access = ({ req: { user, data } }: any) => {
   if (!user) return false
   if (user.roles && user.roles.includes('admin')) return true
@@ -63,14 +81,20 @@ const canCreateTheme: Access = ({ req: { user, data } }: any) => {
   return false
 }
 
+const frontendOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:5173')
+  .split(',')
+  .map((o) => o.trim())
+
 export default buildConfig({
-  secret: process.env.PAYLOAD_SECRET || 'fallback-secret-payload-key-12345678',
+  secret: process.env.PAYLOAD_SECRET,
+  cors: frontendOrigins,
+  csrf: frontendOrigins,
   editor: lexicalEditor({}),
   db: postgresAdapter({
     pool: {
       connectionString: dbUri,
     },
-    push: false,
+    // push actif en dev : le schéma est synchronisé automatiquement (aucune migration versionnée dans ce repo)
   }),
   collections: [
     {
@@ -78,6 +102,28 @@ export default buildConfig({
       auth: true,
       admin: {
         useAsTitle: 'email',
+      },
+      access: {
+        // Bloque l'entrée du panel /admin aux non-admins
+        admin: isAdmin,
+        create: isAdmin,
+        delete: isAdmin,
+        read: isAdminOrSelf,
+        update: isAdminOrSelf,
+      },
+      hooks: {
+        beforeChange: [
+          // Empêche un client de s'auto-promouvoir ou de s'attribuer des sites :
+          // seuls les admins (ou les appels système sans user) peuvent modifier roles/sites.
+          ({ req, data, originalDoc, operation }) => {
+            const user = req?.user as any
+            if (operation === 'update' && user && !(user.roles || []).includes('admin')) {
+              if (data.roles !== undefined) data.roles = originalDoc?.roles
+              if (data.sites !== undefined) data.sites = originalDoc?.sites
+            }
+            return data
+          },
+        ],
       },
       fields: [
         {

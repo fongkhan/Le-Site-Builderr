@@ -9,9 +9,11 @@ try {
   }
 } catch (e) {}
 
-const { runOnboard, runExtractDesign } = require('./ai');
+const { runOnboard } = require('./ai');
+const auth = require('./auth');
 const express = require('express');
 const cors = require('cors');
+const crypto = require('crypto');
 const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -33,8 +35,26 @@ const nextApp = next({ dev, dir: __dirname });
 const handle = nextApp.getRequestHandler();
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.use(cors({
+  origin: (process.env.FRONTEND_ORIGIN || 'http://localhost:5173').split(',').map(o => o.trim()),
+  credentials: true
+}));
+// Le parsing JSON ne s'applique QU'AUX routes Express custom : les routes déléguées à
+// Next/Payload (login, REST Payload, /admin) doivent recevoir leur flux de requête intact.
+const jsonParser = express.json({ limit: '10mb' });
+const EXPRESS_ROUTE_PREFIXES = ['/api/sites', '/api/site-pages', '/api/theme', '/api/config', '/api/onboard', '/api/build-status', '/webhook', '/internal'];
+app.use((req, res, next) => {
+  const handledByExpress = EXPRESS_ROUTE_PREFIXES.some(p => req.path === p || req.path.startsWith(p + '/'));
+  if (!handledByExpress) return next();
+  jsonParser(req, res, next);
+});
+
+// Jeton interne régénéré à chaque boot : seul le process de build Astro le reçoit (via env)
+const BUILD_TOKEN = crypto.randomBytes(24).toString('hex');
+
+if (auth.DEV_NO_AUTH) {
+  console.warn('⚠️⚠️⚠️  [Sécurité] DEV_NO_AUTH=true : TOUTES les requêtes sont traitées comme un admin. À ne JAMAIS utiliser en production. ⚠️⚠️⚠️');
+}
 
 // Debug logger middleware
 app.use((req, res, next) => {
@@ -46,6 +66,38 @@ app.use((req, res, next) => {
 
 // --- INITIALISATION CONDITIONNELLE DE PAYLOAD CMS V3 ---
 let payloadInstance = null;
+auth.init(() => payloadInstance);
+
+// Retrouve (ou crée depuis sites.json) le doc payload_sites correspondant à un slug
+async function ensurePayloadSite(payload, slug) {
+  const existing = await payload.find({
+    collection: 'payload_sites',
+    where: { slug: { equals: slug } },
+    limit: 1,
+    overrideAccess: true
+  });
+  if (existing.docs.length > 0) return existing.docs[0];
+
+  let localSite = { name: slug, domain: `${slug}.o2switch.site` };
+  try {
+    const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
+    localSite = sites.find(s => s.slug === slug) || localSite;
+  } catch (e) {}
+
+  return payload.create({
+    collection: 'payload_sites',
+    data: {
+      slug,
+      name: localSite.name,
+      domain: localSite.domain,
+      stack: localSite.stack || 'Astro SSG',
+      documentRoot: localSite.documentRoot,
+      repositoryPath: localSite.repositoryPath
+    },
+    overrideAccess: true
+  });
+}
+
 async function seedUsers(payload) {
   try {
     // 1. Super Admin
@@ -53,55 +105,35 @@ async function seedUsers(payload) {
       collection: 'users',
       where: { email: { equals: 'admin@admin.com' } }
     });
-    if (adminRes.docs.length > 0) {
-      await payload.update({
-        collection: 'users',
-        id: adminRes.docs[0].id,
-        data: {
-          roles: ['admin'],
-          password: 'password123'
-        }
-      });
-      console.log("✔ [Seeding] admin@admin.com mis à jour.");
-    } else {
+    if (adminRes.docs.length === 0) {
       await payload.create({
         collection: 'users',
         data: {
           email: 'admin@admin.com',
           roles: ['admin'],
-          password: 'password123'
+          password: process.env.SEED_ADMIN_PASSWORD || 'password123'
         }
       });
       console.log("✔ [Seeding] admin@admin.com créé.");
     }
 
-    // 2. Client User
+    // 2. Client de démonstration, rattaché au site seedé par slug (jamais par ID en dur)
     const clientRes = await payload.find({
       collection: 'users',
       where: { email: { equals: 'client@client.com' } }
     });
-    if (clientRes.docs.length > 0) {
-      await payload.update({
-        collection: 'users',
-        id: clientRes.docs[0].id,
-        data: {
-          roles: ['client'],
-          sites: [1], // ID for boulangerie-artisanale
-          password: 'password123'
-        }
-      });
-      console.log("✔ [Seeding] client@client.com mis à jour.");
-    } else {
+    if (clientRes.docs.length === 0) {
+      const demoSite = await ensurePayloadSite(payload, 'boulangerie-artisanale');
       await payload.create({
         collection: 'users',
         data: {
           email: 'client@client.com',
           roles: ['client'],
-          sites: [1], // ID for boulangerie-artisanale
-          password: 'password123'
+          sites: [demoSite.id],
+          password: process.env.SEED_CLIENT_PASSWORD || 'password123'
         }
       });
-      console.log("✔ [Seeding] client@client.com créé.");
+      console.log("✔ [Seeding] client@client.com créé (site : boulangerie-artisanale).");
     }
   } catch (seedErr) {
     console.error("❌ [Seeding] Erreur de seeding des utilisateurs :", seedErr.message);
@@ -131,8 +163,6 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-const PAGES_FILE = path.join(DATA_DIR, 'pages.json');
-const THEME_FILE = path.join(DATA_DIR, 'theme.json');
 const LOGS_FILE = path.join(DATA_DIR, 'build-logs.txt');
 const SITES_FILE = path.join(DATA_DIR, 'sites.json');
 
@@ -141,8 +171,15 @@ const DIST_DIR = path.join(ASTRO_PROJECT_DIR, 'dist');
 const PUBLIC_HTML_DIR = path.resolve(__dirname, '../simulated_public_html');
 const LOCK_FILE = path.join(ASTRO_PROJECT_DIR, 'build.lock');
 
-// Serve generated websites statically under /sites/<slug>/
-app.use('/sites', express.static(PUBLIC_HTML_DIR));
+// Le dossier de production simulé doit exister dès le boot (le scan par défaut le cible,
+// et il n'est créé par aucun autre chemin avant le premier déploiement)
+if (!fs.existsSync(PUBLIC_HTML_DIR)) {
+  fs.mkdirSync(PUBLIC_HTML_DIR, { recursive: true });
+}
+
+// Serve generated websites statically under /preview/<slug>/
+// (le préfixe /sites est réservé aux routes du dashboard React)
+app.use('/preview', express.static(PUBLIC_HTML_DIR));
 
 // Helper functions for dynamic multi-site path handling
 function getSitePagesFile(slug) {
@@ -250,7 +287,7 @@ const defaultTheme = {
   }
 };
 
-// Seeding and migration logic for multi-site database
+// Seeding logic for multi-site database
 if (!fs.existsSync(SITES_FILE)) {
   const seededSites = [
     {
@@ -261,29 +298,28 @@ if (!fs.existsSync(SITES_FILE)) {
       repositoryPath: "",
       stack: "Astro SSG + Payload CMS",
       createdWithTool: true,
-      status: "active",
+      status: "draft",
       sslStatus: "active"
     }
   ];
   fs.writeFileSync(SITES_FILE, JSON.stringify(seededSites, null, 2), 'utf-8');
+}
 
-  // Migrate or write default pages for seeded site
-  let pagesVal = defaultPages;
-  if (fs.existsSync(PAGES_FILE)) {
-    try {
-      pagesVal = JSON.parse(fs.readFileSync(PAGES_FILE, 'utf-8'));
-    } catch (e) {}
+// Réécrit les fichiers de pages/thème du site seedé s'ils sont absents ou vides/corrompus
+function isUsableJsonFile(filePath, validate) {
+  if (!fs.existsSync(filePath)) return false;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    return validate(parsed);
+  } catch (e) {
+    return false;
   }
-  fs.writeFileSync(getSitePagesFile('boulangerie-artisanale'), JSON.stringify(pagesVal, null, 2), 'utf-8');
-
-  // Migrate or write default theme for seeded site
-  let themeVal = defaultTheme;
-  if (fs.existsSync(THEME_FILE)) {
-    try {
-      themeVal = JSON.parse(fs.readFileSync(THEME_FILE, 'utf-8'));
-    } catch (e) {}
-  }
-  fs.writeFileSync(getSiteThemeFile('boulangerie-artisanale'), JSON.stringify(themeVal, null, 2), 'utf-8');
+}
+if (!isUsableJsonFile(getSitePagesFile('boulangerie-artisanale'), (p) => Array.isArray(p.docs) && p.docs.length > 0)) {
+  fs.writeFileSync(getSitePagesFile('boulangerie-artisanale'), JSON.stringify(defaultPages, null, 2), 'utf-8');
+}
+if (!isUsableJsonFile(getSiteThemeFile('boulangerie-artisanale'), (t) => Boolean(t.theme && t.theme.colors))) {
+  fs.writeFileSync(getSiteThemeFile('boulangerie-artisanale'), JSON.stringify(defaultTheme, null, 2), 'utf-8');
 }
 
 // Global variable to track active build site slug (for dynamic pages routing fallback during Astro build)
@@ -324,20 +360,72 @@ function writeThemeCss(themeData) {
 // Initialize template theme.css with default
 writeThemeCss(defaultTheme);
 
+// Lecture des pages d'un site : Payload d'abord, fallback JSON (partagé entre l'API
+// authentifiée et le canal interne de build)
+async function readSitePages(siteSlug) {
+  if (payloadInstance) {
+    try {
+      const siteRes = await payloadInstance.find({
+        collection: 'payload_sites',
+        where: { slug: { equals: siteSlug } },
+        limit: 1,
+        overrideAccess: true
+      });
+      if (siteRes.docs.length > 0) {
+        const siteId = siteRes.docs[0].id;
+        const pagesRes = await payloadInstance.find({
+          collection: 'pages',
+          where: { site: { equals: siteId } },
+          overrideAccess: true
+        });
+        if (pagesRes.docs.length > 0) {
+          return {
+            docs: pagesRes.docs.map(page => ({
+              title: page.title,
+              slug: page.slug,
+              layout: page.layout ? page.layout.map(block => {
+                const { id, ...fields } = block;
+                if (block.blockType === 'gallery' && fields.images) {
+                  fields.images = fields.images.map(img => typeof img === 'object' && img !== null ? img.url : img);
+                }
+                return {
+                  blockType: block.blockType,
+                  ...fields
+                };
+              }) : []
+            }))
+          };
+        }
+      }
+    } catch (dbError) {
+      console.error("Erreur lecture pages de Payload, fallback JSON:", dbError.message);
+    }
+  }
+
+  const sitePagesFile = getSitePagesFile(siteSlug);
+  if (!fs.existsSync(sitePagesFile)) {
+    return defaultPages;
+  }
+  return JSON.parse(fs.readFileSync(sitePagesFile, 'utf-8'));
+}
+
 // --- MULTI-SITE CPANEL ENDPOINTS ---
 
-// List all sites
-app.get('/api/sites', (req, res) => {
+// List sites: un admin voit tout, un client uniquement ses sites
+app.get('/api/sites', auth.authenticate, auth.requireAuth, (req, res) => {
   try {
-    const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
+    let sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
+    if (!auth.isAdmin(req.user)) {
+      sites = sites.filter(s => req.userSiteSlugs.has(s.slug));
+    }
     res.json(sites);
   } catch (e) {
     res.status(500).json({ error: "Impossible de lire la liste des sites." });
   }
 });
 
-// Create manual site
-app.post('/api/sites', (req, res) => {
+// Create manual site (admin uniquement)
+app.post('/api/sites', auth.authenticate, auth.requireAdmin, async (req, res) => {
   const { name, domain, stack, documentRoot, repositoryPath } = req.body;
   if (!name) return res.status(400).json({ error: "Le nom du site est requis." });
 
@@ -371,14 +459,23 @@ app.post('/api/sites', (req, res) => {
     fs.writeFileSync(getSitePagesFile(slug), JSON.stringify(defaultPages, null, 2), 'utf-8');
     fs.writeFileSync(getSiteThemeFile(slug), JSON.stringify(defaultTheme, null, 2), 'utf-8');
 
+    // Synchronise le doc payload_sites (référentiel d'ownership)
+    if (payloadInstance) {
+      try {
+        await ensurePayloadSite(payloadInstance, slug);
+      } catch (dbError) {
+        console.error("Erreur de synchronisation payload_sites :", dbError.message);
+      }
+    }
+
     res.json({ success: true, site: newSite });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// Update manual site metadata
-app.put('/api/sites/:slug', (req, res) => {
+// Update manual site metadata (admin uniquement)
+app.put('/api/sites/:slug', auth.authenticate, auth.requireAdmin, (req, res) => {
   const { slug } = req.params;
   const { name, domain, documentRoot, repositoryPath, stack, sslStatus, status } = req.body;
 
@@ -402,8 +499,8 @@ app.put('/api/sites/:slug', (req, res) => {
   }
 });
 
-// Delete site
-app.delete('/api/sites/:slug', (req, res) => {
+// Delete site (admin uniquement — supprime aussi les fichiers si demandé)
+app.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (req, res) => {
   const { slug } = req.params;
   const deleteFiles = req.query.deleteFiles === 'true';
 
@@ -429,14 +526,35 @@ app.delete('/api/sites/:slug', (req, res) => {
       fs.rmSync(site.documentRoot, { recursive: true, force: true });
     }
 
+    // Supprime le doc payload_sites : la relation users.sites est nettoyée par Payload
+    if (payloadInstance) {
+      try {
+        const payloadSite = await payloadInstance.find({
+          collection: 'payload_sites',
+          where: { slug: { equals: slug } },
+          limit: 1,
+          overrideAccess: true
+        });
+        if (payloadSite.docs.length > 0) {
+          await payloadInstance.delete({
+            collection: 'payload_sites',
+            id: payloadSite.docs[0].id,
+            overrideAccess: true
+          });
+        }
+      } catch (dbError) {
+        console.error("Erreur de suppression du doc payload_sites :", dbError.message);
+      }
+    }
+
     res.json({ success: true, message: "Site supprimé avec succès." });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// Scan folder for unregistered sites (with customizable scanPath)
-app.post('/api/sites/scan', (req, res) => {
+// Scan folder for unregistered sites (admin uniquement — accède au filesystem serveur)
+app.post('/api/sites/scan', auth.authenticate, auth.requireAdmin, (req, res) => {
   const scanPath = req.body.scanPath || req.query.scanPath || PUBLIC_HTML_DIR;
   
   try {
@@ -444,9 +562,12 @@ app.post('/api/sites/scan', (req, res) => {
     const registeredRoots = sites.map(s => path.resolve(s.documentRoot).toLowerCase());
     const registeredRepos = sites.filter(s => s.repositoryPath).map(s => path.resolve(s.repositoryPath).toLowerCase());
 
-    const targetDir = path.resolve(scanPath);
+    // Les chemins relatifs sont résolus depuis la racine du projet (pas depuis server/)
+    const targetDir = path.isAbsolute(scanPath)
+      ? path.resolve(scanPath)
+      : path.resolve(path.dirname(__dirname), scanPath);
     if (!fs.existsSync(targetDir)) {
-      return res.status(400).json({ error: "Le chemin spécifié n'existe pas." });
+      return res.status(400).json({ error: `Le chemin spécifié n'existe pas : ${targetDir}` });
     }
 
     const dirs = fs.readdirSync(targetDir, { withFileTypes: true })
@@ -488,8 +609,8 @@ app.post('/api/sites/scan', (req, res) => {
   }
 });
 
-// Import scanned site
-app.post('/api/sites/import', (req, res) => {
+// Import scanned site (admin uniquement)
+app.post('/api/sites/import', auth.authenticate, auth.requireAdmin, async (req, res) => {
   const { slug, name, domain, stack, documentRoot, repositoryPath } = req.body;
   if (!slug) return res.status(400).json({ error: "Le slug est requis pour l'import." });
 
@@ -517,14 +638,22 @@ app.post('/api/sites/import', (req, res) => {
     // Provision local files repository without Git
     provisionRepository(newSite.repositoryPath);
 
+    if (payloadInstance) {
+      try {
+        await ensurePayloadSite(payloadInstance, slug);
+      } catch (dbError) {
+        console.error("Erreur de synchronisation payload_sites :", dbError.message);
+      }
+    }
+
     res.json({ success: true, site: newSite });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// List files of a specific site for file manager (supports documentRoot or repository browsing)
-app.get('/api/sites/:slug/files', (req, res) => {
+// List files of a specific site for file manager (admin uniquement)
+app.get('/api/sites/:slug/files', auth.authenticate, auth.requireAdmin, (req, res) => {
   const { slug } = req.params;
   const pathType = req.query.type || 'documentRoot'; // 'documentRoot' or 'repository'
   
@@ -585,8 +714,8 @@ app.get('/api/sites/:slug/files', (req, res) => {
   }
 });
 
-// View text file content of a specific site
-app.get('/api/sites/:slug/files/view', (req, res) => {
+// View text file content of a specific site (admin uniquement)
+app.get('/api/sites/:slug/files/view', auth.authenticate, auth.requireAdmin, (req, res) => {
   const { slug } = req.params;
   const relativePath = req.query.path;
   const pathType = req.query.type || 'documentRoot'; // 'documentRoot' or 'repository'
@@ -628,84 +757,22 @@ app.get('/api/sites/:slug/files/view', (req, res) => {
 
 // --- ENDPOINTS CMS ---
 
-// Pages
-app.get('/api/site-pages', async (req, res) => {
-  const siteSlug = getSiteFromRequest(req);
-
-  if (payloadInstance) {
-    try {
-      const siteRes = await payloadInstance.find({
-        collection: 'payload_sites',
-        where: { slug: { equals: siteSlug } },
-        limit: 1
-      });
-      if (siteRes.docs.length > 0) {
-        const siteId = siteRes.docs[0].id;
-        const pagesRes = await payloadInstance.find({
-          collection: 'pages',
-          where: { site: { equals: siteId } }
-        });
-        if (pagesRes.docs.length > 0) {
-          return res.json({
-            docs: pagesRes.docs.map(page => ({
-              title: page.title,
-              slug: page.slug,
-              layout: page.layout ? page.layout.map(block => {
-                const { id, ...fields } = block;
-                if (block.blockType === 'gallery' && fields.images) {
-                  fields.images = fields.images.map(img => typeof img === 'object' && img !== null ? img.url : img);
-                }
-                return {
-                  blockType: block.blockType,
-                  ...fields
-                };
-              }) : []
-            }))
-          });
-        }
-      }
-    } catch (dbError) {
-      console.error("Erreur lecture pages de Payload, fallback JSON:", dbError.message);
-    }
+// Pages (le paramètre ?site= est obligatoire, l'accès est vérifié par ownership)
+app.get('/api/site-pages', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site), async (req, res) => {
+  const siteSlug = req.query.site;
+  try {
+    res.json(await readSitePages(siteSlug));
+  } catch (e) {
+    res.status(500).json({ error: "Impossible de lire les pages du site." });
   }
-
-  const sitePagesFile = getSitePagesFile(siteSlug);
-  if (!fs.existsSync(sitePagesFile)) {
-    return res.json(defaultPages);
-  }
-
-  const data = fs.readFileSync(sitePagesFile, 'utf-8');
-  res.json(JSON.parse(data));
 });
 
-app.post('/api/site-pages', async (req, res) => {
-  const siteSlug = getSiteFromRequest(req);
+app.post('/api/site-pages', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site), async (req, res) => {
+  const siteSlug = req.query.site;
 
   if (payloadInstance) {
     try {
-      let siteRes = await payloadInstance.find({
-        collection: 'payload_sites',
-        where: { slug: { equals: siteSlug } },
-        limit: 1
-      });
-      let siteDoc;
-      if (siteRes.docs.length === 0) {
-        const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
-        const localSite = sites.find(s => s.slug === siteSlug) || { name: siteSlug, domain: `${siteSlug}.o2switch.site` };
-        siteDoc = await payloadInstance.create({
-          collection: 'payload_sites',
-          data: {
-            slug: siteSlug,
-            name: localSite.name,
-            domain: localSite.domain,
-            stack: localSite.stack || "Astro SSG + Payload CMS",
-            documentRoot: localSite.documentRoot,
-            repositoryPath: localSite.repositoryPath
-          }
-        });
-      } else {
-        siteDoc = siteRes.docs[0];
-      }
+      const siteDoc = await ensurePayloadSite(payloadInstance, siteSlug);
 
       if (req.body.docs && Array.isArray(req.body.docs)) {
         for (const pageInput of req.body.docs) {
@@ -760,9 +827,9 @@ app.post('/api/site-pages', async (req, res) => {
   res.json({ success: true, message: "Pages enregistrées avec succès !" });
 });
 
-// Thème
-app.get('/api/theme', async (req, res) => {
-  const siteSlug = getSiteFromRequest(req);
+// Thème (le paramètre ?site= est obligatoire, l'accès est vérifié par ownership)
+app.get('/api/theme', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site), async (req, res) => {
+  const siteSlug = req.query.site;
 
   if (payloadInstance) {
     try {
@@ -803,35 +870,13 @@ app.get('/api/theme', async (req, res) => {
   res.json(JSON.parse(data));
 });
 
-app.post('/api/theme', async (req, res) => {
-  const siteSlug = getSiteFromRequest(req);
+app.post('/api/theme', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site), async (req, res) => {
+  const siteSlug = req.query.site;
   const themeData = req.body;
 
   if (payloadInstance) {
     try {
-      let siteRes = await payloadInstance.find({
-        collection: 'payload_sites',
-        where: { slug: { equals: siteSlug } },
-        limit: 1
-      });
-      let siteDoc;
-      if (siteRes.docs.length === 0) {
-        const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
-        const localSite = sites.find(s => s.slug === siteSlug) || { name: siteSlug, domain: `${siteSlug}.o2switch.site` };
-        siteDoc = await payloadInstance.create({
-          collection: 'payload_sites',
-          data: {
-            slug: siteSlug,
-            name: localSite.name,
-            domain: localSite.domain,
-            stack: localSite.stack || "Astro SSG + Payload CMS",
-            documentRoot: localSite.documentRoot,
-            repositoryPath: localSite.repositoryPath
-          }
-        });
-      } else {
-        siteDoc = siteRes.docs[0];
-      }
+      const siteDoc = await ensurePayloadSite(payloadInstance, siteSlug);
 
       const themeRes = await payloadInstance.find({
         collection: 'themes',
@@ -871,22 +916,24 @@ app.post('/api/theme', async (req, res) => {
   res.json({ success: true, message: "Thème mis à jour avec succès !" });
 });
 
-// Configuration et clés disponibles
-app.get('/api/config', (req, res) => {
+// Configuration et clés disponibles (booléens uniquement, jamais les clés elles-mêmes)
+app.get('/api/config', auth.authenticate, auth.requireAuth, (req, res) => {
   res.json({
     availableProviders: {
       openai: !!process.env.OPENAI_API_KEY,
       anthropic: !!process.env.ANTHROPIC_API_KEY,
       gemini: !!process.env.GEMINI_API_KEY
     },
-    defaultProvider: process.env.DEFAULT_PROVIDER || 'openai'
+    defaultProvider: process.env.DEFAULT_PROVIDER || 'openai',
+    devNoAuth: auth.DEV_NO_AUTH
   });
 });
 
 // --- MOCK AI ENDPOINTS ---
 
-// Assistant d'Onboarding (Routage Stack, Ébauche & Thème)
-app.post('/api/onboard', async (req, res) => {
+// Assistant d'Onboarding (Routage Stack, Ébauche & Thème) — accessible aux admins ET aux clients :
+// le site créé est automatiquement rattaché au compte de l'utilisateur connecté.
+app.post('/api/onboard', auth.authenticate, auth.requireAuth, async (req, res) => {
   const { name, description, features, ambiance, image, inspirationUrl, provider } = req.body;
   if (!description) {
     return res.status(400).json({ error: "La description est requise." });
@@ -937,6 +984,32 @@ app.post('/api/onboard', async (req, res) => {
     fs.writeFileSync(getSiteThemeFile(finalSlug), JSON.stringify(themeData, null, 2), 'utf-8');
     writeThemeCss(themeData);
 
+    // Référence le site dans Payload et le rattache au compte du client créateur
+    if (payloadInstance) {
+      try {
+        const siteDoc = await ensurePayloadSite(payloadInstance, finalSlug);
+        if (req.user && !req.user.devMode && !auth.isAdmin(req.user)) {
+          const fullUser = await payloadInstance.findByID({
+            collection: 'users',
+            id: req.user.id,
+            depth: 0,
+            overrideAccess: true
+          });
+          const existingSiteIds = (fullUser.sites || []).map(s => (typeof s === 'object' && s !== null ? s.id : s));
+          if (!existingSiteIds.includes(siteDoc.id)) {
+            await payloadInstance.update({
+              collection: 'users',
+              id: req.user.id,
+              data: { sites: [...existingSiteIds, siteDoc.id] },
+              overrideAccess: true
+            });
+          }
+        }
+      } catch (dbError) {
+        console.error("Erreur de rattachement du site au compte :", dbError.message);
+      }
+    }
+
     res.json({
       qualification: result.qualification,
       pages: result.pages || defaultPages,
@@ -945,19 +1018,6 @@ app.post('/api/onboard', async (req, res) => {
     });
   } catch (error) {
     console.error("Erreur lors de l'onboarding IA :", error.message);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Extraction de thème depuis une image/logo
-app.post('/api/extract-design', async (req, res) => {
-  const { provider, image, ambiance } = req.body;
-
-  try {
-    const result = await runExtractDesign(provider, image, ambiance);
-    res.json(result);
-  } catch (error) {
-    console.error("Erreur lors de l'extraction de design IA :", error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -975,7 +1035,24 @@ let buildStatus = {
 // Vider les logs
 fs.writeFileSync(LOGS_FILE, 'Initialisation du système de build...\n', 'utf-8');
 
-app.get('/api/build-status', (req, res) => {
+app.get('/api/build-status', auth.authenticate, auth.requireAuth, (req, res) => {
+  // Un client ne voit les logs que si le build en cours/dernier concerne un de ses sites
+  const canSeeLogs = auth.isAdmin(req.user) ||
+    !buildStatus.buildingSite ||
+    req.userSiteSlugs.has(buildStatus.buildingSite);
+
+  if (!canSeeLogs) {
+    return res.json({
+      inProgress: buildStatus.inProgress,
+      status: buildStatus.inProgress ? 'busy' : 'idle',
+      lastCompleted: null,
+      error: null,
+      buildingSite: null,
+      lockExists: fs.existsSync(LOCK_FILE),
+      logs: "Un déploiement d'un autre site est en cours. Veuillez patienter."
+    });
+  }
+
   const logs = fs.existsSync(LOGS_FILE) ? fs.readFileSync(LOGS_FILE, 'utf-8') : '';
   res.json({
     ...buildStatus,
@@ -984,8 +1061,8 @@ app.get('/api/build-status', (req, res) => {
   });
 });
 
-app.post('/webhook/rebuild', (req, res) => {
-  const siteSlug = req.query.site || getSiteFromRequest(req);
+app.post('/webhook/rebuild', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site), (req, res) => {
+  const siteSlug = req.query.site;
 
   // 1. Vérification si un build est déjà en cours (Verrou physique)
   if (fs.existsSync(LOCK_FILE)) {
@@ -1027,22 +1104,26 @@ app.post('/webhook/rebuild', (req, res) => {
 
   // 3. Exécuter le build et le déploiement de manière asynchrone
   const isWindows = process.platform === "win32";
-  
+
   // Vérifier si node_modules existe dans client-template, sinon faire npm install
   const needsInstall = !fs.existsSync(path.join(ASTRO_PROJECT_DIR, 'node_modules'));
   const installCmd = needsInstall ? 'npm install && ' : '';
-  
-  const buildEnvCmd = isWindows
-    ? `set ACTIVE_SITE_SLUG=${siteSlug}&& `
-    : `export ACTIVE_SITE_SLUG=${siteSlug} && `;
 
   const cmd = isWindows
-    ? `cd /d "${ASTRO_PROJECT_DIR}" && ${buildEnvCmd}${installCmd}npm run build`
-    : `cd "${ASTRO_PROJECT_DIR}" && ${buildEnvCmd}${installCmd}npm run build`;
+    ? `cd /d "${ASTRO_PROJECT_DIR}" && ${installCmd}npm run build`
+    : `cd "${ASTRO_PROJECT_DIR}" && ${installCmd}npm run build`;
 
   fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] Commande exécutée : ${cmd}\n`);
 
-  exec(cmd, (error, stdout, stderr) => {
+  // Le site actif et le jeton d'accès interne passent par l'environnement du process de build
+  const buildEnv = {
+    ...process.env,
+    ACTIVE_SITE_SLUG: siteSlug,
+    BUILD_TOKEN,
+    ORCHESTRATOR_URL: `http://127.0.0.1:${process.env.PORT || 4000}`
+  };
+
+  exec(cmd, { env: buildEnv }, (error, stdout, stderr) => {
     // Clear build site
     activeBuildingSite = null;
     buildStatus.buildingSite = null;
@@ -1114,6 +1195,19 @@ function updateSiteStatus(slug, status) {
     console.error("Erreur mise à jour statut site", e);
   }
 }
+
+// Canal interne pour le build Astro : authentifié par le jeton BUILD_TOKEN (jamais exposé au navigateur)
+app.get('/internal/site-pages', async (req, res) => {
+  if (req.headers['x-build-token'] !== BUILD_TOKEN) {
+    return res.status(401).json({ error: "Jeton de build invalide." });
+  }
+  const siteSlug = req.query.site || activeBuildingSite || getSiteFromRequest(req);
+  try {
+    res.json(await readSitePages(siteSlug));
+  } catch (e) {
+    res.status(500).json({ error: "Impossible de lire les pages du site." });
+  }
+});
 
 // Next.js fallback route
 app.all('*', (req, res) => {

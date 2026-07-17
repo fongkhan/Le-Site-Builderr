@@ -18,5 +18,9 @@ export default defineConfig([
     languageOptions: {
       globals: globals.browser,
     },
+    rules: {
+      // Pattern volontaire « reset du state puis fetch » dans les effets de chargement de données
+      'react-hooks/set-state-in-effect': 'off',
+    },
   },
 ])
