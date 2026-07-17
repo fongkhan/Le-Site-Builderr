@@ -106,6 +106,14 @@ if (admin.token) {
   check('Admin : liste tous les comptes', emails.includes('admin@admin.com') && emails.includes('client@client.com'), JSON.stringify(emails));
 }
 
+// ---- Robustesse : validation slug + confinement des chemins (Lot 1) ----
+if (admin.token) {
+  check('Slug : POST /api/sites name="!!!" -> 400 (anti-slug-vide)', (await req('/api/sites', { method: 'POST', body: { name: '!!!' }, token: admin.token })).status === 400);
+  check('Slug : POST /api/sites name="---" -> 400', (await req('/api/sites', { method: 'POST', body: { name: '---' }, token: admin.token })).status === 400);
+  check('Chemins : PUT documentRoot="/etc" -> 400 (confinement)', (await req('/api/sites/boulangerie-artisanale', { method: 'PUT', body: { documentRoot: '/etc' }, token: admin.token })).status === 400);
+  check('Chemins : POST /api/sites/import repositoryPath="/root" -> 400', (await req('/api/sites/import', { method: 'POST', body: { slug: 'x-import', repositoryPath: '/root' }, token: admin.token })).status === 400);
+}
+
 // ---- Persistance : Payload est la source de vérité des sites ----
 if (admin.token) {
   const put = await req('/api/sites/boulangerie-artisanale', { method: 'PUT', body: { status: 'active' }, token: admin.token });

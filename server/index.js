@@ -13,6 +13,7 @@ const { runOnboard } = require('./ai');
 const auth = require('./auth');
 const sitesStore = require('./sites-store');
 const aiQuota = require('./ai-quota');
+const { generateSlug, assertSafePath } = require('./lib/paths');
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -144,7 +145,23 @@ sitesStore.init({ getPayload: () => payloadInstance, sitesFile: SITES_FILE });
 const ASTRO_PROJECT_DIR = path.resolve(__dirname, '../client-template');
 const DIST_DIR = path.join(ASTRO_PROJECT_DIR, 'dist');
 const PUBLIC_HTML_DIR = path.resolve(__dirname, '../simulated_public_html');
+// Racine des dépôts de sources provisionnés (cohérent avec l'onboarding)
+const REPOSITORIES_DIR = path.resolve(path.dirname(PUBLIC_HTML_DIR), 'repositories');
 const LOCK_FILE = path.join(ASTRO_PROJECT_DIR, 'build.lock');
+
+// Confine documentRoot/repositoryPath fournis par le client sous leurs racines autorisées.
+// Renvoie true si OK, sinon envoie une 400 et renvoie false (l'appelant doit s'arrêter).
+// Un chemin arbitraire (ex. "/etc") deviendrait la cible de fs.rmSync au build/delete.
+function ensureConfinedPaths(res, { documentRoot, repositoryPath }) {
+  try {
+    if (documentRoot) assertSafePath(documentRoot, PUBLIC_HTML_DIR);
+    if (repositoryPath) assertSafePath(repositoryPath, REPOSITORIES_DIR);
+    return true;
+  } catch (e) {
+    res.status(400).json({ error: "Chemin non autorisé : le dossier doit rester dans le périmètre du projet." });
+    return false;
+  }
+}
 
 // Le dossier de production simulé doit exister dès le boot (le scan par défaut le cible,
 // et il n'est créé par aucun autre chemin avant le premier déploiement)
@@ -381,7 +398,12 @@ async function readSitePages(siteSlug) {
   if (!fs.existsSync(sitePagesFile)) {
     return defaultPages;
   }
-  return JSON.parse(fs.readFileSync(sitePagesFile, 'utf-8'));
+  try {
+    return JSON.parse(fs.readFileSync(sitePagesFile, 'utf-8'));
+  } catch (e) {
+    console.error(`Fichier de pages corrompu pour ${siteSlug}, fallback par défaut :`, e.message);
+    return defaultPages;
+  }
 }
 
 // --- MULTI-SITE CPANEL ENDPOINTS ---
@@ -404,7 +426,9 @@ app.post('/api/sites', auth.authenticate, auth.requireAdmin, async (req, res) =>
   const { name, domain, stack, documentRoot, repositoryPath } = req.body;
   if (!name) return res.status(400).json({ error: "Le nom du site est requis." });
 
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+  const slug = generateSlug(name);
+  if (!slug) return res.status(400).json({ error: "Nom de site invalide : au moins un caractère alphanumérique est requis." });
+  if (!ensureConfinedPaths(res, { documentRoot, repositoryPath })) return;
 
   try {
     if (await sitesStore.getSiteBySlug(slug)) {
@@ -440,6 +464,8 @@ app.post('/api/sites', auth.authenticate, auth.requireAdmin, async (req, res) =>
 app.put('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (req, res) => {
   const { slug } = req.params;
   const { name, domain, documentRoot, repositoryPath, stack, sslStatus, status } = req.body;
+
+  if (!ensureConfinedPaths(res, { documentRoot, repositoryPath })) return;
 
   try {
     const site = await sitesStore.updateSite(slug, {
@@ -547,8 +573,11 @@ app.post('/api/sites/scan', auth.authenticate, auth.requireAdmin, async (req, re
 
 // Import scanned site (admin uniquement)
 app.post('/api/sites/import', auth.authenticate, auth.requireAdmin, async (req, res) => {
-  const { slug, name, domain, stack, documentRoot, repositoryPath } = req.body;
-  if (!slug) return res.status(400).json({ error: "Le slug est requis pour l'import." });
+  const { slug: rawSlug, name, domain, stack, documentRoot, repositoryPath } = req.body;
+  if (!rawSlug) return res.status(400).json({ error: "Le slug est requis pour l'import." });
+  const slug = generateSlug(rawSlug);
+  if (!slug) return res.status(400).json({ error: "Slug d'import invalide." });
+  if (!ensureConfinedPaths(res, { documentRoot, repositoryPath })) return;
 
   try {
     if (await sitesStore.getSiteBySlug(slug)) {
@@ -788,8 +817,12 @@ app.get('/api/theme', auth.authenticate, auth.requireAuth, auth.requireSiteAcces
     return res.json(defaultTheme);
   }
 
-  const data = fs.readFileSync(siteThemeFile, 'utf-8');
-  res.json(JSON.parse(data));
+  try {
+    res.json(JSON.parse(fs.readFileSync(siteThemeFile, 'utf-8')));
+  } catch (e) {
+    console.error(`Fichier de thème corrompu pour ${siteSlug}, fallback par défaut :`, e.message);
+    res.json(defaultTheme);
+  }
 });
 
 app.post('/api/theme', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site), async (req, res) => {
@@ -833,8 +866,9 @@ app.post('/api/theme', auth.authenticate, auth.requireAuth, auth.requireSiteAcce
 
   const siteThemeFile = getSiteThemeFile(siteSlug);
   fs.writeFileSync(siteThemeFile, JSON.stringify(themeData, null, 2), 'utf-8');
-  // Écrit aussi le CSS d'Astro
-  writeThemeCss(themeData);
+  // NOTE : on n'écrit PAS theme.css ici. Ce fichier est global au template Astro ;
+  // l'écrire hors build créait une race multi-tenant (le build d'un site A pouvait
+  // embarquer le thème d'un site B). Le build le régénère depuis siteThemeFile.
   res.json({ success: true, message: "Thème mis à jour avec succès !" });
 });
 
@@ -879,10 +913,10 @@ app.post('/api/onboard', auth.authenticate, auth.requireAuth, async (req, res) =
       aiQuota.increment(req.user.id);
     }
     
-    // Generate a new slug for this site
+    // Generate a new slug for this site (validé : jamais vide → jamais documentRoot partagé)
     const siteName = name || result.qualification.site_name || "Nouveau Site";
-    const slug = siteName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-    
+    const slug = generateSlug(siteName) || generateSlug(result.qualification.site_name || '') || 'site';
+
     let finalSlug = slug;
     let suffix = 2;
     while (await sitesStore.getSiteBySlug(finalSlug)) {
@@ -915,7 +949,7 @@ app.post('/api/onboard', auth.authenticate, auth.requireAuth, async (req, res) =
 
     const themeData = { theme: result.theme || defaultTheme.theme };
     fs.writeFileSync(getSiteThemeFile(finalSlug), JSON.stringify(themeData, null, 2), 'utf-8');
-    writeThemeCss(themeData);
+    // theme.css n'est pas écrit ici (fichier global, régénéré au build depuis siteThemeFile).
 
     // Référence le site dans Payload et le rattache au compte du client créateur
     if (payloadInstance) {
@@ -969,8 +1003,13 @@ let buildStatus = {
 // le verrou physique orphelin est nettoyé au boot ci-dessous.
 const buildQueue = [];
 
+// Verrou mémoire synchrone : posé AVANT tout await pour fermer la fenêtre TOCTOU
+// (deux webhooks concurrents ne peuvent plus démarrer deux builds simultanés).
+let buildLockHeld = false;
+
 // Vider les logs + nettoyer un verrou orphelin laissé par un crash
 fs.writeFileSync(LOGS_FILE, 'Initialisation du système de build...\n', 'utf-8');
+buildLockHeld = false;
 if (fs.existsSync(LOCK_FILE)) {
   fs.unlinkSync(LOCK_FILE);
   fs.appendFileSync(LOGS_FILE, 'Verrou de build orphelin détecté et nettoyé au démarrage.\n');
@@ -1015,22 +1054,27 @@ app.get('/api/build-status', auth.authenticate, auth.requireAuth, (req, res) => 
 
 // Dépile et lance le build suivant. Appelée à CHAQUE fin de build (succès ou erreur).
 function drainQueue() {
-  if (buildQueue.length === 0 || fs.existsSync(LOCK_FILE)) return;
+  if (buildQueue.length === 0 || buildLockHeld || fs.existsSync(LOCK_FILE)) return;
   const nextSlug = buildQueue.shift();
+  buildLockHeld = true; // réserver le créneau avant l'await de startBuild
   fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] FILE D'ATTENTE : lancement du build suivant (${nextSlug}), ${buildQueue.length} restant(s).\n`);
   startBuild(nextSlug).catch((e) => {
     console.error('Erreur de lancement du build en file :', e.message);
+    buildLockHeld = false;
     drainQueue();
   });
 }
 
 // Lance un build : pose le verrou, exécute astro build, copie vers documentRoot,
 // puis libère le verrou et draine la file — quel que soit le résultat.
+// Précondition : buildLockHeld doit déjà être true (réservé par le webhook ou drainQueue).
 async function startBuild(siteSlug) {
+  buildLockHeld = true; // défensif (idempotent) : garantit le verrou même si l'appelant l'a oublié
   const site = await sitesStore.getSiteBySlug(siteSlug);
   if (!site) {
     // Le site a pu être supprimé pendant son attente en file
     fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] ANNULÉ : le site "${siteSlug}" n'existe plus.\n`);
+    buildLockHeld = false;
     drainQueue();
     return;
   }
@@ -1090,15 +1134,29 @@ async function startBuild(siteSlug) {
       updateSiteStatus(siteSlug, 'error');
     } else {
       fs.appendFileSync(LOGS_FILE, `\n[${new Date().toLocaleTimeString()}] RÉSULTAT DU BUILD ASTRO :\n${stdout}\n`);
-      fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] Astro compilé. Copie des fichiers vers ${site.documentRoot}...\n`);
+      fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] Astro compilé. Déploiement atomique vers ${site.documentRoot}...\n`);
 
-      // Déploiement des fichiers statiques dans le dossier web du site
+      // Déploiement atomique : on ne détruit JAMAIS le site live avant qu'une copie
+      // complète soit prête (copie dans .tmp puis bascule par rename, avec rollback).
+      const siteDestDir = site.documentRoot;
+      const tmpDir = siteDestDir + '.tmp-' + siteSlug;
+      const oldDir = siteDestDir + '.old-' + siteSlug;
       try {
-        const siteDestDir = site.documentRoot;
-        // Vider le dossier de destination pour simuler rsync --delete
-        fs.rmSync(siteDestDir, { recursive: true, force: true });
-        fs.mkdirSync(siteDestDir, { recursive: true });
-        fs.cpSync(DIST_DIR, siteDestDir, { recursive: true, force: true });
+        // Défensif : ne rien détruire hors périmètre (site aux données héritées)
+        assertSafePath(siteDestDir, PUBLIC_HTML_DIR);
+        // Garde : ne pas déployer un build sans sortie exploitable (dist vide malgré exit 0)
+        if (!fs.existsSync(DIST_DIR) || !fs.existsSync(path.join(DIST_DIR, 'index.html'))) {
+          throw new Error("Build sans sortie exploitable (dist/index.html absent) : déploiement annulé, site actuel préservé.");
+        }
+        // 1. Copier le nouveau contenu à côté (même volume → rename atomique ensuite)
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+        fs.mkdirSync(tmpDir, { recursive: true });
+        fs.cpSync(DIST_DIR, tmpDir, { recursive: true, force: true });
+        // 2. Bascule : écarter l'ancien, promouvoir le nouveau, supprimer l'ancien
+        fs.rmSync(oldDir, { recursive: true, force: true });
+        if (fs.existsSync(siteDestDir)) fs.renameSync(siteDestDir, oldDir);
+        fs.renameSync(tmpDir, siteDestDir);
+        fs.rmSync(oldDir, { recursive: true, force: true });
 
         fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] DÉPLOIEMENT SUCCÈS : Fichiers synchronisés vers ${siteDestDir} !\n`);
         buildStatus.status = "success";
@@ -1106,6 +1164,13 @@ async function startBuild(siteSlug) {
         updateSiteStatus(siteSlug, 'active');
       } catch (deployError) {
         console.error(`Erreur de déploiement : ${deployError.message}`);
+        // Rollback : si la cible a été écartée mais pas remplacée, la restaurer
+        try {
+          if (!fs.existsSync(siteDestDir) && fs.existsSync(oldDir)) fs.renameSync(oldDir, siteDestDir);
+        } catch (rollbackErr) {
+          console.error('Échec du rollback de déploiement :', rollbackErr.message);
+        }
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
         fs.appendFileSync(LOGS_FILE, `\n[${new Date().toLocaleTimeString()}] ERREUR DE DÉPLOIEMENT :\n${deployError.message}\n`);
         buildStatus.status = "error";
         buildStatus.error = deployError.message;
@@ -1113,11 +1178,12 @@ async function startBuild(siteSlug) {
       }
     }
 
-    // Point de sortie unique : libérer le verrou puis enchaîner sur la file
+    // Point de sortie unique : libérer les verrous puis enchaîner sur la file
     if (fs.existsSync(LOCK_FILE)) {
       fs.unlinkSync(LOCK_FILE);
     }
     buildStatus.inProgress = false;
+    buildLockHeld = false;
     drainQueue();
   });
 }
@@ -1125,9 +1191,31 @@ async function startBuild(siteSlug) {
 app.post('/webhook/rebuild', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site), async (req, res) => {
   const siteSlug = req.query.site;
 
+  // Décision d'occupation SYNCHRONE (aucun await intercalé) : réserve le créneau
+  // immédiatement si le build est libre, fermant la fenêtre TOCTOU. Node étant
+  // mono-thread, deux webhooks concurrents ne peuvent plus réserver tous les deux.
+  const busy = buildLockHeld || buildStatus.inProgress || fs.existsSync(LOCK_FILE);
+  let reserved = false;
+  if (!busy) {
+    buildLockHeld = true;
+    reserved = true;
+  }
+
   const site = await sitesStore.getSiteBySlug(siteSlug);
   if (!site) {
+    if (reserved) buildLockHeld = false; // libérer la réservation prise à tort
     return res.status(404).json({ error: "Site non trouvé dans la base cPanel." });
+  }
+
+  // Créneau réservé : démarrage immédiat (startBuild consomme le verrou déjà posé)
+  if (reserved) {
+    res.status(202).json({ message: 'Build démarré avec succès.', queued: false });
+    startBuild(siteSlug).catch((e) => {
+      console.error('Erreur de lancement du build :', e.message);
+      buildLockHeld = false;
+      drainQueue();
+    });
+    return;
   }
 
   // Build déjà en cours pour CE site : rien à faire
@@ -1136,20 +1224,12 @@ app.post('/webhook/rebuild', auth.authenticate, auth.requireAuth, auth.requireSi
   }
 
   // Un autre build occupe le verrou : mise en file (dédupliquée)
-  if (fs.existsSync(LOCK_FILE) || buildStatus.inProgress) {
-    const existingIdx = buildQueue.indexOf(siteSlug);
-    const position = existingIdx !== -1 ? existingIdx + 1 : buildQueue.push(siteSlug);
-    if (existingIdx === -1) {
-      fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] FILE D'ATTENTE : "${siteSlug}" ajouté (position ${position}).\n`);
-    }
-    return res.status(202).json({ message: `Site ajouté à la file d'attente (position ${position}).`, queued: true, position });
+  const existingIdx = buildQueue.indexOf(siteSlug);
+  const position = existingIdx !== -1 ? existingIdx + 1 : buildQueue.push(siteSlug);
+  if (existingIdx === -1) {
+    fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] FILE D'ATTENTE : "${siteSlug}" ajouté (position ${position}).\n`);
   }
-
-  // Verrou libre : démarrage immédiat
-  res.status(202).json({ message: 'Build démarré avec succès.', queued: false });
-  startBuild(siteSlug).catch((e) => {
-    console.error('Erreur de lancement du build :', e.message);
-  });
+  return res.status(202).json({ message: `Site ajouté à la file d'attente (position ${position}).`, queued: true, position });
 });
 
 function updateSiteStatus(slug, status) {
