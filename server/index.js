@@ -55,6 +55,14 @@ app.use((req, res, next) => {
 // Jeton interne régénéré à chaque boot : seul le process de build Astro le reçoit (via env)
 const BUILD_TOKEN = crypto.randomBytes(24).toString('hex');
 
+// Réponse d'erreur serveur : le détail (message, stack) est loggé côté serveur mais
+// jamais renvoyé au réseau — le client reçoit un message générique. Réservé aux 500 ;
+// les 400/403/404 métier conservent leur message explicite volontairement.
+function sendError(res, publicMsg, err, status = 500) {
+  console.error(`❌ [${status}] ${publicMsg} —`, (err && (err.stack || err.message)) || err);
+  if (!res.headersSent) res.status(status).json({ error: publicMsg });
+}
+
 if (auth.DEV_NO_AUTH) {
   console.warn('⚠️⚠️⚠️  [Sécurité] DEV_NO_AUTH=true : TOUTES les requêtes sont traitées comme un admin. À ne JAMAIS utiliser en production. ⚠️⚠️⚠️');
 }
@@ -417,7 +425,7 @@ app.get('/api/sites', auth.authenticate, auth.requireAuth, async (req, res) => {
     }
     res.json(sites);
   } catch (e) {
-    res.status(500).json({ error: "Impossible de lire la liste des sites." });
+    sendError(res, "Impossible de lire la liste des sites.", e);
   }
 });
 
@@ -456,7 +464,7 @@ app.post('/api/sites', auth.authenticate, auth.requireAdmin, async (req, res) =>
 
     res.json({ success: true, site: newSite });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    sendError(res, "Impossible de créer le site.", e);
   }
 });
 
@@ -480,7 +488,7 @@ app.put('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (req, re
     if (!site) return res.status(404).json({ error: "Site non trouvé." });
     res.json({ success: true, site });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    sendError(res, "Impossible de mettre à jour le site.", e);
   }
 });
 
@@ -511,7 +519,7 @@ app.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (req,
 
     res.json({ success: true, message: "Site supprimé avec succès." });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    sendError(res, "Impossible de supprimer le site.", e);
   }
 });
 
@@ -567,7 +575,7 @@ app.post('/api/sites/scan', auth.authenticate, auth.requireAdmin, async (req, re
     }
     res.json(scanned);
   } catch (e) {
-    res.status(500).json({ error: `Erreur lors du scan du répertoire : ${e.message}` });
+    sendError(res, "Erreur lors du scan du répertoire.", e);
   }
 });
 
@@ -601,7 +609,7 @@ app.post('/api/sites/import', auth.authenticate, auth.requireAdmin, async (req, 
 
     res.json({ success: true, site: newSite });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    sendError(res, "Impossible d'importer le site.", e);
   }
 });
 
@@ -662,7 +670,7 @@ app.get('/api/sites/:slug/files', auth.authenticate, auth.requireAdmin, async (r
     const files = walkDir(rootDir);
     res.json(files);
   } catch (e) {
-    res.status(500).json({ error: `Erreur lors de la lecture des fichiers : ${e.message}` });
+    sendError(res, "Erreur lors de la lecture des fichiers.", e);
   }
 });
 
@@ -702,7 +710,7 @@ app.get('/api/sites/:slug/files/view', auth.authenticate, auth.requireAdmin, asy
     const content = fs.readFileSync(filePath, 'utf-8');
     res.json({ content });
   } catch (e) {
-    res.status(500).json({ error: `Impossible de lire le fichier : ${e.message}` });
+    sendError(res, "Impossible de lire le fichier.", e);
   }
 });
 
@@ -714,7 +722,7 @@ app.get('/api/site-pages', auth.authenticate, auth.requireAuth, auth.requireSite
   try {
     res.json(await readSitePages(siteSlug));
   } catch (e) {
-    res.status(500).json({ error: "Impossible de lire les pages du site." });
+    sendError(res, "Impossible de lire les pages du site.", e);
   }
 });
 
@@ -984,8 +992,7 @@ app.post('/api/onboard', auth.authenticate, auth.requireAuth, async (req, res) =
       site: newSite
     });
   } catch (error) {
-    console.error("Erreur lors de l'onboarding IA :", error.message);
-    res.status(500).json({ error: error.message });
+    sendError(res, "Échec de la génération du site par IA.", error);
   }
 });
 
@@ -1247,7 +1254,7 @@ app.get('/internal/site-pages', async (req, res) => {
   try {
     res.json(await readSitePages(siteSlug));
   } catch (e) {
-    res.status(500).json({ error: "Impossible de lire les pages du site." });
+    sendError(res, "Impossible de lire les pages du site.", e);
   }
 });
 
