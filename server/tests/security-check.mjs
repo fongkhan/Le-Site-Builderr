@@ -53,6 +53,7 @@ async function login(email, password) {
   check('Anonyme : POST /webhook/rebuild -> 401', (await req('/webhook/rebuild?site=boulangerie-artisanale', { method: 'POST' })).status === 401);
   check('Anonyme : GET /internal/site-pages sans jeton -> 401', (await req('/internal/site-pages?site=boulangerie-artisanale')).status === 401);
   check('Anonyme : GET /api/config -> 401', (await req('/api/config')).status === 401);
+  check('Anonyme : GET /api/sites/owners -> 401', (await req('/api/sites/owners')).status === 401);
 }
 
 // ---- Client : uniquement ses sites ----
@@ -104,6 +105,14 @@ if (admin.token) {
   const users = await req('/api/users', { token: admin.token });
   const emails = (users.json?.docs ?? []).map((u) => u.email).sort();
   check('Admin : liste tous les comptes', emails.includes('admin@admin.com') && emails.includes('client@client.com'), JSON.stringify(emails));
+
+  const owners = await req('/api/sites/owners', { token: admin.token });
+  check('Admin : GET /api/sites/owners -> 200 (map slug->emails)', owners.status === 200 && owners.json && typeof owners.json === 'object', `HTTP ${owners.status}`);
+  check('Admin : owners rattache le client à son site', Array.isArray(owners.json?.['boulangerie-artisanale']) && owners.json['boulangerie-artisanale'].includes('client@client.com'), JSON.stringify(owners.json?.['boulangerie-artisanale']));
+}
+
+if (client.token) {
+  check('Client : GET /api/sites/owners -> 403', (await req('/api/sites/owners', { token: client.token })).status === 403);
 }
 
 // ---- Robustesse : validation slug + confinement des chemins (Lot 1) ----

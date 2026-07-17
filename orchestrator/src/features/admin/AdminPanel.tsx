@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { createSite, deleteSite, scanSites } from '../../api/sites';
+import { createSite, deleteSite, scanSites, fetchSiteOwners } from '../../api/sites';
 import { useSites } from '../../state/SitesContext';
 import { useBuildStatus } from '../../hooks/useBuildStatus';
 import { useToast } from '../../components/ui/ToastContext';
@@ -22,6 +22,13 @@ export function AdminPanel() {
   const [siteToDelete, setSiteToDelete] = useState<Site | null>(null);
   const [scannedSites, setScannedSites] = useState<ScannedSite[]>([]);
   const [creatingClient, setCreatingClient] = useState(false);
+  const [owners, setOwners] = useState<Record<string, string[]>>({});
+
+  // Propriétaires des sites (rafraîchis quand la liste de sites change ou après création client)
+  const loadOwners = () => fetchSiteOwners().then(setOwners).catch(() => setOwners({}));
+  useEffect(() => {
+    loadOwners();
+  }, [sites.length]);
 
   return (
     <div className="animate-slide" style={{ display: 'flex', flexDirection: 'column', gap: 30 }}>
@@ -58,6 +65,7 @@ export function AdminPanel() {
 
       <SitesTable
         sites={sites}
+        owners={owners}
         onEdit={setEditSite}
         onFiles={setFileManagerSite}
         onDelete={setSiteToDelete}
@@ -76,7 +84,7 @@ export function AdminPanel() {
         />
       )}
       {siteToDelete && <DeleteSiteDialog site={siteToDelete} onClose={() => setSiteToDelete(null)} onDeleted={refresh} />}
-      {creatingClient && <CreateClientModal sites={sites} onClose={() => setCreatingClient(false)} onCreated={refresh} />}
+      {creatingClient && <CreateClientModal sites={sites} onClose={() => setCreatingClient(false)} onCreated={() => { refresh(); loadOwners(); }} />}
     </div>
   );
 }
@@ -300,8 +308,9 @@ const STATUS_DISPLAY: Record<string, { label: string; color: string }> = {
   draft: { label: 'Brouillon', color: 'var(--amber-400)' },
 };
 
-function SitesTable({ sites, onEdit, onFiles, onDelete }: {
+function SitesTable({ sites, owners, onEdit, onFiles, onDelete }: {
   sites: Site[];
+  owners: Record<string, string[]>;
   onEdit: (s: Site) => void;
   onFiles: (s: Site) => void;
   onDelete: (s: Site) => void;
@@ -335,6 +344,7 @@ function SitesTable({ sites, onEdit, onFiles, onDelete }: {
                 <th>SSL</th>
                 <th>Source</th>
                 <th>Statut</th>
+                <th>Clients</th>
                 <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
@@ -383,6 +393,17 @@ function SitesTable({ sites, onEdit, onFiles, onDelete }: {
                     <td>
                       <span className="status-dot" style={{ background: status.color }} />
                       <span>{status.label}</span>
+                    </td>
+                    <td style={{ fontSize: '0.8rem' }}>
+                      {(owners[site.slug] && owners[site.slug].length > 0) ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          {owners[site.slug].map((email) => (
+                            <span key={email} style={{ color: 'var(--text-main)' }}>{email}</span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span style={{ color: 'var(--text-muted)' }}>—</span>
+                      )}
                     </td>
                     <td style={{ textAlign: 'right' }}>
                       <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>

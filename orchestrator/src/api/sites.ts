@@ -5,6 +5,11 @@ export function fetchSites(): Promise<Site[]> {
   return apiFetch<Site[]>('/api/sites');
 }
 
+// Propriétaires par slug de site (admin only) : { slug: [emails] }
+export function fetchSiteOwners(): Promise<Record<string, string[]>> {
+  return apiFetch<Record<string, string[]>>('/api/sites/owners');
+}
+
 export function createSite(input: { name: string; domain?: string; stack?: string; documentRoot?: string; repositoryPath?: string }): Promise<{ success: boolean; site: Site }> {
   return apiFetch('/api/sites', { method: 'POST', body: JSON.stringify(input) });
 }

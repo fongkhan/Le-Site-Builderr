@@ -486,6 +486,27 @@ app.get('/api/sites', auth.authenticate, auth.requireAuth, async (req, res) => {
   }
 });
 
+// Propriétaires de chaque site (admin only) : { slug: [emails] }. Déclaré AVANT toute
+// route paramétrée /api/sites/:xxx pour éviter toute collision de matching Express.
+app.get('/api/sites/owners', auth.authenticate, auth.requireAdmin, async (req, res) => {
+  try {
+    if (!payloadInstance) return res.json({});
+    // depth:1 peuple la relation users.sites (on récupère le slug de chaque site)
+    const usersRes = await payloadInstance.find({ collection: 'users', depth: 1, limit: 1000, overrideAccess: true });
+    const owners = {};
+    for (const u of usersRes.docs) {
+      for (const site of (u.sites || [])) {
+        const slug = site && typeof site === 'object' ? site.slug : null;
+        if (!slug) continue;
+        (owners[slug] ||= []).push(u.email);
+      }
+    }
+    res.json(owners);
+  } catch (e) {
+    sendError(res, "Impossible de lire les propriétaires des sites.", e);
+  }
+});
+
 // Create manual site (admin uniquement)
 app.post('/api/sites', auth.authenticate, auth.requireAdmin, async (req, res) => {
   const { name, domain, stack, documentRoot, repositoryPath } = req.body;
