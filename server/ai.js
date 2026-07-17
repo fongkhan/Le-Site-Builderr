@@ -138,7 +138,7 @@ async function callGemini(contents, systemPrompt = "", jsonMode = false) {
     };
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -359,120 +359,6 @@ ${inspirationUrl ? `- Site d'inspiration de référence : "${inspirationUrl}"` :
   return cleanAndParseJSON(responseText);
 }
 
-async function runExtractDesign(provider, base64Image, ambiance) {
-  const selectedProvider = provider || process.env.DEFAULT_PROVIDER || 'openai';
-  const systemPrompt = `Vous êtes un expert en design graphique et identité de marque moderne.
-Générez une palette de couleurs, des polices et des bordures harmonieuses et premium pour le projet.
-Évitez les couleurs basiques trop saturées (comme le bleu pur, le rouge primaire). Choisissez des palettes raffinées (ex. couleurs chaudes, tons nature, sombres chics).
-Vous devez retourner uniquement un objet JSON correspondant exactement au schéma suivant :
-{
-  "theme": {
-    "colors": {
-      "primary": "#couleur_principale_hex (couleur d'accent, boutons)",
-      "secondary": "#couleur_secondaire_hex (teinte douce ou crème contrastant bien avec le fond)",
-      "background": "#couleur_fond_hex (fond général de la page, clair ou sombre)",
-      "text": "#couleur_texte_hex (couleur lisible sur le fond)"
-    },
-    "fonts": {
-      "heading": "Police de titre (choisir UNIQUEMENT parmi : 'Playfair Display', 'Outfit', 'Space Grotesk', 'Lora', 'Inter')",
-      "body": "Police de corps (choisir UNIQUEMENT parmi : 'Inter', 'DM Sans', 'Karla', 'Plus Jakarta Sans')"
-    },
-    "radius": "Arrondi général avec unité, ex: '8px', '12px', '0px', '20px'"
-  }
-}
-Renvoyez UNIQUEMENT l'objet JSON. Pas d'explications, pas de texte d'enrobage.`;
-
-  let responseText = "";
-
-  if (base64Image) {
-    const parsedImg = parseBase64Image(base64Image);
-    if (!parsedImg) {
-      throw new Error("Format de l'image Base64 invalide.");
-    }
-
-    const userPromptText = "Analysez cette image (logo ou capture d'écran d'inspiration graphique) et déduisez-en une palette de couleurs, des polices et des arrondis de composants harmonieux reprenant l'identité visuelle de l'image.";
-
-    if (selectedProvider === 'openai') {
-      responseText = await callOpenAI([
-        { role: "system", content: systemPrompt },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: userPromptText },
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:${parsedImg.mimeType};base64,${parsedImg.base64Data}`
-              }
-            }
-          ]
-        }
-      ], { type: "json_object" });
-    } else if (selectedProvider === 'anthropic') {
-      responseText = await callAnthropic([
-        {
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: parsedImg.mimeType,
-                data: parsedImg.base64Data
-              }
-            },
-            {
-              type: "text",
-              text: userPromptText
-            }
-          ]
-        }
-      ], systemPrompt);
-    } else if (selectedProvider === 'gemini') {
-      responseText = await callGemini([
-        {
-          parts: [
-            {
-              inlineData: {
-                mimeType: parsedImg.mimeType,
-                data: parsedImg.base64Data
-              }
-            },
-            {
-              text: userPromptText
-            }
-          ]
-        }
-      ], systemPrompt, true);
-    } else {
-      throw new Error(`Fournisseur d'IA inconnu : ${selectedProvider}`);
-    }
-  } else {
-    // Si pas d'image, on utilise l'ambiance choisie ou un prompt textuel pour générer dynamiquement via LLM
-    const userPromptText = `Générez une identité visuelle complète pour l'ambiance ou le thème suivant : "${ambiance || 'chaleureux'}".`;
-
-    if (selectedProvider === 'openai') {
-      responseText = await callOpenAI([
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPromptText }
-      ], { type: "json_object" });
-    } else if (selectedProvider === 'anthropic') {
-      responseText = await callAnthropic([
-        { role: "user", content: userPromptText }
-      ], systemPrompt);
-    } else if (selectedProvider === 'gemini') {
-      responseText = await callGemini([
-        { parts: [{ text: userPromptText }] }
-      ], systemPrompt, true);
-    } else {
-      throw new Error(`Fournisseur d'IA inconnu : ${selectedProvider}`);
-    }
-  }
-
-  return cleanAndParseJSON(responseText);
-}
-
 module.exports = {
-  runOnboard,
-  runExtractDesign
+  runOnboard
 };
