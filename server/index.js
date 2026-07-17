@@ -11,6 +11,7 @@ try {
 
 const { runOnboard } = require('./ai');
 const auth = require('./auth');
+const sitesStore = require('./sites-store');
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -68,36 +69,6 @@ app.use((req, res, next) => {
 let payloadInstance = null;
 auth.init(() => payloadInstance);
 
-// Retrouve (ou crée depuis sites.json) le doc payload_sites correspondant à un slug
-async function ensurePayloadSite(payload, slug) {
-  const existing = await payload.find({
-    collection: 'payload_sites',
-    where: { slug: { equals: slug } },
-    limit: 1,
-    overrideAccess: true
-  });
-  if (existing.docs.length > 0) return existing.docs[0];
-
-  let localSite = { name: slug, domain: `${slug}.o2switch.site` };
-  try {
-    const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
-    localSite = sites.find(s => s.slug === slug) || localSite;
-  } catch (e) {}
-
-  return payload.create({
-    collection: 'payload_sites',
-    data: {
-      slug,
-      name: localSite.name,
-      domain: localSite.domain,
-      stack: localSite.stack || 'Astro SSG',
-      documentRoot: localSite.documentRoot,
-      repositoryPath: localSite.repositoryPath
-    },
-    overrideAccess: true
-  });
-}
-
 async function seedUsers(payload) {
   try {
     // 1. Super Admin
@@ -123,7 +94,7 @@ async function seedUsers(payload) {
       where: { email: { equals: 'client@client.com' } }
     });
     if (clientRes.docs.length === 0) {
-      const demoSite = await ensurePayloadSite(payload, 'boulangerie-artisanale');
+      const demoSite = await sitesStore.getOrCreatePayloadDoc('boulangerie-artisanale');
       await payload.create({
         collection: 'users',
         data: {
@@ -148,6 +119,8 @@ async function initPayload() {
         config,
       });
       console.log(`✔ [Payload CMS] Initialisé sur la base de données.`);
+      // Payload devient la source de vérité : import one-way de sites.json (idempotent)
+      await sitesStore.migrateFromJson();
       await seedUsers(payloadInstance);
     } catch (err) {
       console.error("❌ [Payload CMS] Erreur lors de l'initialisation :", err.message);
@@ -165,6 +138,7 @@ if (!fs.existsSync(DATA_DIR)) {
 
 const LOGS_FILE = path.join(DATA_DIR, 'build-logs.txt');
 const SITES_FILE = path.join(DATA_DIR, 'sites.json');
+sitesStore.init({ getPayload: () => payloadInstance, sitesFile: SITES_FILE });
 
 const ASTRO_PROJECT_DIR = path.resolve(__dirname, '../client-template');
 const DIST_DIR = path.join(ASTRO_PROJECT_DIR, 'dist');
@@ -325,13 +299,13 @@ if (!isUsableJsonFile(getSiteThemeFile('boulangerie-artisanale'), (t) => Boolean
 // Global variable to track active build site slug (for dynamic pages routing fallback during Astro build)
 let activeBuildingSite = null;
 
-function getSiteFromRequest(req) {
+async function getSiteFromRequest(req) {
   if (req.query.site) return req.query.site;
   if (activeBuildingSite) return activeBuildingSite;
   // Fallback to first site in database
   try {
-    const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
-    if (sites && sites.length > 0) return sites[0].slug;
+    const sites = await sitesStore.listSites();
+    if (sites.length > 0) return sites[0].slug;
   } catch (e) {}
   return 'boulangerie-artisanale';
 }
@@ -412,9 +386,9 @@ async function readSitePages(siteSlug) {
 // --- MULTI-SITE CPANEL ENDPOINTS ---
 
 // List sites: un admin voit tout, un client uniquement ses sites
-app.get('/api/sites', auth.authenticate, auth.requireAuth, (req, res) => {
+app.get('/api/sites', auth.authenticate, auth.requireAuth, async (req, res) => {
   try {
-    let sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
+    let sites = await sitesStore.listSites();
     if (!auth.isAdmin(req.user)) {
       sites = sites.filter(s => req.userSiteSlugs.has(s.slug));
     }
@@ -430,14 +404,13 @@ app.post('/api/sites', auth.authenticate, auth.requireAdmin, async (req, res) =>
   if (!name) return res.status(400).json({ error: "Le nom du site est requis." });
 
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-  
+
   try {
-    const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
-    if (sites.some(s => s.slug === slug)) {
+    if (await sitesStore.getSiteBySlug(slug)) {
       return res.status(400).json({ error: "Un site avec ce nom/slug existe déjà." });
     }
 
-    const newSite = {
+    const newSite = await sitesStore.createSite({
       slug,
       name,
       domain: domain || `${slug}.o2switch.site`,
@@ -447,10 +420,7 @@ app.post('/api/sites', auth.authenticate, auth.requireAdmin, async (req, res) =>
       createdWithTool: true,
       status: "draft",
       sslStatus: "active"
-    };
-
-    sites.push(newSite);
-    fs.writeFileSync(SITES_FILE, JSON.stringify(sites, null, 2), 'utf-8');
+    });
 
     // Provision local files repository without Git
     provisionRepository(newSite.repositoryPath);
@@ -459,15 +429,6 @@ app.post('/api/sites', auth.authenticate, auth.requireAdmin, async (req, res) =>
     fs.writeFileSync(getSitePagesFile(slug), JSON.stringify(defaultPages, null, 2), 'utf-8');
     fs.writeFileSync(getSiteThemeFile(slug), JSON.stringify(defaultTheme, null, 2), 'utf-8');
 
-    // Synchronise le doc payload_sites (référentiel d'ownership)
-    if (payloadInstance) {
-      try {
-        await ensurePayloadSite(payloadInstance, slug);
-      } catch (dbError) {
-        console.error("Erreur de synchronisation payload_sites :", dbError.message);
-      }
-    }
-
     res.json({ success: true, site: newSite });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -475,24 +436,21 @@ app.post('/api/sites', auth.authenticate, auth.requireAdmin, async (req, res) =>
 });
 
 // Update manual site metadata (admin uniquement)
-app.put('/api/sites/:slug', auth.authenticate, auth.requireAdmin, (req, res) => {
+app.put('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (req, res) => {
   const { slug } = req.params;
   const { name, domain, documentRoot, repositoryPath, stack, sslStatus, status } = req.body;
 
   try {
-    const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
-    const site = sites.find(s => s.slug === slug);
+    const site = await sitesStore.updateSite(slug, {
+      name: name || undefined,
+      domain: domain || undefined,
+      documentRoot: documentRoot ? documentRoot.replace(/\\/g, '/') : undefined,
+      repositoryPath: repositoryPath !== undefined ? (repositoryPath ? repositoryPath.replace(/\\/g, '/') : "") : undefined,
+      stack: stack || undefined,
+      sslStatus: sslStatus || undefined,
+      status: status || undefined
+    });
     if (!site) return res.status(404).json({ error: "Site non trouvé." });
-
-    if (name) site.name = name;
-    if (domain) site.domain = domain;
-    if (documentRoot) site.documentRoot = documentRoot.replace(/\\/g, '/');
-    if (repositoryPath !== undefined) site.repositoryPath = repositoryPath ? repositoryPath.replace(/\\/g, '/') : "";
-    if (stack) site.stack = stack;
-    if (sslStatus) site.sslStatus = sslStatus;
-    if (status) site.status = status;
-
-    fs.writeFileSync(SITES_FILE, JSON.stringify(sites, null, 2), 'utf-8');
     res.json({ success: true, site });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -505,46 +463,23 @@ app.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (req,
   const deleteFiles = req.query.deleteFiles === 'true';
 
   try {
-    let sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
-    const siteIndex = sites.findIndex(s => s.slug === slug);
-    if (siteIndex === -1) {
+    const site = await sitesStore.getSiteBySlug(slug);
+    if (!site) {
       return res.status(404).json({ error: "Site non trouvé." });
     }
 
-    const site = sites[siteIndex];
-    sites.splice(siteIndex, 1);
-    fs.writeFileSync(SITES_FILE, JSON.stringify(sites, null, 2), 'utf-8');
+    // La suppression Payload nettoie aussi pages/themes rattachés et la relation users.sites
+    await sitesStore.deleteSite(slug);
 
-    // Delete site configurations
+    // Delete site configurations (fichiers JSON de fallback)
     const pagesFile = getSitePagesFile(slug);
     const themeFile = getSiteThemeFile(slug);
     if (fs.existsSync(pagesFile)) fs.unlinkSync(pagesFile);
     if (fs.existsSync(themeFile)) fs.unlinkSync(themeFile);
 
     // Delete site build directory
-    if (deleteFiles && fs.existsSync(site.documentRoot)) {
+    if (deleteFiles && site.documentRoot && fs.existsSync(site.documentRoot)) {
       fs.rmSync(site.documentRoot, { recursive: true, force: true });
-    }
-
-    // Supprime le doc payload_sites : la relation users.sites est nettoyée par Payload
-    if (payloadInstance) {
-      try {
-        const payloadSite = await payloadInstance.find({
-          collection: 'payload_sites',
-          where: { slug: { equals: slug } },
-          limit: 1,
-          overrideAccess: true
-        });
-        if (payloadSite.docs.length > 0) {
-          await payloadInstance.delete({
-            collection: 'payload_sites',
-            id: payloadSite.docs[0].id,
-            overrideAccess: true
-          });
-        }
-      } catch (dbError) {
-        console.error("Erreur de suppression du doc payload_sites :", dbError.message);
-      }
     }
 
     res.json({ success: true, message: "Site supprimé avec succès." });
@@ -554,12 +489,12 @@ app.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (req,
 });
 
 // Scan folder for unregistered sites (admin uniquement — accède au filesystem serveur)
-app.post('/api/sites/scan', auth.authenticate, auth.requireAdmin, (req, res) => {
+app.post('/api/sites/scan', auth.authenticate, auth.requireAdmin, async (req, res) => {
   const scanPath = req.body.scanPath || req.query.scanPath || PUBLIC_HTML_DIR;
-  
+
   try {
-    const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
-    const registeredRoots = sites.map(s => path.resolve(s.documentRoot).toLowerCase());
+    const sites = await sitesStore.listSites();
+    const registeredRoots = sites.filter(s => s.documentRoot).map(s => path.resolve(s.documentRoot).toLowerCase());
     const registeredRepos = sites.filter(s => s.repositoryPath).map(s => path.resolve(s.repositoryPath).toLowerCase());
 
     // Les chemins relatifs sont résolus depuis la racine du projet (pas depuis server/)
@@ -615,12 +550,11 @@ app.post('/api/sites/import', auth.authenticate, auth.requireAdmin, async (req, 
   if (!slug) return res.status(400).json({ error: "Le slug est requis pour l'import." });
 
   try {
-    const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
-    if (sites.some(s => s.slug === slug)) {
+    if (await sitesStore.getSiteBySlug(slug)) {
       return res.status(400).json({ error: "Ce site est déjà enregistré." });
     }
 
-    const newSite = {
+    const newSite = await sitesStore.createSite({
       slug,
       name: name || slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
       domain: domain || `${slug}.o2switch.site`,
@@ -630,21 +564,10 @@ app.post('/api/sites/import', auth.authenticate, auth.requireAdmin, async (req, 
       createdWithTool: false,
       status: "active",
       sslStatus: "active"
-    };
-
-    sites.push(newSite);
-    fs.writeFileSync(SITES_FILE, JSON.stringify(sites, null, 2), 'utf-8');
+    });
 
     // Provision local files repository without Git
     provisionRepository(newSite.repositoryPath);
-
-    if (payloadInstance) {
-      try {
-        await ensurePayloadSite(payloadInstance, slug);
-      } catch (dbError) {
-        console.error("Erreur de synchronisation payload_sites :", dbError.message);
-      }
-    }
 
     res.json({ success: true, site: newSite });
   } catch (e) {
@@ -653,13 +576,12 @@ app.post('/api/sites/import', auth.authenticate, auth.requireAdmin, async (req, 
 });
 
 // List files of a specific site for file manager (admin uniquement)
-app.get('/api/sites/:slug/files', auth.authenticate, auth.requireAdmin, (req, res) => {
+app.get('/api/sites/:slug/files', auth.authenticate, auth.requireAdmin, async (req, res) => {
   const { slug } = req.params;
   const pathType = req.query.type || 'documentRoot'; // 'documentRoot' or 'repository'
-  
+
   try {
-    const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
-    const site = sites.find(s => s.slug === slug);
+    const site = await sitesStore.getSiteBySlug(slug);
     if (!site) return res.status(404).json({ error: "Site non trouvé." });
 
     const rootDir = pathType === 'repository' ? site.repositoryPath : site.documentRoot;
@@ -715,16 +637,15 @@ app.get('/api/sites/:slug/files', auth.authenticate, auth.requireAdmin, (req, re
 });
 
 // View text file content of a specific site (admin uniquement)
-app.get('/api/sites/:slug/files/view', auth.authenticate, auth.requireAdmin, (req, res) => {
+app.get('/api/sites/:slug/files/view', auth.authenticate, auth.requireAdmin, async (req, res) => {
   const { slug } = req.params;
   const relativePath = req.query.path;
   const pathType = req.query.type || 'documentRoot'; // 'documentRoot' or 'repository'
-  
+
   if (!relativePath) return res.status(400).json({ error: "Le chemin du fichier est requis." });
 
   try {
-    const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
-    const site = sites.find(s => s.slug === slug);
+    const site = await sitesStore.getSiteBySlug(slug);
     if (!site) return res.status(404).json({ error: "Site non trouvé." });
 
     const rootDir = pathType === 'repository' ? site.repositoryPath : site.documentRoot;
@@ -772,7 +693,7 @@ app.post('/api/site-pages', auth.authenticate, auth.requireAuth, auth.requireSit
 
   if (payloadInstance) {
     try {
-      const siteDoc = await ensurePayloadSite(payloadInstance, siteSlug);
+      const siteDoc = await sitesStore.getOrCreatePayloadDoc(siteSlug);
 
       if (req.body.docs && Array.isArray(req.body.docs)) {
         for (const pageInput of req.body.docs) {
@@ -876,7 +797,7 @@ app.post('/api/theme', auth.authenticate, auth.requireAuth, auth.requireSiteAcce
 
   if (payloadInstance) {
     try {
-      const siteDoc = await ensurePayloadSite(payloadInstance, siteSlug);
+      const siteDoc = await sitesStore.getOrCreatePayloadDoc(siteSlug);
 
       const themeRes = await payloadInstance.find({
         collection: 'themes',
@@ -946,15 +867,14 @@ app.post('/api/onboard', auth.authenticate, auth.requireAuth, async (req, res) =
     const siteName = name || result.qualification.site_name || "Nouveau Site";
     const slug = siteName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
     
-    const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
     let finalSlug = slug;
     let suffix = 2;
-    while (sites.some(s => s.slug === finalSlug)) {
+    while (await sitesStore.getSiteBySlug(finalSlug)) {
       finalSlug = `${slug}-${suffix}`;
       suffix++;
     }
 
-    const newSite = {
+    const newSite = await sitesStore.createSite({
       slug: finalSlug,
       name: siteName,
       domain: `${finalSlug}.o2switch.site`,
@@ -965,10 +885,7 @@ app.post('/api/onboard', auth.authenticate, auth.requireAuth, async (req, res) =
       createdWithTool: true,
       status: "draft",
       sslStatus: "active"
-    };
-
-    sites.push(newSite);
-    fs.writeFileSync(SITES_FILE, JSON.stringify(sites, null, 2), 'utf-8');
+    });
 
     // Provision local files repository without Git
     provisionRepository(newSite.repositoryPath);
@@ -987,7 +904,7 @@ app.post('/api/onboard', auth.authenticate, auth.requireAuth, async (req, res) =
     // Référence le site dans Payload et le rattache au compte du client créateur
     if (payloadInstance) {
       try {
-        const siteDoc = await ensurePayloadSite(payloadInstance, finalSlug);
+        const siteDoc = await sitesStore.getOrCreatePayloadDoc(finalSlug);
         if (req.user && !req.user.devMode && !auth.isAdmin(req.user)) {
           const fullUser = await payloadInstance.findByID({
             collection: 'users',
@@ -1061,7 +978,7 @@ app.get('/api/build-status', auth.authenticate, auth.requireAuth, (req, res) => 
   });
 });
 
-app.post('/webhook/rebuild', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site), (req, res) => {
+app.post('/webhook/rebuild', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site), async (req, res) => {
   const siteSlug = req.query.site;
 
   // 1. Vérification si un build est déjà en cours (Verrou physique)
@@ -1070,8 +987,7 @@ app.post('/webhook/rebuild', auth.authenticate, auth.requireAuth, auth.requireSi
     return res.status(429).json({ message: 'Build déjà en cours. Requête mise de côté.' });
   }
 
-  const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
-  const site = sites.find(s => s.slug === siteSlug);
+  const site = await sitesStore.getSiteBySlug(siteSlug);
   if (!site) {
     return res.status(404).json({ error: "Site non trouvé dans la base cPanel." });
   }
@@ -1184,16 +1100,9 @@ app.post('/webhook/rebuild', auth.authenticate, auth.requireAuth, auth.requireSi
 });
 
 function updateSiteStatus(slug, status) {
-  try {
-    const sites = JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
-    const site = sites.find(s => s.slug === slug);
-    if (site) {
-      site.status = status;
-      fs.writeFileSync(SITES_FILE, JSON.stringify(sites, null, 2), 'utf-8');
-    }
-  } catch (e) {
-    console.error("Erreur mise à jour statut site", e);
-  }
+  sitesStore.updateSiteStatus(slug, status).catch((e) => {
+    console.error("Erreur mise à jour statut site", e.message);
+  });
 }
 
 // Canal interne pour le build Astro : authentifié par le jeton BUILD_TOKEN (jamais exposé au navigateur)
@@ -1201,7 +1110,7 @@ app.get('/internal/site-pages', async (req, res) => {
   if (req.headers['x-build-token'] !== BUILD_TOKEN) {
     return res.status(401).json({ error: "Jeton de build invalide." });
   }
-  const siteSlug = req.query.site || activeBuildingSite || getSiteFromRequest(req);
+  const siteSlug = req.query.site || activeBuildingSite || await getSiteFromRequest(req);
   try {
     res.json(await readSitePages(siteSlug));
   } catch (e) {

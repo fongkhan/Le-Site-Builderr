@@ -187,6 +187,27 @@ export default buildConfig({
           name: 'stack',
           type: 'text',
         },
+        {
+          name: 'status',
+          type: 'select',
+          options: [
+            { label: 'Brouillon', value: 'draft' },
+            { label: 'Actif (déployé)', value: 'active' },
+            { label: 'Erreur de build', value: 'error' },
+          ],
+          defaultValue: 'draft',
+          required: true,
+        },
+        {
+          name: 'sslStatus',
+          type: 'text',
+          defaultValue: 'active',
+        },
+        {
+          name: 'createdWithTool',
+          type: 'checkbox',
+          defaultValue: false,
+        },
       ],
     },
     {
