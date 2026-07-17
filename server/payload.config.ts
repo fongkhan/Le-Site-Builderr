@@ -8,7 +8,14 @@ import { Access } from 'payload'
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
 
-const dbUri = process.env.DATABASE_URI || 'postgresql://postgres:postgrespassword@127.0.0.1:5438/metabuilder_db'
+if (!process.env.DATABASE_URI) {
+  throw new Error('DATABASE_URI manquante : Payload CMS ne peut pas démarrer sans base de données.')
+}
+if (!process.env.PAYLOAD_SECRET || process.env.PAYLOAD_SECRET.length < 16) {
+  throw new Error('PAYLOAD_SECRET manquant ou trop court (16 caractères minimum) : définissez-le dans le fichier .env.')
+}
+
+const dbUri = process.env.DATABASE_URI
 
 // Access Control Helpers
 const isAdmin = ({ req: { user } }: any) => {
@@ -64,7 +71,7 @@ const canCreateTheme: Access = ({ req: { user, data } }: any) => {
 }
 
 export default buildConfig({
-  secret: process.env.PAYLOAD_SECRET || 'fallback-secret-payload-key-12345678',
+  secret: process.env.PAYLOAD_SECRET,
   editor: lexicalEditor({}),
   db: postgresAdapter({
     pool: {

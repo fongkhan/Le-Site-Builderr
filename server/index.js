@@ -9,7 +9,7 @@ try {
   }
 } catch (e) {}
 
-const { runOnboard, runExtractDesign } = require('./ai');
+const { runOnboard } = require('./ai');
 const express = require('express');
 const cors = require('cors');
 const { exec } = require('child_process');
@@ -34,7 +34,7 @@ const handle = nextApp.getRequestHandler();
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 // Debug logger middleware
 app.use((req, res, next) => {
@@ -131,8 +131,6 @@ if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-const PAGES_FILE = path.join(DATA_DIR, 'pages.json');
-const THEME_FILE = path.join(DATA_DIR, 'theme.json');
 const LOGS_FILE = path.join(DATA_DIR, 'build-logs.txt');
 const SITES_FILE = path.join(DATA_DIR, 'sites.json');
 
@@ -250,7 +248,7 @@ const defaultTheme = {
   }
 };
 
-// Seeding and migration logic for multi-site database
+// Seeding logic for multi-site database
 if (!fs.existsSync(SITES_FILE)) {
   const seededSites = [
     {
@@ -261,29 +259,28 @@ if (!fs.existsSync(SITES_FILE)) {
       repositoryPath: "",
       stack: "Astro SSG + Payload CMS",
       createdWithTool: true,
-      status: "active",
+      status: "draft",
       sslStatus: "active"
     }
   ];
   fs.writeFileSync(SITES_FILE, JSON.stringify(seededSites, null, 2), 'utf-8');
+}
 
-  // Migrate or write default pages for seeded site
-  let pagesVal = defaultPages;
-  if (fs.existsSync(PAGES_FILE)) {
-    try {
-      pagesVal = JSON.parse(fs.readFileSync(PAGES_FILE, 'utf-8'));
-    } catch (e) {}
+// Réécrit les fichiers de pages/thème du site seedé s'ils sont absents ou vides/corrompus
+function isUsableJsonFile(filePath, validate) {
+  if (!fs.existsSync(filePath)) return false;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    return validate(parsed);
+  } catch (e) {
+    return false;
   }
-  fs.writeFileSync(getSitePagesFile('boulangerie-artisanale'), JSON.stringify(pagesVal, null, 2), 'utf-8');
-
-  // Migrate or write default theme for seeded site
-  let themeVal = defaultTheme;
-  if (fs.existsSync(THEME_FILE)) {
-    try {
-      themeVal = JSON.parse(fs.readFileSync(THEME_FILE, 'utf-8'));
-    } catch (e) {}
-  }
-  fs.writeFileSync(getSiteThemeFile('boulangerie-artisanale'), JSON.stringify(themeVal, null, 2), 'utf-8');
+}
+if (!isUsableJsonFile(getSitePagesFile('boulangerie-artisanale'), (p) => Array.isArray(p.docs) && p.docs.length > 0)) {
+  fs.writeFileSync(getSitePagesFile('boulangerie-artisanale'), JSON.stringify(defaultPages, null, 2), 'utf-8');
+}
+if (!isUsableJsonFile(getSiteThemeFile('boulangerie-artisanale'), (t) => Boolean(t.theme && t.theme.colors))) {
+  fs.writeFileSync(getSiteThemeFile('boulangerie-artisanale'), JSON.stringify(defaultTheme, null, 2), 'utf-8');
 }
 
 // Global variable to track active build site slug (for dynamic pages routing fallback during Astro build)
@@ -945,19 +942,6 @@ app.post('/api/onboard', async (req, res) => {
     });
   } catch (error) {
     console.error("Erreur lors de l'onboarding IA :", error.message);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Extraction de thème depuis une image/logo
-app.post('/api/extract-design', async (req, res) => {
-  const { provider, image, ambiance } = req.body;
-
-  try {
-    const result = await runExtractDesign(provider, image, ambiance);
-    res.json(result);
-  } catch (error) {
-    console.error("Erreur lors de l'extraction de design IA :", error.message);
     res.status(500).json({ error: error.message });
   }
 });

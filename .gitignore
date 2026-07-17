@@ -7,6 +7,8 @@ server/node_modules/
 # Production builds
 orchestrator/dist/
 client-template/dist/
+client-template/.astro/
+server/.next/
 simulated_public_html/
 
 # Lockfiles
