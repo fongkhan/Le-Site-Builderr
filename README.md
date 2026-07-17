@@ -1,77 +1,115 @@
 # Meta-Builder de Sites Web Composables Intelligents (AI-Driven)
 
-Ce projet est un prototype fonctionnel d'une plateforme SaaS d'industrialisation et de génération automatique de sites web composables. L'intégralité du tunnel d'onboarding, de la génération de design prédictif, de l'édition par blocs (CMS Payload-like) et du pipeline de build sécurisé avec verrouillage physique (pour o2switch) a été implémentée.
+Plateforme d'industrialisation et de génération automatique de sites web composables : onboarding IA, design prédictif, CMS par blocs (Payload), pipeline de build avec verrou, et **sécurité par compte** (admin / client).
 
 ---
 
-## 🏗️ Architecture Technique de la Stack
+## 🏗️ Architecture Technique
 
-Le projet est conçu en trois couches principales :
-1. **L'Orchestrateur (SaaS UI) :** Application React / Vite avec une esthétique sombre premium. Elle sert de tableau de bord pour l'onboarding IA, l'édition de design et le CMS par blocs.
-2. **Le Serveur de Provisioning (Backend avec Payload CMS v3) :** Serveur Node.js / Express intégrant Next.js 15 et Payload CMS v3. Il assure la gestion des données (PostgreSQL), l'administration multi-site des pages et des thèmes, l'extraction d'ambiances par IA, et le webhook de build avec verrou.
-3. **Le Template Client (Astro) :** Projet Astro (SSG/Hybride) configuré pour injecter dynamiquement les tokens de design et charger les pages générées à partir des blocs de contenu.
+Le projet est conçu en trois couches :
+
+1. **L'Orchestrateur (SaaS UI)** — Application React 19 / Vite (port 5173), routée par URL (`react-router`), **protégée par login**. C'est le tableau de bord : liste de sites, onboarding IA, design, contenu, déploiement, et panel d'administration (admins uniquement).
+2. **Le Serveur (Backend)** — Node.js / Express + Next.js 15 + Payload CMS v3 (port 4000). Gère les données (PostgreSQL via Drizzle), l'**authentification et les rôles**, l'API sites/pages/thèmes, les appels IA et le webhook de build avec verrou.
+3. **Le Template Client (Astro)** — Projet Astro (SSG) injectant les tokens de design et les blocs de contenu au moment du build.
+
+---
+
+## 🔐 Sécurité par compte
+
+Toute l'API et l'interface sont authentifiées via **Payload CMS** (cookie httpOnly `payload-token`).
+
+| Rôle | Accès |
+|---|---|
+| **admin** | Tout : panel d'administration (création/import/scan/suppression de sites, gestionnaire de fichiers), panel Payload `/admin`, gestion des comptes utilisateurs, tous les sites. |
+| **client** | Uniquement **ses** sites (design, contenu, déploiement) et l'**onboarding** (chaque site créé est automatiquement rattaché à son compte). |
+
+Règles clés :
+- Les comptes clients sont **créés par un admin** (panel Payload → collection Users, champ `sites` pour rattacher les sites). Pas d'auto-inscription.
+- Un client ne peut ni lister les autres comptes, ni modifier ses propres `roles`/`sites` (hook anti-escalade).
+- Le panel Payload `/admin` est réservé aux admins.
+- Tous les endpoints Express vérifient le rôle et l'ownership du site (`?site=<slug>` obligatoire sur les routes scopées).
+- Le build Astro accède aux données via un canal interne authentifié par jeton (`BUILD_TOKEN`, régénéré à chaque boot).
+
+**Comptes de démonstration** (seedés au premier boot, mots de passe personnalisables via `SEED_ADMIN_PASSWORD` / `SEED_CLIENT_PASSWORD`) :
+- `admin@admin.com` / `password123` — Super Admin
+- `client@client.com` / `password123` — Client (rattaché au site « boulangerie-artisanale »)
 
 ---
 
 ## 🚀 Démarrage Rapide
 
 ### Prérequis
-* [Node.js](https://nodejs.org/) (v22 ou supérieur recommandé)
-* npm (v10 ou supérieur)
+* [Node.js](https://nodejs.org/) v22+
+* npm v10+
+* **PostgreSQL** (requis pour l'authentification et Payload CMS)
 
-### Lancement du projet
-Pour installer l'ensemble des dépendances et démarrer les serveurs simultanément :
+### Configuration
+Copiez `server/.env.example` vers `server/.env` et renseignez au minimum :
 
-1. Installez les dépendances à la racine et dans chaque sous-projet :
-   ```bash
-   # Racine
-   npm install
-   # Serveur API
-   cd server && npm install
-   # Client Orchestrateur React
-   cd ../orchestrator && npm install
-   # Template Astro Client
-   cd ../client-template && npm install
-   ```
+```bash
+DATABASE_URI=postgres://user:password@127.0.0.1:5432/metabuilder_db
+PAYLOAD_SECRET=<valeur aléatoire de 32+ caractères, ex: openssl rand -hex 32>
+# Au moins une clé IA pour l'onboarding :
+OPENAI_API_KEY=...       # ou ANTHROPIC_API_KEY / GEMINI_API_KEY
+```
 
-2. Démarrez l'application depuis la racine :
-   ```bash
-   cd ..
-   npm start
-   ```
+> **Mode sans base de données** : sans `DATABASE_URI`, le serveur démarre en mode simulation JSON mais **toutes les routes protégées répondent 503** (pas d'authentification possible). Pour du développement local uniquement, `DEV_NO_AUTH=true` désactive l'authentification (toutes les requêtes sont admin) — une bannière d'avertissement s'affiche alors dans l'interface. **À ne jamais utiliser en production.**
 
-* **Orchestrateur (SaaS UI) :** `http://localhost:5173`
-* **Serveur API & Webhook :** `http://localhost:4000`
+### Lancement
+
+```bash
+# Installer les dépendances
+npm install
+cd server && npm install
+cd ../orchestrator && npm install
+cd ../client-template && npm install
+
+# Démarrer la stack (serveur + orchestrateur) depuis la racine
+cd .. && npm start
+```
+
+* **Orchestrateur (SaaS UI)** : `http://localhost:5173` → page de connexion
+* **Serveur API & Webhook** : `http://localhost:4000`
+* **Panel Payload (admins)** : `http://localhost:5173/admin` (proxifié) ou `http://localhost:4000/admin`
+* **Prévisualisation des sites déployés** : `http://localhost:5173/preview/<slug>/index.html`
+
+En dev, le front proxifie `/api`, `/webhook`, `/preview`, `/admin` et `/_next` vers le port 4000 (cookies same-origin, aucun réglage CORS côté navigateur).
 
 ---
 
-## ⚡ Fonctionnalités Implémentées
+## 🧭 Parcours utilisateur
 
-### 1. Tunnel d'Onboarding IA & Inspiration Graphique Unifiée
-* Saisie de besoin métier en langage naturel.
-* Choix de l'inspiration visuelle directement à l'onboarding : sélection d'une ambiance prédéfinie (Chaleureux, Nature, Techno, Minimaliste), téléversement d'une image/logo (Vision IA) et spécification optionnelle d'un site web d'inspiration (ex: `apple.com`).
-* Appel IA unifié (utilisant `gemini-3.5-flash` par défaut pour contourner les quotas de requêtes) générant conjointement la stack technique qualifiée, l'ébauche de blocs, et la charte graphique initiale (couleurs, polices, arrondi) en une seule étape.
+**Client** : Connexion → « Mes sites » (ou onboarding direct s'il n'a aucun site) → Onboarding IA (description, fonctionnalités, inspiration) → le site est créé et rattaché à son compte → **Design** (tokens) → **Contenu** (blocs) → **Déploiement** (build + publication, logs en direct) → lien « Voir le site en ligne ».
 
-### 2. Personnalisation du Design & Peaufinage Manuel
-* Onglet Design 100% manuel dédié aux ajustements fins des tokens CSS (couleur primaire/secondaire, fond, texte, polices de titres/corps de texte, arrondis).
-* Rendu en direct des tokens CSS sur un aperçu interactif.
-* Enregistrement et application automatique dans le fichier de style client `theme.css`.
+**Admin** : Tout ce qui précède, plus le **Panel Admin** : statistiques, création manuelle / import / scan de sites, gestionnaire de fichiers, suppression, et liens vers le panel Payload (gestion des comptes utilisateurs).
 
-### 3. CMS flexible par Blocs (Payload Blocks ↔ Astro Router)
-* Éditeur de blocs de page (Hero, Features, ProductGrid, Gallery).
-* Rendu en temps réel appliquant les variables CSS.
+---
 
-### 4. Pipeline de Déploiement avec Verrou (Lockfile)
-* Déclenchement de la compilation statique d'Astro par webhook local.
-* Verrouillage physique via un fichier `build.lock` empêchant toute compilation simultanée (concurrence).
-* Retour HTTP 429 lors de tentatives de build concurrentes pour protéger les quotas de ressources o2switch.
-* Déploiement automatisé du bundle statique vers un dossier cible de production.
+## ⚡ Fonctionnalités
 
-### 5. Intégration de Payload CMS v3 & Système Multi-Tenant Client (Nouveau)
-* **Migration native vers Payload CMS v3** : Exploitation de l'App Router Next.js 15 et de Drizzle ORM avec PostgreSQL (`@payloadcms/db-postgres`), configuré de manière sécurisée sans exécution de prompts interactifs en mode dev (`push: false`).
-* **Système de Restriction d'Accès Client (Multi-Tenant)** : Rôles d'utilisateurs (`admin` / `client`) et filtrage dynamique. Les comptes clients sont restreints à la gestion exclusive des pages et des thèmes associés à leurs propres sites Web configurés.
-* **Provisioning instantané des sources** : Duplication locale des sources du template Astro client sans clonage Git (`fs.cpSync`).
-* **Seeding automatique** : Génération automatique des comptes `admin@admin.com` (Super Admin) et `client@client.com` (restreint au site ID `1` de la boulangerie artisanale) au boot du serveur.
+### 1. Tunnel d'Onboarding IA
+* Besoin métier en langage naturel + choix des fonctionnalités (e-commerce, blog, multi-boutique).
+* Inspiration graphique : ambiance prédéfinie, image/logo (vision IA) ou URL de référence.
+* Fournisseurs : OpenAI (`gpt-4o-mini`), Anthropic (`claude-3-5-sonnet`), Google (`gemini-2.5-flash`) — défaut : `DEFAULT_PROVIDER` (openai).
+* Génère la stack qualifiée, l'ébauche de page et la charte graphique, puis rattache le site au compte.
+
+### 2. Design & thème
+* Ajustement des tokens (couleurs, polices, arrondis) avec aperçu en direct et statut « brouillon non sauvegardé ».
+* Application automatique dans `client-template/src/styles/theme.css` au build.
+
+### 3. CMS par blocs
+* Éditeur de sections (Hero, Features, ProductGrid, Gallery, Témoignages, FAQ, Tarifs) : ajout, réordonnancement, édition, suppression.
+* Aperçu WYSIWYG en temps réel avec les tokens du thème.
+* Persistance dans Payload CMS (PostgreSQL) + fichiers JSON de fallback.
+
+### 4. Pipeline de déploiement avec verrou
+* Webhook de build authentifié, verrou physique `build.lock` (HTTP 429 sur builds concurrents).
+* Logs de build en direct dans l'interface (filtrés : un client ne voit pas les logs des builds d'autres sites).
+* Copie du bundle statique vers le `documentRoot` du site (simulation o2switch).
+
+### 5. Payload CMS v3 multi-tenant
+* Collections `users` (auth + rôles), `payload_sites`, `pages` (blocs), `themes`, avec access control par rôle et ownership.
+* Panel d'administration Payload complet pour la gestion des comptes et des données.
 
 ---
 

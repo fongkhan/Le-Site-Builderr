@@ -2,6 +2,37 @@
 
 Toutes les modifications notables apportées à ce projet sont documentées dans ce fichier.
 
+## [2.0.0] - 2026-07-17
+
+### Sécurité par compte (breaking)
+
+- **Authentification obligatoire sur toute l'API et l'interface** : login via l'auth Payload (cookie httpOnly `payload-token`), nouveau middleware `server/auth.js` (`authenticate`, `requireAuth`, `requireAdmin`, `requireSiteAccess`).
+- **Rôles** : `admin` = accès total (panel d'administration, panel Payload `/admin`, gestion des comptes) ; `client` = uniquement ses sites (design/contenu/déploiement) + onboarding. Le site créé à l'onboarding est automatiquement rattaché au compte (`users.sites`).
+- **Matrice de protection Express** : CRUD sites, scan, import et gestionnaire de fichiers réservés aux admins ; `site-pages`/`theme`/`rebuild` scopés par ownership (`?site=` obligatoire) ; `/api/sites` filtré par compte ; logs de build masqués pour les builds d'autres clients ; CORS restreint à `FRONTEND_ORIGIN`.
+- **Verrouillage Payload** : panel `/admin` réservé aux admins, collection `users` en lecture/écriture admin-ou-soi-même, hook anti-escalade (un client ne peut pas modifier `roles`/`sites`).
+- **Canal de build interne** : le build Astro consomme `/internal/site-pages` authentifié par un jeton `BUILD_TOKEN` régénéré à chaque boot (transmis via l'environnement du webhook).
+- **Secrets** : suppression des fallbacks en dur (`PAYLOAD_SECRET`, credentials DB) avec fail-fast, `.env.example` en placeholders, mots de passe seed non réécrits à chaque boot et personnalisables (`SEED_*_PASSWORD`). Mode explicite `DEV_NO_AUTH=true` (dev local uniquement, bannière d'avertissement dans l'UI).
+
+### Refonte UX de l'orchestrateur
+
+- **Routing par URL** (`react-router` v7) : `/login`, `/sites` (dashboard), `/onboarding`, `/sites/:slug/design|cms|deploy`, `/admin-panel` (admins) — deep-links partageables, gardes par rôle, redirection automatique d'un client sans site vers l'onboarding.
+- **Découpage d'`App.tsx` (2740 lignes)** en modules : `api/` (client HTTP avec gestion 401/erreurs), `auth/` (contexte + gardes), `components/` (layouts, Modal, ConfirmDialog, Toasts, EmptyState), `features/` (pages par domaine), `hooks/`, `state/`.
+- **Fin des `alert()`/`confirm()`/`prompt()`** : système de toasts, dialogues de confirmation (suppression de site), modal d'import de site avec formulaire.
+- **Parcours guidé** : stepper Design → Contenu → Déploiement par site, en-tête de site avec statut de publication, lien de prévisualisation affiché uniquement après un premier déploiement (badge « Jamais déployé » sinon), empty states explicites (aucun site, aucun provider IA configuré).
+- **Prévisualisation** : les sites déployés sont servis sous `/preview/<slug>/` (le préfixe `/sites` est désormais réservé au dashboard) ; proxy Vite same-origin pour `/api`, `/webhook`, `/preview`, `/admin`, `/_next`.
+
+### Corrections
+
+- **Routes REST Payload réparées** : le catch-all `app/api/[...payload]` est renommé `[...slug]` (Payload lit `params.slug`) — l'ancien nom cassait toutes les routes REST (login inclus) en erreur 500.
+- Le parsing JSON d'Express ne s'applique plus aux requêtes déléguées à Next/Payload (le corps de la requête de login restait consommé → 500).
+- `graphql` épinglé en `^16` et `next` en `~15.4` (plages compatibles Payload 3.86) — l'installation échouait.
+- Modèle Gemini corrigé : `gemini-3.5-flash` (inexistant) → `gemini-2.5-flash` ; libellé UI aligné.
+- Schéma Drizzle poussé automatiquement en dev (`push: false` sans migrations laissait la base vide).
+- Chemins relatifs du scan résolus depuis la racine du projet (et non `server/`).
+- Limite `express.json` portée à 10 Mo (upload d'image d'onboarding).
+- Seed cohérent : site de démonstration en statut `draft` tant qu'il n'a jamais été déployé, fichiers de pages/thème réécrits s'ils sont vides ou corrompus, rattachement du client seedé par slug (plus d'ID en dur).
+- Nettoyage : `App.css` orphelin, endpoint mort `/api/extract-design`, fichiers data legacy, assets Vite inutilisés, `server/.next/` retiré du versionnement, `lang="fr"`.
+
 ## [1.3.0] - 2026-06-30
 
 ### Ajouts
