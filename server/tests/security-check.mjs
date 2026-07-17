@@ -188,5 +188,25 @@ if (process.env.AI_DAILY_QUOTA === '0' && client.token && admin.token) {
   check('Reset : token invalide -> 4xx (pas 500)', badToken.status >= 400 && badToken.status < 500, `HTTP ${badToken.status}`);
 }
 
+// ---- Durcissement HTTP : en-têtes helmet ----
+{
+  const r = await req('/api/config');
+  check('Helmet : en-tête X-Content-Type-Options=nosniff présent', r.res.headers.get('x-content-type-options') === 'nosniff', r.res.headers.get('x-content-type-options') || 'absent');
+}
+
+// ---- Rate-limit login (EN DERNIER : consomme le budget d'échecs de l'IP) ----
+// Les connexions réussies ne comptent pas (skipSuccessfulRequests) : seules les
+// tentatives ratées ci-dessous épuisent le quota jusqu'au 429.
+{
+  let saw429 = false;
+  let attempts = 0;
+  for (let i = 0; i < 20 && !saw429; i++) {
+    attempts++;
+    const r = await req('/api/users/login', { method: 'POST', body: { email: 'admin@admin.com', password: 'mauvais-mot-de-passe' } });
+    if (r.status === 429) saw429 = true;
+  }
+  check('Rate-limit : les tentatives de connexion échouées finissent par renvoyer 429', saw429, `429 après ${attempts} essais`);
+}
+
 console.log(failures === 0 ? '\n✔ Matrice de sécurité : tous les contrôles passent.' : `\n✖ ${failures} contrôle(s) en échec.`);
 process.exit(failures === 0 ? 0 : 1);

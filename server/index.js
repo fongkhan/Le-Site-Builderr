@@ -17,6 +17,8 @@ const { generateSlug, assertSafePath } = require('./lib/paths');
 const { validateTheme } = require('./lib/theme');
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const { rateLimit } = require('express-rate-limit');
 const crypto = require('crypto');
 const { exec } = require('child_process');
 const fs = require('fs');
@@ -51,10 +53,49 @@ const nextApp = next({ dev, dir: __dirname });
 const handle = nextApp.getRequestHandler();
 
 const app = express();
+
+// Derrière un reverse-proxy (o2switch/nginx), faire confiance au proxy pour déduire
+// l'IP client réelle (utilisée par le rate-limit). Conditionné par env : en dev/CI on ne
+// fait PAS confiance (sinon X-Forwarded-For serait usurpable pour contourner la limite).
+if (process.env.TRUST_PROXY) {
+  app.set('trust proxy', Number(process.env.TRUST_PROXY) || 1);
+}
+
 app.use(cors({
   origin: (process.env.FRONTEND_ORIGIN || 'http://localhost:5173').split(',').map(o => o.trim()),
   credentials: true
 }));
+
+// En-têtes de sécurité HTTP. CSP désactivée : elle casserait l'admin Payload (Next) et
+// les assets injectés ; CORP désactivée car l'orchestrateur est servi sur une autre
+// origine en dev. Le reste (nosniff, frameguard, HSTS…) est conservé. CORS monté avant
+// pour que même les réponses 429 du rate-limit portent les en-têtes cross-origin.
+app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false }));
+
+// --- Limiteurs de débit (anti brute-force / anti-abus) ---
+// Montés AVANT le catch-all Next : sur succès ils appellent next() et laissent
+// Next/Payload traiter la requête (flux intact) ; au-delà du seuil ils renvoient 429 JSON.
+const RL_WINDOW_MS = 15 * 60 * 1000;
+const makeLimiter = (limit, message, extra = {}) => rateLimit({
+  windowMs: RL_WINDOW_MS,
+  limit,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler: (req, res) => res.status(429).json({ error: message }),
+  ...extra,
+});
+// Login : ne compte QUE les échecs (skipSuccessfulRequests) — un usage légitime ne
+// consomme jamais le budget ; seules les tentatives ratées (brute-force) comptent.
+const loginLimiter = makeLimiter(
+  Number.parseInt(process.env.RL_LOGIN_MAX ?? '', 10) || 8,
+  "Trop de tentatives de connexion échouées. Réessayez dans quelques minutes.",
+  { skipSuccessfulRequests: true }
+);
+const onboardLimiter = makeLimiter(30, "Trop de générations demandées. Réessayez dans quelques minutes.");
+const webhookLimiter = makeLimiter(60, "Trop de requêtes de build reçues. Réessayez plus tard.");
+app.use('/api/users/login', loginLimiter); // route servie par Next → le limiter next() vers elle
+app.use('/api/onboard', onboardLimiter);
+app.use('/webhook/rebuild', webhookLimiter);
 // Le parsing JSON ne s'applique QU'AUX routes Express custom : les routes déléguées à
 // Next/Payload (login, REST Payload, /admin) doivent recevoir leur flux de requête intact.
 const jsonParser = express.json({ limit: '10mb' });
