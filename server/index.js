@@ -171,8 +171,9 @@ const DIST_DIR = path.join(ASTRO_PROJECT_DIR, 'dist');
 const PUBLIC_HTML_DIR = path.resolve(__dirname, '../simulated_public_html');
 const LOCK_FILE = path.join(ASTRO_PROJECT_DIR, 'build.lock');
 
-// Serve generated websites statically under /sites/<slug>/
-app.use('/sites', express.static(PUBLIC_HTML_DIR));
+// Serve generated websites statically under /preview/<slug>/
+// (le préfixe /sites est réservé aux routes du dashboard React)
+app.use('/preview', express.static(PUBLIC_HTML_DIR));
 
 // Helper functions for dynamic multi-site path handling
 function getSitePagesFile(slug) {
@@ -555,9 +556,12 @@ app.post('/api/sites/scan', auth.authenticate, auth.requireAdmin, (req, res) => 
     const registeredRoots = sites.map(s => path.resolve(s.documentRoot).toLowerCase());
     const registeredRepos = sites.filter(s => s.repositoryPath).map(s => path.resolve(s.repositoryPath).toLowerCase());
 
-    const targetDir = path.resolve(scanPath);
+    // Les chemins relatifs sont résolus depuis la racine du projet (pas depuis server/)
+    const targetDir = path.isAbsolute(scanPath)
+      ? path.resolve(scanPath)
+      : path.resolve(path.dirname(__dirname), scanPath);
     if (!fs.existsSync(targetDir)) {
-      return res.status(400).json({ error: "Le chemin spécifié n'existe pas." });
+      return res.status(400).json({ error: `Le chemin spécifié n'existe pas : ${targetDir}` });
     }
 
     const dirs = fs.readdirSync(targetDir, { withFileTypes: true })
