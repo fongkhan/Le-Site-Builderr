@@ -196,13 +196,15 @@ if (process.env.AI_DAILY_QUOTA === '0' && client.token && admin.token) {
 
 // ---- Rate-limit login (EN DERNIER : consomme le budget d'échecs de l'IP) ----
 // Les connexions réussies ne comptent pas (skipSuccessfulRequests) : seules les
-// tentatives ratées ci-dessous épuisent le quota jusqu'au 429.
+// tentatives ratées ci-dessous épuisent le quota jusqu'au 429. On cible un email
+// INEXISTANT : le rate-limit par IP se déclenche quand même (échecs = 401), mais on
+// évite de verrouiller un compte réel (Payload lock maxLoginAttempts).
 {
   let saw429 = false;
   let attempts = 0;
   for (let i = 0; i < 20 && !saw429; i++) {
     attempts++;
-    const r = await req('/api/users/login', { method: 'POST', body: { email: 'admin@admin.com', password: 'mauvais-mot-de-passe' } });
+    const r = await req('/api/users/login', { method: 'POST', body: { email: 'rate-limit-probe@nulle-part.example', password: 'mauvais-mot-de-passe' } });
     if (r.status === 429) saw429 = true;
   }
   check('Rate-limit : les tentatives de connexion échouées finissent par renvoyer 429', saw429, `429 après ${attempts} essais`);
