@@ -4,12 +4,60 @@ interface BlockEditorProps {
   block: Block;
   onChange: (field: string, value: unknown) => void;
   onNestedChange: (nestedField: string, index: number, field: string, value: unknown) => void;
+  onArrayChange: (field: string, value: unknown[], immediate?: boolean) => void;
 }
 
+// Gabarit d'un nouvel item par type de bloc (pour le bouton « + ajouter »).
+const NEW_ITEM: Record<string, unknown> = {
+  features: { title: 'Nouveau service', description: 'Description.' },
+  faq: { question: 'Nouvelle question ?', answer: 'Réponse.' },
+  'product-grid': { name: 'Nouveau produit', price: '0.00 €', image: '' },
+  testimonials: { quote: 'Un retour client.', author: 'Prénom Nom', role: 'Client', avatar: '' },
+  pricing: { name: 'Nouvelle formule', price: '0.00 €', description: '', features: [], ctaText: 'Choisir', isPopular: false },
+};
+
 // Champs d'édition rapide d'un bloc (affichés quand le bloc est déplié)
-export function BlockEditor({ block, onChange, onNestedChange }: BlockEditorProps) {
+export function BlockEditor({ block, onChange, onNestedChange, onArrayChange }: BlockEditorProps) {
   const input = (value: string | undefined, set: (v: string) => void, placeholder = '') => (
     <input type="text" className="input-text" style={{ padding: 6, fontSize: '0.875rem' }} value={value || ''} placeholder={placeholder} onChange={(e) => set(e.target.value)} />
+  );
+
+  // Accès générique au tableau d'un champ (block est une union : on lit via cast)
+  const arr = (field: string): unknown[] => ((block as unknown as Record<string, unknown>)[field] as unknown[]) ?? [];
+
+  const addItem = (field: string) => {
+    const template = NEW_ITEM[block.blockType] ?? {};
+    onArrayChange(field, [...arr(field), structuredClone(template)], true);
+  };
+
+  const removeItem = (field: string, index: number) => {
+    onArrayChange(field, arr(field).filter((_, i) => i !== index), true);
+  };
+
+  // Petit en-tête d'item avec bouton de suppression
+  const itemHeader = (label: string, field: string, index: number) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <label className="field-label">{label}</label>
+      <button
+        type="button"
+        onClick={() => removeItem(field, index)}
+        aria-label={`Supprimer ${label}`}
+        style={{ background: 'none', border: 'none', color: 'var(--accent-rose)', cursor: 'pointer', fontSize: '0.85rem', padding: '0 4px' }}
+      >
+        ✕
+      </button>
+    </div>
+  );
+
+  const addButton = (label: string, field: string) => (
+    <button
+      type="button"
+      className="btn btn-secondary"
+      style={{ padding: '5px 10px', fontSize: '0.8rem', marginTop: 6, alignSelf: 'flex-start' }}
+      onClick={() => addItem(field)}
+    >
+      + {label}
+    </button>
   );
 
   return (
@@ -33,11 +81,12 @@ export function BlockEditor({ block, onChange, onNestedChange }: BlockEditorProp
           {input(block.title, (v) => onChange('title', v))}
           {block.items?.map((item, i) => (
             <div key={i} style={{ border: '1px solid rgba(255,255,255,0.05)', padding: 6, borderRadius: 4, marginTop: 4 }}>
-              <label className="field-label">Élément {i + 1}</label>
+              {itemHeader(`Élément ${i + 1}`, 'items', i)}
               <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} value={item.title || ''} onChange={(e) => onNestedChange('items', i, 'title', e.target.value)} />
               <textarea className="input-text" style={{ padding: 4, fontSize: '0.825rem' }} value={item.description || ''} onChange={(e) => onNestedChange('items', i, 'description', e.target.value)} />
             </div>
           ))}
+          {addButton('Ajouter un élément', 'items')}
         </>
       )}
 
@@ -47,11 +96,13 @@ export function BlockEditor({ block, onChange, onNestedChange }: BlockEditorProp
           {input(block.title, (v) => onChange('title', v))}
           {block.products?.map((prod, i) => (
             <div key={i} style={{ border: '1px solid rgba(255,255,255,0.05)', padding: 6, borderRadius: 4, marginTop: 4 }}>
-              <label className="field-label">Produit {i + 1}</label>
-              <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} value={prod.name} onChange={(e) => onNestedChange('products', i, 'name', e.target.value)} />
-              <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem' }} value={prod.price} onChange={(e) => onNestedChange('products', i, 'price', e.target.value)} />
+              {itemHeader(`Produit ${i + 1}`, 'products', i)}
+              <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Nom" value={prod.name} onChange={(e) => onNestedChange('products', i, 'name', e.target.value)} />
+              <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Prix" value={prod.price} onChange={(e) => onNestedChange('products', i, 'price', e.target.value)} />
+              <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem' }} placeholder="Image (URL)" value={prod.image || ''} onChange={(e) => onNestedChange('products', i, 'image', e.target.value)} />
             </div>
           ))}
+          {addButton('Ajouter un produit', 'products')}
         </>
       )}
 
@@ -59,7 +110,32 @@ export function BlockEditor({ block, onChange, onNestedChange }: BlockEditorProp
         <>
           <label className="field-label">Titre du bloc</label>
           {input(block.title, (v) => onChange('title', v))}
-          <span className="field-label">Images pré-chargées.</span>
+          <label className="field-label" style={{ marginTop: 4 }}>Images (URL)</label>
+          {block.images?.map((url, i) => (
+            <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}>
+              <input
+                type="text"
+                className="input-text"
+                style={{ padding: 4, fontSize: '0.825rem', flex: 1 }}
+                placeholder="https://…"
+                value={url}
+                onChange={(e) => {
+                  const next = [...(block.images ?? [])];
+                  next[i] = e.target.value;
+                  onArrayChange('images', next);
+                }}
+              />
+              <button type="button" onClick={() => removeItem('images', i)} aria-label={`Supprimer l'image ${i + 1}`} style={{ background: 'none', border: 'none', color: 'var(--accent-rose)', cursor: 'pointer', fontSize: '0.85rem' }}>✕</button>
+            </div>
+          ))}
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ padding: '5px 10px', fontSize: '0.8rem', marginTop: 2, alignSelf: 'flex-start' }}
+            onClick={() => onArrayChange('images', [...(block.images ?? []), ''], true)}
+          >
+            + Ajouter une image
+          </button>
         </>
       )}
 
@@ -69,13 +145,14 @@ export function BlockEditor({ block, onChange, onNestedChange }: BlockEditorProp
           {input(block.title, (v) => onChange('title', v))}
           {block.testimonials?.map((testi, i) => (
             <div key={i} style={{ border: '1px solid rgba(255,255,255,0.05)', padding: 6, borderRadius: 4, marginTop: 4 }}>
-              <label className="field-label">Témoignage {i + 1}</label>
+              {itemHeader(`Témoignage ${i + 1}`, 'testimonials', i)}
               <textarea className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} value={testi.quote} onChange={(e) => onNestedChange('testimonials', i, 'quote', e.target.value)} />
               <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Auteur" value={testi.author} onChange={(e) => onNestedChange('testimonials', i, 'author', e.target.value)} />
               <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Rôle" value={testi.role} onChange={(e) => onNestedChange('testimonials', i, 'role', e.target.value)} />
               <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem' }} placeholder="Avatar (URL)" value={testi.avatar} onChange={(e) => onNestedChange('testimonials', i, 'avatar', e.target.value)} />
             </div>
           ))}
+          {addButton('Ajouter un témoignage', 'testimonials')}
         </>
       )}
 
@@ -85,11 +162,12 @@ export function BlockEditor({ block, onChange, onNestedChange }: BlockEditorProp
           {input(block.title, (v) => onChange('title', v))}
           {block.items?.map((item, i) => (
             <div key={i} style={{ border: '1px solid rgba(255,255,255,0.05)', padding: 6, borderRadius: 4, marginTop: 4 }}>
-              <label className="field-label">Question {i + 1}</label>
+              {itemHeader(`Question ${i + 1}`, 'items', i)}
               <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Question" value={item.question || ''} onChange={(e) => onNestedChange('items', i, 'question', e.target.value)} />
               <textarea className="input-text" style={{ padding: 4, fontSize: '0.825rem' }} placeholder="Réponse" value={item.answer || ''} onChange={(e) => onNestedChange('items', i, 'answer', e.target.value)} />
             </div>
           ))}
+          {addButton('Ajouter une question', 'items')}
         </>
       )}
 
@@ -99,7 +177,7 @@ export function BlockEditor({ block, onChange, onNestedChange }: BlockEditorProp
           {input(block.title, (v) => onChange('title', v))}
           {block.plans?.map((plan, i) => (
             <div key={i} style={{ border: '1px solid rgba(255,255,255,0.05)', padding: 6, borderRadius: 4, marginTop: 4 }}>
-              <label className="field-label">Plan {i + 1}</label>
+              {itemHeader(`Plan ${i + 1}`, 'plans', i)}
               <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Nom du plan" value={plan.name} onChange={(e) => onNestedChange('plans', i, 'name', e.target.value)} />
               <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Prix" value={plan.price} onChange={(e) => onNestedChange('plans', i, 'price', e.target.value)} />
               <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Description" value={plan.description} onChange={(e) => onNestedChange('plans', i, 'description', e.target.value)} />
@@ -121,6 +199,7 @@ export function BlockEditor({ block, onChange, onNestedChange }: BlockEditorProp
               </div>
             </div>
           ))}
+          {addButton('Ajouter une formule', 'plans')}
         </>
       )}
     </>

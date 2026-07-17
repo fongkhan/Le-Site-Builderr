@@ -117,6 +117,14 @@ export function CmsPage() {
     });
   };
 
+  // Remplace un tableau entier d'un bloc (ajout/suppression d'item, édition de galerie).
+  // immediate=true pour les changements structurels (ajout/suppression), débouncé sinon.
+  const handleBlockArrayChange = (blockIdx: number, field: string, value: unknown[], immediate = false) => {
+    mutateLayout((layout) => {
+      (layout[blockIdx] as unknown as Record<string, unknown>)[field] = value;
+    }, immediate);
+  };
+
   const addBlock = (type: string) => {
     const newBlock = structuredClone(BLOCK_DEFAULTS[type] ?? { blockType: type });
     mutateLayout((layout) => layout.push(newBlock), true);
@@ -191,6 +199,7 @@ export function CmsPage() {
                       block={block}
                       onChange={(field, value) => handleBlockChange(idx, field, value)}
                       onNestedChange={(nestedField, index, field, value) => handleBlockNestedChange(idx, nestedField, index, field, value)}
+                      onArrayChange={(field, value, immediate) => handleBlockArrayChange(idx, field, value, immediate)}
                     />
                     <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '0.875rem', marginTop: 5 }} onClick={() => setEditingBlockIdx(null)}>
                       Fermer
