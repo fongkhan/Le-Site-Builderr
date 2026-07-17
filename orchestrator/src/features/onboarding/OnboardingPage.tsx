@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchConfig, onboard } from '../../api/sites';
+import { ApiError } from '../../api/client';
 import { useSites } from '../../state/SitesContext';
 import { useToast } from '../../components/ui/ToastContext';
 import { EmptyState } from '../../components/ui/EmptyState';
@@ -51,6 +52,8 @@ export function OnboardingPage() {
   }, []);
 
   const noProviderAvailable = config && !Object.values(config.availableProviders).some(Boolean);
+  const quota = config?.aiQuota ?? null;
+  const quotaExhausted = quota !== null && quota.remaining <= 0;
 
   const readImage = (file: File) => {
     const reader = new FileReader();
@@ -83,9 +86,15 @@ export function OnboardingPage() {
       setResult(data.qualification);
       setCreatedSlug(data.site.slug);
       await refresh();
+      fetchConfig().then(setConfig).catch(() => {});
       toast.success(`Le site « ${data.site.name} » a été créé et rattaché à votre compte !`);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Erreur lors de la génération IA.");
+      if (err instanceof ApiError && err.status === 429) {
+        toast.error(err.message);
+        fetchConfig().then(setConfig).catch(() => {});
+      } else {
+        toast.error(err instanceof Error ? err.message : "Erreur lors de la génération IA.");
+      }
     } finally {
       setLoading(false);
     }
@@ -120,6 +129,23 @@ export function OnboardingPage() {
             }}
             style={{ display: 'flex', flexDirection: 'column', gap: 20 }}
           >
+            {quota !== null && (
+              <div
+                className="badge animate-slide"
+                style={{
+                  alignSelf: 'flex-start',
+                  padding: '6px 12px',
+                  fontSize: '0.85rem',
+                  color: quotaExhausted ? 'var(--red-300)' : 'var(--indigo-200)',
+                  borderColor: quotaExhausted ? 'rgba(244,63,94,0.4)' : 'var(--accent-blue-border)',
+                }}
+              >
+                {quotaExhausted
+                  ? `⛔ Quota IA journalier atteint (${quota.used}/${quota.limit}) — réinitialisation à minuit`
+                  : `✨ ${quota.remaining} génération(s) IA restante(s) aujourd'hui (${quota.used}/${quota.limit} utilisées)`}
+              </div>
+            )}
+
             {config && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-muted)' }}>Modèle d'IA :</span>
@@ -260,8 +286,10 @@ export function OnboardingPage() {
               />
             </div>
 
-            <button className="btn btn-primary" onClick={handleSubmit} disabled={loading} style={{ width: '100%', padding: '14px 20px', fontSize: '1.05rem' }}>
-              {loading ? '🧠 Analyse & génération par l\'IA…' : '✨ Générer l\'ébauche & l\'architecture du site'}
+            <button className="btn btn-primary" onClick={handleSubmit} disabled={loading || quotaExhausted} style={{ width: '100%', padding: '14px 20px', fontSize: '1.05rem' }}>
+              {loading ? '🧠 Analyse & génération par l\'IA…' :
+               quotaExhausted ? '⛔ Quota IA journalier atteint' :
+               '✨ Générer l\'ébauche & l\'architecture du site'}
             </button>
           </div>
         )}

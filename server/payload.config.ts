@@ -113,13 +113,14 @@ export default buildConfig({
       },
       hooks: {
         beforeChange: [
-          // Empêche un client de s'auto-promouvoir ou de s'attribuer des sites :
-          // seuls les admins (ou les appels système sans user) peuvent modifier roles/sites.
+          // Empêche un client de s'auto-promouvoir, de s'attribuer des sites ou de modifier
+          // son quota IA : seuls les admins (ou les appels système sans user) le peuvent.
           ({ req, data, originalDoc, operation }) => {
             const user = req?.user as any
             if (operation === 'update' && user && !(user.roles || []).includes('admin')) {
               if (data.roles !== undefined) data.roles = originalDoc?.roles
               if (data.sites !== undefined) data.sites = originalDoc?.sites
+              if (data.aiDailyQuota !== undefined) data.aiDailyQuota = originalDoc?.aiDailyQuota
             }
             return data
           },
@@ -144,6 +145,14 @@ export default buildConfig({
           hasMany: true,
           admin: {
             description: 'Sites auxquels le client a accès. Laisser vide pour un Super Admin.'
+          }
+        },
+        {
+          name: 'aiDailyQuota',
+          type: 'number',
+          min: 0,
+          admin: {
+            description: "Quota IA journalier personnalisé pour ce compte. Vide = valeur AI_DAILY_QUOTA du serveur (défaut 10). 0 = générations bloquées."
           }
         }
       ],
