@@ -9,6 +9,7 @@ import { EmptyState } from '../../components/ui/EmptyState';
 import { EditSiteModal } from './EditSiteModal';
 import { ImportSiteModal } from './ImportSiteModal';
 import { FileManagerModal } from './FileManagerModal';
+import { CreateClientModal } from './CreateClientModal';
 import type { ScannedSite, Site } from '../../types';
 
 export function AdminPanel() {
@@ -20,6 +21,7 @@ export function AdminPanel() {
   const [importCandidate, setImportCandidate] = useState<ScannedSite | null>(null);
   const [siteToDelete, setSiteToDelete] = useState<Site | null>(null);
   const [scannedSites, setScannedSites] = useState<ScannedSite[]>([]);
+  const [creatingClient, setCreatingClient] = useState(false);
 
   return (
     <div className="animate-slide" style={{ display: 'flex', flexDirection: 'column', gap: 30 }}>
@@ -31,6 +33,9 @@ export function AdminPanel() {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button className="btn btn-primary" onClick={() => setCreatingClient(true)}>
+            👤 Créer un compte client
+          </button>
           <a href="/admin/collections/users" target="_blank" rel="noreferrer" className="btn btn-secondary" style={{ textDecoration: 'none' }}>
             👥 Gérer les utilisateurs
           </a>
@@ -71,6 +76,7 @@ export function AdminPanel() {
         />
       )}
       {siteToDelete && <DeleteSiteDialog site={siteToDelete} onClose={() => setSiteToDelete(null)} onDeleted={refresh} />}
+      {creatingClient && <CreateClientModal sites={sites} onClose={() => setCreatingClient(false)} onCreated={refresh} />}
     </div>
   );
 }

@@ -188,6 +188,29 @@ if (process.env.AI_DAILY_QUOTA === '0' && client.token && admin.token) {
   check('Reset : token invalide -> 4xx (pas 500)', badToken.status >= 400 && badToken.status < 500, `HTTP ${badToken.status}`);
 }
 
+// ---- Création de compte client (admin only) ----
+if (admin.token && client.token) {
+  // Un client ne peut pas créer d'utilisateur (Payload access.create = isAdmin)
+  const clientCreate = await req('/api/users', { method: 'POST', body: { email: 'hack@nulle-part.example', password: 'password123', roles: ['admin'] }, token: client.token });
+  check('Users : POST /api/users par un client -> 403', clientCreate.status === 403, `HTTP ${clientCreate.status}`);
+
+  // Admin crée un client (idempotent : on purge d'abord le compte de test)
+  const testEmail = 'sec-check-client@nulle-part.example';
+  const existing = await req(`/api/users?where[email][equals]=${encodeURIComponent(testEmail)}`, { token: admin.token });
+  const existingId = existing.json?.docs?.[0]?.id;
+  if (existingId) await req(`/api/users/${existingId}`, { method: 'DELETE', token: admin.token });
+
+  const adminCreate = await req('/api/users', { method: 'POST', body: { email: testEmail, password: 'password123', roles: ['client'] }, token: admin.token });
+  check('Users : POST /api/users par un admin -> crée le compte', adminCreate.status === 200 || adminCreate.status === 201, `HTTP ${adminCreate.status}`);
+
+  const newLogin = await req('/api/users/login', { method: 'POST', body: { email: testEmail, password: 'password123' } });
+  check('Users : le client créé peut se connecter', newLogin.status === 200, `HTTP ${newLogin.status}`);
+
+  // Nettoyage
+  const createdId = adminCreate.json?.doc?.id;
+  if (createdId) await req(`/api/users/${createdId}`, { method: 'DELETE', token: admin.token });
+}
+
 // ---- Durcissement HTTP : en-têtes helmet ----
 {
   const r = await req('/api/config');
