@@ -40,7 +40,7 @@ export function AdminPanel() {
         </div>
       </div>
 
-      <StatsBanner sitesCount={sites.length} buildInProgress={buildStatus.inProgress} buildingSite={buildStatus.buildingSite} />
+      <StatsBanner sitesCount={sites.length} buildInProgress={buildStatus.inProgress} buildingSite={buildStatus.buildingSite} queueLength={buildStatus.queueLength ?? 0} />
 
       <div className="grid-2col">
         <ScanPanel
@@ -75,7 +75,7 @@ export function AdminPanel() {
   );
 }
 
-function StatsBanner({ sitesCount, buildInProgress, buildingSite }: { sitesCount: number; buildInProgress: boolean; buildingSite?: string | null }) {
+function StatsBanner({ sitesCount, buildInProgress, buildingSite, queueLength }: { sitesCount: number; buildInProgress: boolean; buildingSite?: string | null; queueLength: number }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 20 }}>
       <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 8, borderLeft: '4px solid var(--accent-blue)' }}>
@@ -92,12 +92,16 @@ function StatsBanner({ sitesCount, buildInProgress, buildingSite }: { sitesCount
         {buildInProgress ? (
           <>
             <span style={{ fontSize: '1.1rem', fontWeight: 800, color: 'var(--accent-blue)', animation: 'pulse 1.5s infinite', margin: 'auto 0' }}>⚙️ Recompilation…</span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Site : {buildingSite}</span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              Site : {buildingSite}{queueLength > 0 ? ` · ${queueLength} en attente` : ''}
+            </span>
           </>
         ) : (
           <>
             <span style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-muted)', margin: 'auto 0' }}>Prêt 🔓</span>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Aucun build actif</span>
+            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+              {queueLength > 0 ? `${queueLength} build(s) en attente` : 'Aucun build actif'}
+            </span>
           </>
         )}
       </div>

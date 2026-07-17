@@ -12,6 +12,7 @@ try {
 const { runOnboard } = require('./ai');
 const auth = require('./auth');
 const sitesStore = require('./sites-store');
+const aiQuota = require('./ai-quota');
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -846,7 +847,9 @@ app.get('/api/config', auth.authenticate, auth.requireAuth, (req, res) => {
       gemini: !!process.env.GEMINI_API_KEY
     },
     defaultProvider: process.env.DEFAULT_PROVIDER || 'openai',
-    devNoAuth: auth.DEV_NO_AUTH
+    devNoAuth: auth.DEV_NO_AUTH,
+    // null = illimité (admin) ; sinon { limit, used, remaining }
+    aiQuota: aiQuota.getQuota(req.user)
   });
 });
 
@@ -860,8 +863,21 @@ app.post('/api/onboard', auth.authenticate, auth.requireAuth, async (req, res) =
     return res.status(400).json({ error: "La description est requise." });
   }
 
+  // Quota IA journalier (vérifié AVANT tout appel IA — les admins sont illimités)
+  const quota = aiQuota.getQuota(req.user);
+  if (quota && quota.remaining <= 0) {
+    return res.status(429).json({
+      error: `Quota IA journalier atteint (${quota.used}/${quota.limit}). Réinitialisation à minuit.`,
+      quota
+    });
+  }
+
   try {
     const result = await runOnboard(provider, { name, description, features, ambiance, image, inspirationUrl });
+    // L'appel IA a réussi : on décompte (jamais décompté sur échec)
+    if (quota) {
+      aiQuota.increment(req.user.id);
+    }
     
     // Generate a new slug for this site
     const siteName = name || result.qualification.site_name || "Nouveau Site";
@@ -949,10 +965,27 @@ let buildStatus = {
   buildingSite: null
 };
 
-// Vider les logs
+// File d'attente FIFO de slugs (dédupliquée). Perdue au restart : acceptable,
+// le verrou physique orphelin est nettoyé au boot ci-dessous.
+const buildQueue = [];
+
+// Vider les logs + nettoyer un verrou orphelin laissé par un crash
 fs.writeFileSync(LOGS_FILE, 'Initialisation du système de build...\n', 'utf-8');
+if (fs.existsSync(LOCK_FILE)) {
+  fs.unlinkSync(LOCK_FILE);
+  fs.appendFileSync(LOGS_FILE, 'Verrou de build orphelin détecté et nettoyé au démarrage.\n');
+}
 
 app.get('/api/build-status', auth.authenticate, auth.requireAuth, (req, res) => {
+  const queueInfo = auth.isAdmin(req.user)
+    ? { queue: [...buildQueue], queueLength: buildQueue.length }
+    : {
+        queueLength: buildQueue.length,
+        queuedSites: buildQueue
+          .map((slug, i) => ({ slug, position: i + 1 }))
+          .filter(q => req.userSiteSlugs.has(q.slug))
+      };
+
   // Un client ne voit les logs que si le build en cours/dernier concerne un de ses sites
   const canSeeLogs = auth.isAdmin(req.user) ||
     !buildStatus.buildingSite ||
@@ -966,7 +999,8 @@ app.get('/api/build-status', auth.authenticate, auth.requireAuth, (req, res) => 
       error: null,
       buildingSite: null,
       lockExists: fs.existsSync(LOCK_FILE),
-      logs: "Un déploiement d'un autre site est en cours. Veuillez patienter."
+      logs: "Un déploiement d'un autre site est en cours. Veuillez patienter.",
+      ...queueInfo
     });
   }
 
@@ -974,35 +1008,41 @@ app.get('/api/build-status', auth.authenticate, auth.requireAuth, (req, res) => 
   res.json({
     ...buildStatus,
     lockExists: fs.existsSync(LOCK_FILE),
-    logs: logs
+    logs: logs,
+    ...queueInfo
   });
 });
 
-app.post('/webhook/rebuild', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site), async (req, res) => {
-  const siteSlug = req.query.site;
+// Dépile et lance le build suivant. Appelée à CHAQUE fin de build (succès ou erreur).
+function drainQueue() {
+  if (buildQueue.length === 0 || fs.existsSync(LOCK_FILE)) return;
+  const nextSlug = buildQueue.shift();
+  fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] FILE D'ATTENTE : lancement du build suivant (${nextSlug}), ${buildQueue.length} restant(s).\n`);
+  startBuild(nextSlug).catch((e) => {
+    console.error('Erreur de lancement du build en file :', e.message);
+    drainQueue();
+  });
+}
 
-  // 1. Vérification si un build est déjà en cours (Verrou physique)
-  if (fs.existsSync(LOCK_FILE)) {
-    fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] REJET : Tentative de build concurrente détectée (HTTP 429).\n`);
-    return res.status(429).json({ message: 'Build déjà en cours. Requête mise de côté.' });
-  }
-
+// Lance un build : pose le verrou, exécute astro build, copie vers documentRoot,
+// puis libère le verrou et draine la file — quel que soit le résultat.
+async function startBuild(siteSlug) {
   const site = await sitesStore.getSiteBySlug(siteSlug);
   if (!site) {
-    return res.status(404).json({ error: "Site non trouvé dans la base cPanel." });
+    // Le site a pu être supprimé pendant son attente en file
+    fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] ANNULÉ : le site "${siteSlug}" n'existe plus.\n`);
+    drainQueue();
+    return;
   }
 
-  // 2. Poser le verrou
+  // Poser le verrou
   fs.writeFileSync(LOCK_FILE, 'locked');
   buildStatus.inProgress = true;
   buildStatus.status = "running";
   buildStatus.error = null;
   buildStatus.buildingSite = siteSlug;
 
-  fs.writeFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] DÉMARRAGE : Webhook reçu pour le site "${site.name}" (${siteSlug}). Début du build Astro...\n`, 'utf-8');
-
-  // Répondre immédiatement au client avec 202
-  res.status(202).json({ message: 'Build démarré avec succès.' });
+  fs.writeFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] DÉMARRAGE : Build du site "${site.name}" (${siteSlug})...\n`, 'utf-8');
 
   // Sync theme of the site to the CSS template before compilation
   const siteThemeFile = getSiteThemeFile(siteSlug);
@@ -1018,7 +1058,6 @@ app.post('/webhook/rebuild', auth.authenticate, auth.requireAuth, auth.requireSi
   // Set building site globally for Astro dynamic routing
   activeBuildingSite = siteSlug;
 
-  // 3. Exécuter le build et le déploiement de manière asynchrone
   const isWindows = process.platform === "win32";
 
   // Vérifier si node_modules existe dans client-template, sinon faire npm install
@@ -1040,62 +1079,76 @@ app.post('/webhook/rebuild', auth.authenticate, auth.requireAuth, auth.requireSi
   };
 
   exec(cmd, { env: buildEnv }, (error, stdout, stderr) => {
-    // Clear build site
     activeBuildingSite = null;
     buildStatus.buildingSite = null;
 
     if (error) {
       console.error(`Erreur de build : ${error.message}`);
       fs.appendFileSync(LOGS_FILE, `\n[${new Date().toLocaleTimeString()}] ERREUR DE BUILD :\n${error.message}\n${stderr}\n`);
-      
-      // Libérer le verrou
-      if (fs.existsSync(LOCK_FILE)) {
-        fs.unlinkSync(LOCK_FILE);
-      }
-      buildStatus.inProgress = false;
       buildStatus.status = "error";
       buildStatus.error = error.message;
-
       updateSiteStatus(siteSlug, 'error');
-      return;
-    }
+    } else {
+      fs.appendFileSync(LOGS_FILE, `\n[${new Date().toLocaleTimeString()}] RÉSULTAT DU BUILD ASTRO :\n${stdout}\n`);
+      fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] Astro compilé. Copie des fichiers vers ${site.documentRoot}...\n`);
 
-    fs.appendFileSync(LOGS_FILE, `\n[${new Date().toLocaleTimeString()}] RÉSULTAT DU BUILD ASTRO :\n${stdout}\n`);
-    fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] Astro compilé. Copie des fichiers vers ${site.documentRoot}...\n`);
-
-    // 4. Déploiement des fichiers statiques dans le dossier web du site
-    try {
-      const siteDestDir = site.documentRoot;
-      if (!fs.existsSync(siteDestDir)) {
+      // Déploiement des fichiers statiques dans le dossier web du site
+      try {
+        const siteDestDir = site.documentRoot;
+        // Vider le dossier de destination pour simuler rsync --delete
+        fs.rmSync(siteDestDir, { recursive: true, force: true });
         fs.mkdirSync(siteDestDir, { recursive: true });
+        fs.cpSync(DIST_DIR, siteDestDir, { recursive: true, force: true });
+
+        fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] DÉPLOIEMENT SUCCÈS : Fichiers synchronisés vers ${siteDestDir} !\n`);
+        buildStatus.status = "success";
+        buildStatus.lastCompleted = new Date().toLocaleString();
+        updateSiteStatus(siteSlug, 'active');
+      } catch (deployError) {
+        console.error(`Erreur de déploiement : ${deployError.message}`);
+        fs.appendFileSync(LOGS_FILE, `\n[${new Date().toLocaleTimeString()}] ERREUR DE DÉPLOIEMENT :\n${deployError.message}\n`);
+        buildStatus.status = "error";
+        buildStatus.error = deployError.message;
+        updateSiteStatus(siteSlug, 'error');
       }
-
-      // Vider le dossier de destination pour simuler rsync --delete
-      fs.rmSync(siteDestDir, { recursive: true, force: true });
-      fs.mkdirSync(siteDestDir, { recursive: true });
-
-      // Copier dist/ vers siteDestDir
-      fs.cpSync(DIST_DIR, siteDestDir, { recursive: true, force: true });
-
-      fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] DÉPLOIEMENT SUCCÈS : Fichiers synchronisés vers ${siteDestDir} !\n`);
-      
-      buildStatus.status = "success";
-      buildStatus.lastCompleted = new Date().toLocaleString();
-      
-      updateSiteStatus(siteSlug, 'active');
-    } catch (deployError) {
-      console.error(`Erreur de déploiement : ${deployError.message}`);
-      fs.appendFileSync(LOGS_FILE, `\n[${new Date().toLocaleTimeString()}] ERREUR DE DÉPLOIEMENT :\n${deployError.message}\n`);
-      buildStatus.status = "error";
-      buildStatus.error = deployError.message;
-      updateSiteStatus(siteSlug, 'error');
-    } finally {
-      // Dans tous les cas, libérer le verrou
-      if (fs.existsSync(LOCK_FILE)) {
-        fs.unlinkSync(LOCK_FILE);
-      }
-      buildStatus.inProgress = false;
     }
+
+    // Point de sortie unique : libérer le verrou puis enchaîner sur la file
+    if (fs.existsSync(LOCK_FILE)) {
+      fs.unlinkSync(LOCK_FILE);
+    }
+    buildStatus.inProgress = false;
+    drainQueue();
+  });
+}
+
+app.post('/webhook/rebuild', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site), async (req, res) => {
+  const siteSlug = req.query.site;
+
+  const site = await sitesStore.getSiteBySlug(siteSlug);
+  if (!site) {
+    return res.status(404).json({ error: "Site non trouvé dans la base cPanel." });
+  }
+
+  // Build déjà en cours pour CE site : rien à faire
+  if (buildStatus.buildingSite === siteSlug) {
+    return res.status(202).json({ message: 'Build déjà en cours pour ce site.', queued: false, alreadyBuilding: true });
+  }
+
+  // Un autre build occupe le verrou : mise en file (dédupliquée)
+  if (fs.existsSync(LOCK_FILE) || buildStatus.inProgress) {
+    const existingIdx = buildQueue.indexOf(siteSlug);
+    const position = existingIdx !== -1 ? existingIdx + 1 : buildQueue.push(siteSlug);
+    if (existingIdx === -1) {
+      fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] FILE D'ATTENTE : "${siteSlug}" ajouté (position ${position}).\n`);
+    }
+    return res.status(202).json({ message: `Site ajouté à la file d'attente (position ${position}).`, queued: true, position });
+  }
+
+  // Verrou libre : démarrage immédiat
+  res.status(202).json({ message: 'Build démarré avec succès.', queued: false });
+  startBuild(siteSlug).catch((e) => {
+    console.error('Erreur de lancement du build :', e.message);
   });
 });
 

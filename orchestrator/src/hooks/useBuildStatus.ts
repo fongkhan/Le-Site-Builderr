@@ -11,6 +11,9 @@ const IDLE_STATUS: BuildStatus = {
   lockExists: false,
   logs: '',
   buildingSite: null,
+  queue: [],
+  queueLength: 0,
+  queuedSites: [],
 };
 
 // Polling du statut de build toutes les 2s — uniquement quand une session est active

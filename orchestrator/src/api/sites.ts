@@ -1,5 +1,5 @@
 import { apiFetch } from './client';
-import type { Site, ScannedSite, FileEntry, PagesData, Theme, BuildStatus, AppConfig, OnboardingResult, AiProvider, FeatureFlags } from '../types';
+import type { Site, ScannedSite, FileEntry, PagesData, Theme, BuildStatus, RebuildResponse, AppConfig, OnboardingResult, AiProvider, FeatureFlags } from '../types';
 
 export function fetchSites(): Promise<Site[]> {
   return apiFetch<Site[]>('/api/sites');
@@ -53,7 +53,7 @@ export function fetchBuildStatus(): Promise<BuildStatus> {
   return apiFetch('/api/build-status');
 }
 
-export function triggerRebuild(siteSlug: string): Promise<{ message: string }> {
+export function triggerRebuild(siteSlug: string): Promise<RebuildResponse> {
   return apiFetch(`/webhook/rebuild?site=${encodeURIComponent(siteSlug)}`, { method: 'POST' });
 }
 

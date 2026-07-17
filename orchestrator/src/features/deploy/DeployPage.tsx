@@ -4,7 +4,6 @@ import { triggerRebuild } from '../../api/sites';
 import { useBuildStatus } from '../../hooks/useBuildStatus';
 import { useSites } from '../../state/SitesContext';
 import { useToast } from '../../components/ui/ToastContext';
-import { ApiError } from '../../api/client';
 import type { Site } from '../../types';
 
 export function DeployPage() {
@@ -14,15 +13,16 @@ export function DeployPage() {
   const toast = useToast();
   const [deployLoading, setDeployLoading] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
-  const prevInProgress = useRef(false);
+  const prevBuildingThisSite = useRef(false);
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [buildStatus.logs]);
 
-  // Fin de build : rafraîchit la liste (le statut du site passe à active/error) + notification
+  // Fin du build de CE site (la file peut enchaîner sur un autre : inProgress ne suffit pas)
   useEffect(() => {
-    if (prevInProgress.current && !buildStatus.inProgress) {
+    const buildingThisSite = buildStatus.buildingSite === site.slug;
+    if (prevBuildingThisSite.current && !buildingThisSite) {
       refresh();
       if (buildStatus.status === 'success') {
         toast.success('Déploiement terminé : votre site est en ligne !');
@@ -30,27 +30,33 @@ export function DeployPage() {
         toast.error('Le build a échoué. Consultez les logs pour le détail.');
       }
     }
-    prevInProgress.current = buildStatus.inProgress;
+    prevBuildingThisSite.current = buildingThisSite;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [buildStatus.inProgress, buildStatus.status]);
+  }, [buildStatus.buildingSite, buildStatus.status, site.slug]);
 
   const handleDeploy = async () => {
     setDeployLoading(true);
     try {
-      await triggerRebuild(site.slug);
-      toast.info('Build démarré : suivez la progression dans la console.');
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 429) {
-        toast.error('Un build est déjà en cours : le verrou a bloqué la requête concurrente.');
+      const result = await triggerRebuild(site.slug);
+      if (result.queued) {
+        toast.info(`Un autre build est en cours : votre site est en file d'attente (position ${result.position}).`);
+      } else if (result.alreadyBuilding) {
+        toast.info('Un build est déjà en cours pour ce site.');
       } else {
-        toast.error(err instanceof Error ? err.message : 'Impossible de contacter le webhook de build.');
+        toast.info('Build démarré : suivez la progression dans la console.');
       }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Impossible de contacter le webhook de build.');
     } finally {
       setDeployLoading(false);
     }
   };
 
   const deployed = site.status === 'active';
+  const buildingThisSite = buildStatus.buildingSite === site.slug;
+  const myQueuePosition =
+    buildStatus.queuedSites?.find((q) => q.slug === site.slug)?.position ??
+    (buildStatus.queue?.includes(site.slug) ? buildStatus.queue.indexOf(site.slug) + 1 : null);
 
   return (
     <div className="animate-slide grid-2col">
@@ -95,11 +101,19 @@ export function DeployPage() {
         <button
           className="btn btn-primary"
           onClick={handleDeploy}
-          disabled={buildStatus.inProgress || deployLoading}
+          disabled={buildingThisSite || myQueuePosition !== null || deployLoading}
           style={{ width: '100%', padding: '14px 20px', fontSize: '1rem' }}
         >
-          {buildStatus.inProgress ? '⚙️ Compilation en cours…' : '🚀 Déployer le site'}
+          {buildingThisSite ? '⚙️ Compilation en cours…' :
+           myQueuePosition !== null ? `⏳ En file d'attente (position ${myQueuePosition})` :
+           '🚀 Déployer le site'}
         </button>
+
+        {!buildingThisSite && myQueuePosition === null && buildStatus.inProgress && (
+          <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0 }}>
+            Un build d'un autre site est en cours : votre déploiement sera mis en file d'attente.
+          </p>
+        )}
 
         {deployed && (
           <a
