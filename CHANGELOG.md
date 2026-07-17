@@ -2,6 +2,19 @@
 
 Toutes les modifications notables apportées à ce projet sont documentées dans ce fichier.
 
+## [2.1.0] - 2026-07-17
+
+### Ajouts
+
+- **Persistance unifiée** : Payload CMS devient la source de vérité de tous les sites via la couche `server/sites-store.js`. La collection `payload_sites` est enrichie (`status`, `sslStatus`, `createdWithTool`) et `sites.json` n'est plus qu'un fallback en mode sans base de données, importé automatiquement au boot (migration idempotente).
+- **File d'attente de builds** : un déploiement demandé pendant un build en cours est mis en file (au lieu d'un rejet 429) et lancé automatiquement à la fin, avec position visible dans l'interface. Verrou `build.lock` orphelin nettoyé au démarrage.
+- **Quotas IA par compte** : limite journalière de générations IA (`AI_DAILY_QUOTA`, défaut 10, surchargeable par compte via `users.aiDailyQuota` dans le panel Payload) ; admins illimités. Solde restant affiché à l'onboarding, 429 explicite quand épuisé.
+- **Réinitialisation de mot de passe par email** : pages `/forgot-password` et `/reset-password`, adaptateur nodemailer conditionnel (`SMTP_*`) ; sans SMTP, le lien est écrit dans la console (mode dev). Réponses anti-énumération.
+
+### Vérification
+
+- Suite `server/tests/security-check.mjs` étendue (~12 contrôles) : preuve que Payload porte le statut des sites, exposition de la file de build (admin vs client), quota IA (429 client / illimité admin / anti-escalade `aiDailyQuota`), réinitialisation (anti-énumération, token invalide en 4xx). Le job CI `security` exporte `AI_DAILY_QUOTA=0`.
+
 ## [2.0.0] - 2026-07-17
 
 ### Sécurité par compte (breaking)

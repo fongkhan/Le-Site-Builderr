@@ -53,7 +53,20 @@ PAYLOAD_SECRET=<valeur aléatoire de 32+ caractères, ex: openssl rand -hex 32>
 OPENAI_API_KEY=...       # ou ANTHROPIC_API_KEY / GEMINI_API_KEY
 ```
 
+Options facultatives dans `server/.env` :
+
+```bash
+AI_DAILY_QUOTA=10          # générations IA/jour par client (admins illimités ; 0 = bloqué)
+SMTP_HOST=                 # envoi des emails de réinitialisation ; vide = email loggé en console (dev)
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASS=
+EMAIL_FROM=noreply@localhost
+```
+
 > **Mode sans base de données** : sans `DATABASE_URI`, le serveur démarre en mode simulation JSON mais **toutes les routes protégées répondent 503** (pas d'authentification possible). Pour du développement local uniquement, `DEV_NO_AUTH=true` désactive l'authentification (toutes les requêtes sont admin) — une bannière d'avertissement s'affiche alors dans l'interface. **À ne jamais utiliser en production.**
+>
+> **Source de vérité** : quand la base est disponible, **Payload CMS est la source de vérité** de tous les sites (le fichier `sites.json` ne sert plus que de fallback en mode sans DB, et est importé automatiquement au premier démarrage).
 
 ### Lancement
 
@@ -102,14 +115,19 @@ En dev, le front proxifie `/api`, `/webhook`, `/preview`, `/admin` et `/_next` v
 * Aperçu WYSIWYG en temps réel avec les tokens du thème.
 * Persistance dans Payload CMS (PostgreSQL) + fichiers JSON de fallback.
 
-### 4. Pipeline de déploiement avec verrou
-* Webhook de build authentifié, verrou physique `build.lock` (HTTP 429 sur builds concurrents).
+### 4. Pipeline de déploiement avec file d'attente
+* Webhook de build authentifié, verrou physique `build.lock` (nettoyé au boot si orphelin).
+* **File d'attente** : un déploiement demandé pendant un build en cours est mis en file et lancé automatiquement à la fin du build courant (plus de rejet). Position visible dans l'interface.
 * Logs de build en direct dans l'interface (filtrés : un client ne voit pas les logs des builds d'autres sites).
 * Copie du bundle statique vers le `documentRoot` du site (simulation o2switch).
 
 ### 5. Payload CMS v3 multi-tenant
-* Collections `users` (auth + rôles), `payload_sites`, `pages` (blocs), `themes`, avec access control par rôle et ownership.
+* Collections `users` (auth + rôles + quota IA), `payload_sites` (source de vérité), `pages` (blocs), `themes`, avec access control par rôle et ownership.
 * Panel d'administration Payload complet pour la gestion des comptes et des données.
+
+### 6. Quotas IA & réinitialisation de mot de passe
+* **Quota IA journalier** par compte client (`AI_DAILY_QUOTA`, surchargeable par compte dans le panel Payload) ; les admins sont illimités. Le solde restant est affiché à l'onboarding.
+* **Mot de passe oublié** : lien « Mot de passe oublié ? » → email de réinitialisation (SMTP ou, sans SMTP, lien loggé en console en mode dev) → page de nouveau mot de passe.
 
 ---
 

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { Spinner } from '../../components/ui/Spinner';
 
@@ -95,6 +95,10 @@ export function LoginPage() {
           <button type="submit" className="btn btn-primary" disabled={submitting} style={{ padding: '13px 20px', fontSize: '1rem' }}>
             {submitting ? 'Connexion…' : 'Se connecter'}
           </button>
+
+          <Link to="/forgot-password" style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center' }}>
+            Mot de passe oublié ?
+          </Link>
         </form>
 
         <p style={{ color: 'var(--text-muted)', fontSize: '0.8rem', textAlign: 'center' }}>

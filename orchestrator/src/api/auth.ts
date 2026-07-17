@@ -28,3 +28,18 @@ export async function me(): Promise<User | null> {
     return null;
   }
 }
+
+// Payload répond 200 que l'email existe ou non (anti-énumération native)
+export function forgotPassword(email: string): Promise<unknown> {
+  return apiFetch('/api/users/forgot-password', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+}
+
+export function resetPassword(token: string, password: string): Promise<unknown> {
+  return apiFetch('/api/users/reset-password', {
+    method: 'POST',
+    body: JSON.stringify({ token, password }),
+  });
+}

@@ -1,6 +1,7 @@
 import { buildConfig } from 'payload'
 import { postgresAdapter } from '@payloadcms/db-postgres'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
+import { nodemailerAdapter } from '@payloadcms/email-nodemailer'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { Access } from 'payload'
@@ -85,10 +86,30 @@ const frontendOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:5173')
   .split(',')
   .map((o) => o.trim())
 
+// Lien de réinitialisation pointant vers le front (première origine configurée)
+const resetPasswordUrl = (token: string) => `${frontendOrigins[0]}/reset-password?token=${token}`
+
 export default buildConfig({
   secret: process.env.PAYLOAD_SECRET,
   cors: frontendOrigins,
   csrf: frontendOrigins,
+  // Sans SMTP_HOST, Payload écrit les emails dans la console (mode développement)
+  ...(process.env.SMTP_HOST
+    ? {
+        email: nodemailerAdapter({
+          defaultFromAddress: process.env.EMAIL_FROM || 'noreply@localhost',
+          defaultFromName: 'MetaSite Builder',
+          transportOptions: {
+            host: process.env.SMTP_HOST,
+            port: Number(process.env.SMTP_PORT || 587),
+            secure: Number(process.env.SMTP_PORT || 587) === 465,
+            auth: process.env.SMTP_USER
+              ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+              : undefined,
+          },
+        }),
+      }
+    : {}),
   editor: lexicalEditor({}),
   db: postgresAdapter({
     pool: {
@@ -99,7 +120,31 @@ export default buildConfig({
   collections: [
     {
       slug: 'users',
-      auth: true,
+      auth: {
+        forgotPassword: {
+          generateEmailSubject: () => 'Réinitialisation de votre mot de passe — MetaSite Builder',
+          generateEmailHTML: (args) => {
+            const url = resetPasswordUrl(args?.token || '')
+            if (!process.env.SMTP_HOST) {
+              // Mode dev sans SMTP : Payload ne logue que le sujet — on affiche le lien ici
+              console.log(`🔑 [Dev] Lien de réinitialisation pour ${(args?.user as any)?.email} : ${url}`)
+            }
+            return `
+              <div style="font-family: sans-serif; max-width: 480px; margin: 0 auto;">
+                <h2>Réinitialisation de votre mot de passe</h2>
+                <p>Une demande de réinitialisation a été faite pour votre compte MetaSite Builder.</p>
+                <p>
+                  <a href="${url}" style="display:inline-block;background:#6366f1;color:#ffffff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;">
+                    Choisir un nouveau mot de passe
+                  </a>
+                </p>
+                <p style="color:#6b7280;font-size:13px;">Ce lien expire dans 1 heure. Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.</p>
+                <p style="color:#6b7280;font-size:13px;">Lien direct : ${url}</p>
+              </div>
+            `
+          },
+        },
+      },
       admin: {
         useAsTitle: 'email',
       },

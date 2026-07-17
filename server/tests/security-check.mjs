@@ -106,5 +106,69 @@ if (admin.token) {
   check('Admin : liste tous les comptes', emails.includes('admin@admin.com') && emails.includes('client@client.com'), JSON.stringify(emails));
 }
 
+// ---- Persistance : Payload est la source de vérité des sites ----
+if (admin.token) {
+  const put = await req('/api/sites/boulangerie-artisanale', { method: 'PUT', body: { status: 'active' }, token: admin.token });
+  check('Sites : PUT status=active -> 200', put.status === 200 && put.json?.site?.status === 'active');
+  check('Sites : réponse normalisée (pas de clé id)', put.json?.site && !('id' in put.json.site), JSON.stringify(Object.keys(put.json?.site ?? {})));
+
+  const list = await req('/api/sites', { token: admin.token });
+  const listed = (list.json ?? []).find((s) => s.slug === 'boulangerie-artisanale');
+  check('Sites : GET /api/sites reflète le nouveau statut', listed?.status === 'active');
+
+  // Preuve en base : la collection Payload elle-même porte la valeur
+  const payloadDoc = await req('/api/payload_sites?where[slug][equals]=boulangerie-artisanale', { token: admin.token });
+  check('Sites : payload_sites (REST Payload) porte status=active', payloadDoc.json?.docs?.[0]?.status === 'active');
+
+  // Remise en état pour l'idempotence des runs
+  await req('/api/sites/boulangerie-artisanale', { method: 'PUT', body: { status: 'draft' }, token: admin.token });
+}
+
+// ---- File d'attente de builds : exposition du statut ----
+if (admin.token && client.token) {
+  const adminStatus = await req('/api/build-status', { token: admin.token });
+  check('Queue : build-status admin expose queue[] et queueLength', Array.isArray(adminStatus.json?.queue) && typeof adminStatus.json?.queueLength === 'number');
+
+  const clientStatus = await req('/api/build-status', { token: client.token });
+  check('Queue : build-status client expose queueLength + queuedSites (sans queue complète)',
+    typeof clientStatus.json?.queueLength === 'number' && Array.isArray(clientStatus.json?.queuedSites) && !('queue' in (clientStatus.json ?? {})));
+}
+
+// ---- Quota IA (activé quand AI_DAILY_QUOTA=0, comme dans le job CI) ----
+if (process.env.AI_DAILY_QUOTA === '0' && client.token && admin.token) {
+  const cfg = await req('/api/config', { token: client.token });
+  check('Quota : /api/config client -> aiQuota {limit:0, remaining:0}', cfg.json?.aiQuota?.limit === 0 && cfg.json?.aiQuota?.remaining === 0, JSON.stringify(cfg.json?.aiQuota));
+
+  const cfgAdmin = await req('/api/config', { token: admin.token });
+  check('Quota : /api/config admin -> aiQuota null (illimité)', cfgAdmin.json?.aiQuota === null);
+
+  // Le 429 doit tomber AVANT tout appel IA (aucune clé API requise pour ce test)
+  const onboardClient = await req('/api/onboard', { method: 'POST', body: { description: 'test quota' }, token: client.token });
+  check('Quota : onboard client -> 429 (quota épuisé)', onboardClient.status === 429);
+
+  const onboardAdmin = await req('/api/onboard', { method: 'POST', body: { description: 'test quota' }, token: admin.token });
+  check('Quota : onboard admin -> pas de 429 (illimité)', onboardAdmin.status !== 429, `HTTP ${onboardAdmin.status}`);
+
+  // Un client ne peut pas modifier son propre quota
+  const me = await req('/api/users/me', { token: client.token });
+  const myId = me.json?.user?.id;
+  if (myId) {
+    await req(`/api/users/${myId}`, { method: 'PATCH', body: { aiDailyQuota: 9999 }, token: client.token });
+    const after = await req('/api/users/me', { token: client.token });
+    check('Quota : tentative aiDailyQuota=9999 par le client neutralisée', after.json?.user?.aiDailyQuota == null, JSON.stringify(after.json?.user?.aiDailyQuota));
+  }
+}
+
+// ---- Réinitialisation de mot de passe ----
+{
+  const known = await req('/api/users/forgot-password', { method: 'POST', body: { email: 'client@client.com' } });
+  const unknown = await req('/api/users/forgot-password', { method: 'POST', body: { email: 'inconnu@nulle-part.example' } });
+  check('Reset : forgot-password email connu -> 200', known.status === 200, `HTTP ${known.status}`);
+  check('Reset : email inconnu -> même statut (anti-énumération)', unknown.status === known.status, `HTTP ${unknown.status}`);
+
+  const badToken = await req('/api/users/reset-password', { method: 'POST', body: { token: 'jeton-invalide', password: 'nouveau-mdp-123' } });
+  check('Reset : token invalide -> 4xx (pas 500)', badToken.status >= 400 && badToken.status < 500, `HTTP ${badToken.status}`);
+}
+
 console.log(failures === 0 ? '\n✔ Matrice de sécurité : tous les contrôles passent.' : `\n✖ ${failures} contrôle(s) en échec.`);
 process.exit(failures === 0 ? 0 : 1);

@@ -10,6 +10,8 @@ import { ToastProvider } from './components/ui/ToastContext'
 import { AppLayout } from './components/layout/AppLayout'
 import { SiteLayout } from './components/layout/SiteLayout'
 import { LoginPage } from './features/auth/LoginPage'
+import { ForgotPasswordPage } from './features/auth/ForgotPasswordPage'
+import { ResetPasswordPage } from './features/auth/ResetPasswordPage'
 import { SitesListPage } from './features/sites/SitesListPage'
 import { OnboardingPage } from './features/onboarding/OnboardingPage'
 import { DesignPage } from './features/design/DesignPage'
@@ -20,6 +22,8 @@ import { NotFoundPage } from './features/NotFoundPage'
 
 const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
+  { path: '/forgot-password', element: <ForgotPasswordPage /> },
+  { path: '/reset-password', element: <ResetPasswordPage /> },
   {
     element: <RequireAuth />,
     children: [
