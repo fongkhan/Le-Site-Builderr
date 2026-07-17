@@ -21,13 +21,25 @@ const { exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-// --- GESTION DES ERREURS DE CONNEXION BASE DE DONNÉES (ÉVITE LE CRASH) ---
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('⚠️ [BDD] Rejet de promesse intercepté (PostgreSQL est peut-être hors-ligne) :', reason.message || reason);
+// --- GESTION DES ERREURS AU NIVEAU PROCESSUS ---
+// Les erreurs de connexion BDD sont catchées localement (initPayload, requêtes) et ne
+// remontent pas ici. Un rejet non-géré est journalisé sans tuer le process (souvent une
+// promesse orpheline sans impact sur les requêtes en cours).
+process.on('unhandledRejection', (reason) => {
+  console.error('⚠️ [Process] Rejet de promesse non-géré :', (reason && reason.stack) || (reason && reason.message) || reason);
 });
 
+// Une exception non-capturée laisse le process dans un état indéterminé. En PRODUCTION
+// (build Next figé) on journalise puis on sort (le superviseur — PM2/systemd/o2switch —
+// relance un process propre) : fini l'ancien « log & continue » qui masquait des bugs.
+// En DEV, on tolère : Next recompile à chaud et peut lever des erreurs webpack
+// transitoires pendant le warmup qui ne doivent pas tuer le serveur.
 process.on('uncaughtException', (err) => {
-  console.error('⚠️ [BDD] Exception interceptée (PostgreSQL est peut-être hors-ligne) :', err.message || err);
+  if (process.env.NODE_ENV === 'production') {
+    console.error('💥 [Process] Exception non-capturée — arrêt du process :', (err && err.stack) || err);
+    process.exit(1);
+  }
+  console.error('⚠️ [Process] Exception non-capturée (tolérée en dev) :', (err && err.stack) || err);
 });
 
 const next = require('next');
