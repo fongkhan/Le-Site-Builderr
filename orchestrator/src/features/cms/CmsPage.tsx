@@ -4,6 +4,7 @@ import { fetchPages, fetchTheme, savePages } from '../../api/sites';
 import { useToast } from '../../components/ui/ToastContext';
 import { Spinner } from '../../components/ui/Spinner';
 import { EmptyState } from '../../components/ui/EmptyState';
+import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { UnsavedChangesPrompt } from '../../components/ui/UnsavedChangesPrompt';
 import { BlockEditor } from './BlockEditor';
 import { PagePreview } from './PagePreview';
@@ -24,7 +25,8 @@ export function CmsPage() {
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [editingBlockIdx, setEditingBlockIdx] = useState<number | null>(null);
-  const selectedPageIdx = 0;
+  const [selectedPageIdx, setSelectedPageIdx] = useState(0);
+  const [blockToRemove, setBlockToRemove] = useState<number | null>(null);
 
   // Autosave débouncé : le timer diffère la sauvegarde ; les refs évitent les tirs concurrents
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -34,6 +36,7 @@ export function CmsPage() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setSelectedPageIdx(0); // repartir sur la première page au changement de site
     Promise.all([fetchPages(site.slug), fetchTheme(site.slug)])
       .then(([pages, themeRes]) => {
         if (cancelled) return;
@@ -131,9 +134,13 @@ export function CmsPage() {
     toast.success(`Bloc « ${BLOCK_LABELS[type] ?? type} » ajouté.`);
   };
 
-  const removeBlock = (blockIdx: number) => {
-    mutateLayout((layout) => layout.splice(blockIdx, 1), true);
-    if (editingBlockIdx === blockIdx) setEditingBlockIdx(null);
+  // Suppression confirmée via ConfirmDialog (évite la perte accidentelle d'une section)
+  const confirmRemoveBlock = () => {
+    if (blockToRemove === null) return;
+    const idx = blockToRemove;
+    mutateLayout((layout) => layout.splice(idx, 1), true);
+    if (editingBlockIdx === idx) setEditingBlockIdx(null);
+    setBlockToRemove(null);
   };
 
   const moveBlock = (index: number, direction: 'up' | 'down') => {
@@ -155,6 +162,17 @@ export function CmsPage() {
   return (
     <div className="animate-slide cms-grid">
       <UnsavedChangesPrompt when={dirty || saving} />
+      {blockToRemove !== null && (
+        <ConfirmDialog
+          title="Supprimer cette section ?"
+          message={`La section « ${activePage?.layout[blockToRemove]?.blockType ?? ''} » sera retirée de la page. Cette action est immédiate.`}
+          confirmLabel="Supprimer"
+          cancelLabel="Annuler"
+          danger
+          onConfirm={confirmRemoveBlock}
+          onCancel={() => setBlockToRemove(null)}
+        />
+      )}
       <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 20, maxHeight: 'calc(100vh - 240px)', overflowY: 'auto' }}>
         <h2 style={{ fontSize: '1.4rem' }}>
           🗃️ Sections de la page
@@ -169,6 +187,22 @@ export function CmsPage() {
         <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
           Modifiez l'ordre et le contenu des sections. Vos changements sont enregistrés automatiquement.
         </p>
+
+        {pagesData.docs.length > 1 && (
+          <div>
+            <label className="field-label" htmlFor="page-select">Page à éditer</label>
+            <select
+              id="page-select"
+              className="select-dark"
+              value={selectedPageIdx}
+              onChange={(e) => { setSelectedPageIdx(Number(e.target.value)); setEditingBlockIdx(null); }}
+            >
+              {pagesData.docs.map((p, i) => (
+                <option key={p.slug || i} value={i}>{p.title || p.slug || `Page ${i + 1}`}</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {activePage ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -189,7 +223,7 @@ export function CmsPage() {
                   <div style={{ display: 'flex', gap: 4 }}>
                     <button onClick={() => moveBlock(idx, 'up')} disabled={idx === 0} style={{ padding: 4, background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }} aria-label="Monter">▲</button>
                     <button onClick={() => moveBlock(idx, 'down')} disabled={idx === activePage.layout.length - 1} style={{ padding: 4, background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }} aria-label="Descendre">▼</button>
-                    <button onClick={() => removeBlock(idx)} style={{ padding: 4, background: 'none', border: 'none', color: 'var(--accent-rose)', cursor: 'pointer' }} aria-label="Supprimer">✕</button>
+                    <button onClick={() => setBlockToRemove(idx)} style={{ padding: 4, background: 'none', border: 'none', color: 'var(--accent-rose)', cursor: 'pointer' }} aria-label="Supprimer">✕</button>
                   </div>
                 </div>
 
