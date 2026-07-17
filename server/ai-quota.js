@@ -24,35 +24,75 @@ function writeUsage(usage) {
   fs.writeFileSync(USAGE_FILE, JSON.stringify(usage, null, 2), 'utf-8');
 }
 
-function usedToday(userId) {
-  const entry = readUsage()[String(userId)];
+function usedToday(usage, userId) {
+  const entry = usage[String(userId)];
   if (!entry || entry.date !== today()) return 0;
   return entry.count;
 }
 
-// null = illimité (admin / mode dev). Sinon { limit, used, remaining }.
-function getQuota(user) {
-  if (!user || auth.isAdmin(user) || user.devMode) return null;
-
-  // `??` et non `||` : une limite de 0 est une valeur légitime (compte suspendu)
+// Pur et testable : limite effective d'un utilisateur. null = illimité (admin / dev).
+// `??` (et non `||`) : une limite de 0 est légitime (compte suspendu).
+function computeLimit(user, envValue, isAdmin = auth.isAdmin) {
+  if (!user || isAdmin(user) || user.devMode) return null;
   const personal = Number.isFinite(user.aiDailyQuota) ? user.aiDailyQuota : null;
-  const envDefault = Number.parseInt(process.env.AI_DAILY_QUOTA ?? '', 10);
-  const limit = personal ?? (Number.isFinite(envDefault) ? envDefault : 10);
+  const envDefault = Number.parseInt(envValue ?? '', 10);
+  return personal ?? (Number.isFinite(envDefault) ? envDefault : 10);
+}
 
-  const used = usedToday(user.id);
+// Lecture seule (affichage). null = illimité. Sinon { limit, used, remaining }.
+function getQuota(user) {
+  const limit = computeLimit(user, process.env.AI_DAILY_QUOTA);
+  if (limit === null) return null;
+  const used = usedToday(readUsage(), user.id);
   return { limit, used, remaining: Math.max(0, limit - used) };
 }
 
-function increment(userId) {
-  const usage = readUsage();
-  const key = String(userId);
-  const entry = usage[key];
-  if (entry && entry.date === today()) {
-    entry.count += 1;
-  } else {
-    usage[key] = { date: today(), count: 1 };
-  }
-  writeUsage(usage);
+// --- Section critique sérialisée ---
+// Node est mono-thread mais les sections check→write franchissent des `await` :
+// deux requêtes concurrentes pouvaient lire le même compteur, passer la vérif, puis
+// s'incrémenter en s'écrasant (read-modify-write perdu). On sérialise chaque accès
+// via une chaîne de promesses : un seul reserve/release s'exécute à la fois.
+let chain = Promise.resolve();
+function serialize(fn) {
+  const run = chain.then(fn, fn); // s'exécute même si la précédente a rejeté
+  chain = run.then(() => {}, () => {}); // ne jamais casser la chaîne
+  return run;
 }
 
-module.exports = { getQuota, increment };
+// Réserve un créneau AVANT l'appel IA (ferme la fenêtre TOCTOU check→appel→incrément) :
+// incrémente le compteur si la limite le permet, atomiquement.
+//  - illimité (admin/dev) → { ok: true, quota: null } sans aucune écriture
+//  - quota atteint        → { ok: false, quota: { limit, used, remaining: 0 } }
+//  - réservé              → { ok: true, quota: { limit, used, remaining } }
+function reserveSlot(user) {
+  const limit = computeLimit(user, process.env.AI_DAILY_QUOTA);
+  if (limit === null) return Promise.resolve({ ok: true, quota: null });
+  return serialize(() => {
+    const usage = readUsage();
+    const used = usedToday(usage, user.id);
+    if (used >= limit) {
+      return { ok: false, quota: { limit, used, remaining: 0 } };
+    }
+    const key = String(user.id);
+    const entry = usage[key];
+    if (entry && entry.date === today()) entry.count += 1;
+    else usage[key] = { date: today(), count: 1 };
+    writeUsage(usage);
+    return { ok: true, quota: { limit, used: used + 1, remaining: Math.max(0, limit - used - 1) } };
+  });
+}
+
+// Libère un créneau réservé quand l'appel IA échoue : « jamais décompté sur échec ».
+function releaseSlot(userId) {
+  return serialize(() => {
+    const usage = readUsage();
+    const key = String(userId);
+    const entry = usage[key];
+    if (entry && entry.date === today() && entry.count > 0) {
+      entry.count -= 1;
+      writeUsage(usage);
+    }
+  });
+}
+
+module.exports = { getQuota, reserveSlot, releaseSlot, computeLimit };

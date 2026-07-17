@@ -928,22 +928,29 @@ app.post('/api/onboard', auth.authenticate, auth.requireAuth, async (req, res) =
     return res.status(400).json({ error: "La description est requise." });
   }
 
-  // Quota IA journalier (vérifié AVANT tout appel IA — les admins sont illimités)
-  const quota = aiQuota.getQuota(req.user);
-  if (quota && quota.remaining <= 0) {
+  // Quota IA : on RÉSERVE un créneau AVANT l'appel (incrément atomique sérialisé) pour
+  // fermer la fenêtre TOCTOU où deux requêtes concurrentes passaient toutes deux la vérif.
+  // Les admins/dev sont illimités (reservation.ok=true, quota=null, aucune écriture).
+  const reservation = await aiQuota.reserveSlot(req.user);
+  if (!reservation.ok) {
     return res.status(429).json({
-      error: `Quota IA journalier atteint (${quota.used}/${quota.limit}). Réinitialisation à minuit.`,
-      quota
+      error: `Quota IA journalier atteint (${reservation.quota.used}/${reservation.quota.limit}). Réinitialisation à minuit.`,
+      quota: reservation.quota
     });
   }
 
+  let result;
   try {
-    const result = await runOnboard(provider, { name, description, features, ambiance, image, inspirationUrl });
-    // L'appel IA a réussi : on décompte (jamais décompté sur échec)
-    if (quota) {
-      aiQuota.increment(req.user.id);
-    }
-    
+    result = await runOnboard(provider, { name, description, features, ambiance, image, inspirationUrl });
+  } catch (error) {
+    // L'appel IA a échoué : on libère le créneau réservé (jamais décompté sur échec)
+    await aiQuota.releaseSlot(req.user.id);
+    return sendError(res, "Échec de la génération du site par IA.", error);
+  }
+
+  try {
+    // L'IA a réussi : le créneau réservé reste consommé.
+
     // Generate a new slug for this site (validé : jamais vide → jamais documentRoot partagé)
     const siteName = name || result.qualification.site_name || "Nouveau Site";
     const slug = generateSlug(siteName) || generateSlug(result.qualification.site_name || '') || 'site';
