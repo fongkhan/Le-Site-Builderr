@@ -3,6 +3,7 @@ import { useNavigate, useOutletContext } from 'react-router-dom';
 import { fetchTheme, saveTheme } from '../../api/sites';
 import { useToast } from '../../components/ui/ToastContext';
 import { Spinner } from '../../components/ui/Spinner';
+import { UnsavedChangesPrompt } from '../../components/ui/UnsavedChangesPrompt';
 import { DEFAULT_THEME } from '../../types';
 import type { Site, Theme } from '../../types';
 
@@ -69,6 +70,7 @@ export function DesignPage() {
 
   return (
     <div className="animate-slide grid-2col">
+      <UnsavedChangesPrompt when={Boolean(isModified)} />
       <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         <div>
           <h2 style={{ fontSize: '1.5rem' }}>Design & thème</h2>

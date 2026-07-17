@@ -1,14 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
 import { fetchPages, fetchTheme, savePages } from '../../api/sites';
 import { useToast } from '../../components/ui/ToastContext';
 import { Spinner } from '../../components/ui/Spinner';
 import { EmptyState } from '../../components/ui/EmptyState';
+import { UnsavedChangesPrompt } from '../../components/ui/UnsavedChangesPrompt';
 import { BlockEditor } from './BlockEditor';
 import { PagePreview } from './PagePreview';
 import { BLOCK_DEFAULTS, BLOCK_LABELS } from './blockDefaults';
 import { DEFAULT_THEME } from '../../types';
 import type { Block, PagesData, Site, Theme } from '../../types';
+
+const AUTOSAVE_DELAY_MS = 500;
 
 export function CmsPage() {
   const { site } = useOutletContext<{ site: Site }>();
@@ -19,8 +22,14 @@ export function CmsPage() {
   const [theme, setTheme] = useState<Theme>(DEFAULT_THEME);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [editingBlockIdx, setEditingBlockIdx] = useState<number | null>(null);
   const selectedPageIdx = 0;
+
+  // Autosave débouncé : le timer diffère la sauvegarde ; les refs évitent les tirs concurrents
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingData = useRef<PagesData | null>(null);
+  const savingRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -41,50 +50,81 @@ export function CmsPage() {
 
   const activePage = pagesData.docs[selectedPageIdx];
 
-  const persist = async (updated: PagesData) => {
-    setPagesData(updated);
+  // Envoie la dernière version en attente ; re-planifie si une nouvelle édition survient
+  // pendant la requête (anti-concurrence : jamais deux POST en vol pour le même site).
+  const flush = async () => {
+    if (savingRef.current || pendingData.current === null) return;
+    const data = pendingData.current;
+    pendingData.current = null;
+    savingRef.current = true;
     setSaving(true);
     try {
-      await savePages(site.slug, updated);
+      await savePages(site.slug, data);
+      if (pendingData.current === null) setDirty(false);
     } catch (err) {
+      pendingData.current = data; // conserver pour un prochain essai
       toast.error(err instanceof Error ? err.message : "Erreur lors de l'enregistrement des pages.");
     } finally {
+      savingRef.current = false;
       setSaving(false);
+      if (pendingData.current !== null) flush(); // une édition est arrivée pendant la sauvegarde
     }
   };
 
+  const scheduleSave = (updated: PagesData) => {
+    pendingData.current = updated;
+    setDirty(true);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(flush, AUTOSAVE_DELAY_MS);
+  };
+
+  // Sauvegarde immédiate (réordonnancement, ajout/suppression de bloc) — pas de débounce
+  const saveNow = (updated: PagesData) => {
+    pendingData.current = updated;
+    setDirty(true);
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    flush();
+  };
+
+  // Flush le timer en attente au démontage (changement de site/route)
+  useEffect(() => {
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      if (pendingData.current !== null) flush();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [site.slug]);
+
   // Toutes les mutations passent par un clone profond : jamais de mutation en place du state
-  const mutateLayout = (mutate: (layout: Block[]) => void, save = true) => {
+  const mutateLayout = (mutate: (layout: Block[]) => void, immediate = false) => {
     const updated = structuredClone(pagesData);
     mutate(updated.docs[selectedPageIdx].layout);
-    if (save) {
-      persist(updated);
-    } else {
-      setPagesData(updated);
-    }
+    setPagesData(updated);
+    if (immediate) saveNow(updated);
+    else scheduleSave(updated);
   };
 
   const handleBlockChange = (blockIdx: number, field: string, value: unknown) => {
     mutateLayout((layout) => {
       (layout[blockIdx] as unknown as Record<string, unknown>)[field] = value;
-    }, false);
+    });
   };
 
   const handleBlockNestedChange = (blockIdx: number, nestedField: string, index: number, field: string, value: unknown) => {
     mutateLayout((layout) => {
       const block = layout[blockIdx] as unknown as Record<string, Record<number, Record<string, unknown>>>;
       block[nestedField][index][field] = value;
-    }, false);
+    });
   };
 
   const addBlock = (type: string) => {
     const newBlock = structuredClone(BLOCK_DEFAULTS[type] ?? { blockType: type });
-    mutateLayout((layout) => layout.push(newBlock));
+    mutateLayout((layout) => layout.push(newBlock), true);
     toast.success(`Bloc « ${BLOCK_LABELS[type] ?? type} » ajouté.`);
   };
 
   const removeBlock = (blockIdx: number) => {
-    mutateLayout((layout) => layout.splice(blockIdx, 1));
+    mutateLayout((layout) => layout.splice(blockIdx, 1), true);
     if (editingBlockIdx === blockIdx) setEditingBlockIdx(null);
   };
 
@@ -93,7 +133,7 @@ export function CmsPage() {
       const target = direction === 'up' ? index - 1 : index + 1;
       if (target < 0 || target >= layout.length) return;
       [layout[index], layout[target]] = [layout[target], layout[index]];
-    });
+    }, true);
   };
 
   if (loading) {
@@ -106,13 +146,20 @@ export function CmsPage() {
 
   return (
     <div className="animate-slide" style={{ display: 'grid', gridTemplateColumns: '400px 1fr', gap: '30px', alignItems: 'start' }}>
+      <UnsavedChangesPrompt when={dirty || saving} />
       <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 20, maxHeight: 'calc(100vh - 240px)', overflowY: 'auto' }}>
         <h2 style={{ fontSize: '1.4rem' }}>
           🗃️ Sections de la page
-          {saving && <span style={{ fontSize: '0.8rem', color: 'var(--accent-blue)', marginLeft: 10 }}>💾 Enregistrement…</span>}
+          {saving ? (
+            <span style={{ fontSize: '0.8rem', color: 'var(--accent-blue)', marginLeft: 10 }}>💾 Enregistrement…</span>
+          ) : dirty ? (
+            <span style={{ fontSize: '0.8rem', color: 'var(--amber-400)', marginLeft: 10 }}>● Modifications en attente</span>
+          ) : (
+            <span style={{ fontSize: '0.8rem', color: 'var(--accent-emerald)', marginLeft: 10 }}>✓ Enregistré</span>
+          )}
         </h2>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-          Modifiez l'ordre et le contenu des sections. Les changements sont enregistrés automatiquement.
+          Modifiez l'ordre et le contenu des sections. Vos changements sont enregistrés automatiquement.
         </p>
 
         {activePage ? (
@@ -139,23 +186,14 @@ export function CmsPage() {
                 </div>
 
                 {editingBlockIdx === idx ? (
-                  <div
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                        e.preventDefault();
-                        persist(pagesData);
-                        setEditingBlockIdx(null);
-                      }
-                    }}
-                    style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10, borderTop: '1px solid var(--border-color)', paddingTop: 10 }}
-                  >
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10, borderTop: '1px solid var(--border-color)', paddingTop: 10 }}>
                     <BlockEditor
                       block={block}
                       onChange={(field, value) => handleBlockChange(idx, field, value)}
                       onNestedChange={(nestedField, index, field, value) => handleBlockNestedChange(idx, nestedField, index, field, value)}
                     />
-                    <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '0.875rem', marginTop: 5 }} onClick={() => { persist(pagesData); setEditingBlockIdx(null); }}>
-                      Fermer & sauvegarder
+                    <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '0.875rem', marginTop: 5 }} onClick={() => setEditingBlockIdx(null)}>
+                      Fermer
                     </button>
                   </div>
                 ) : (
