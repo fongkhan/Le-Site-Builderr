@@ -145,7 +145,7 @@ export function CmsPage() {
   }
 
   return (
-    <div className="animate-slide" style={{ display: 'grid', gridTemplateColumns: '400px 1fr', gap: '30px', alignItems: 'start' }}>
+    <div className="animate-slide cms-grid">
       <UnsavedChangesPrompt when={dirty || saving} />
       <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 20, maxHeight: 'calc(100vh - 240px)', overflowY: 'auto' }}>
         <h2 style={{ fontSize: '1.4rem' }}>
