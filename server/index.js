@@ -171,6 +171,12 @@ const DIST_DIR = path.join(ASTRO_PROJECT_DIR, 'dist');
 const PUBLIC_HTML_DIR = path.resolve(__dirname, '../simulated_public_html');
 const LOCK_FILE = path.join(ASTRO_PROJECT_DIR, 'build.lock');
 
+// Le dossier de production simulé doit exister dès le boot (le scan par défaut le cible,
+// et il n'est créé par aucun autre chemin avant le premier déploiement)
+if (!fs.existsSync(PUBLIC_HTML_DIR)) {
+  fs.mkdirSync(PUBLIC_HTML_DIR, { recursive: true });
+}
+
 // Serve generated websites statically under /preview/<slug>/
 // (le préfixe /sites est réservé aux routes du dashboard React)
 app.use('/preview', express.static(PUBLIC_HTML_DIR));
