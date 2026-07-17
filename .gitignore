@@ -22,6 +22,7 @@ yarn-error.log*
 server/data/build-logs.txt
 server/data/site_*
 server/data/sites.json
+server/data/ai-usage.json
 repositories/
 
 # Local environment variables
