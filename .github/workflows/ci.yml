@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  orchestrator:
+    name: Orchestrateur — lint & build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: orchestrator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: orchestrator/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - name: Aucun alert()/confirm()/prompt() natif
+        run: |
+          if grep -rnE "\b(alert|confirm|prompt)\(" src --include='*.ts' --include='*.tsx' | grep -v '^\s*//' | grep -vE '(//|\*).*\b(alert|confirm|prompt)\('; then
+            echo "::error::Des appels natifs alert()/confirm()/prompt() subsistent — utiliser les toasts/modales."
+            exit 1
+          fi
+          echo "OK : aucun appel natif."
+
+  client-template:
+    name: Template Astro — build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client-template
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: client-template/package-lock.json
+      # Sans serveur, le build utilise la page de fallback hors-ligne : il doit passer quand même
+      - run: npm ci
+      - run: npm run build
+
+  security:
+    name: Serveur — matrice de sécurité (rôles & ownership)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_DB: metabuilder_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: server
+    env:
+      DATABASE_URI: postgres://postgres:postgrespassword@127.0.0.1:5432/metabuilder_db
+      PAYLOAD_SECRET: ci-secret-0123456789abcdef0123456789abcdef
+      FRONTEND_ORIGIN: http://localhost:5173
+      PORT: 4000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      - name: Démarrer le serveur
+        run: |
+          npx tsx index.js > server.log 2>&1 &
+          echo $! > server.pid
+          # Attendre que le serveur réponde (init Payload + push du schéma + seeding)
+          for i in $(seq 1 60); do
+            if curl -s -o /dev/null http://localhost:4000/internal/site-pages; then
+              echo "Serveur prêt."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Le serveur n'a pas démarré à temps."
+          cat server.log
+          exit 1
+      - name: Vérifier la matrice de sécurité
+        run: node tests/security-check.mjs
+      - name: Logs serveur (en cas d'échec)
+        if: failure()
+        run: cat server.log
+      - name: Arrêter le serveur
+        if: always()
+        run: kill "$(cat server.pid)" 2>/dev/null || true
