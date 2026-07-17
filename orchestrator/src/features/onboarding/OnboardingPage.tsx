@@ -55,9 +55,51 @@ export function OnboardingPage() {
   const quota = config?.aiQuota ?? null;
   const quotaExhausted = quota !== null && quota.remaining <= 0;
 
+  // Borne l'upload d'image : type réel image/* (ferme le contournement du drag-drop que
+  // `accept` ne bloque pas), taille ≤ 4 Mo, et redimensionnement canvas (≤ 1200px, JPEG
+  // 0.85) pour ne pas envoyer un data-URL énorme à l'IA. Les petits logos PNG sont
+  // conservés tels quels (transparence préservée).
+  const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+  const MAX_DIMENSION = 1200;
+
   const readImage = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      toast.error('Veuillez fournir un fichier image (PNG, JPEG, WebP…).');
+      return;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      toast.error('Image trop volumineuse (4 Mo maximum). Choisissez un fichier plus léger.');
+      return;
+    }
     const reader = new FileReader();
-    reader.onloadend = () => setUploadedImage(reader.result as string);
+    reader.onerror = () => toast.error('Impossible de lire ce fichier image.');
+    reader.onloadend = () => {
+      const dataUrl = reader.result as string;
+      const img = new Image();
+      img.onerror = () => toast.error('Ce fichier image semble corrompu.');
+      img.onload = () => {
+        const needsResize = img.width > MAX_DIMENSION || img.height > MAX_DIMENSION;
+        const heavy = file.size > 1024 * 1024;
+        if (!needsResize && !heavy) {
+          setUploadedImage(dataUrl); // déjà légère : on garde le format d'origine
+          return;
+        }
+        const scale = Math.min(1, MAX_DIMENSION / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          setUploadedImage(dataUrl);
+          return;
+        }
+        ctx.fillStyle = '#ffffff'; // fond blanc : le JPEG n'a pas d'alpha (logos transparents)
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        setUploadedImage(canvas.toDataURL('image/jpeg', 0.85));
+      };
+      img.src = dataUrl;
+    };
     reader.readAsDataURL(file);
   };
 
