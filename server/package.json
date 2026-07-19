@@ -1,6 +1,7 @@
 {
   "name": "meta-builder-server",
   "version": "1.0.0",
+  "license": "Apache-2.0",
   "description": "Backend API & Webhook lockfile server for Meta-Builder",
   "main": "index.js",
   "scripts": {

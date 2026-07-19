@@ -114,4 +114,4 @@ En dev, le front proxifie `/api`, `/webhook`, `/preview`, `/admin` et `/_next` v
 ---
 
 ## 📄 Licence
-Ce projet est développé à des fins de démonstration d'architecture technique (DAT).
+Distribué sous licence [Apache License 2.0](./LICENSE). Voir le fichier [NOTICE](./NOTICE) pour les mentions d'attribution.
