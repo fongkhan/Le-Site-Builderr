@@ -17,6 +17,7 @@ const { generateSlug, assertSafePath } = require('./lib/paths');
 const { validateTheme } = require('./lib/theme');
 const { getHosting } = require('./lib/hosting');
 const releases = require('./lib/releases');
+const seo = require('./lib/seo');
 
 // Driver d'hébergement (simulation par défaut ; cpanel = publication réelle o2switch).
 // Config invalide → échec immédiat et explicite au boot plutôt qu'en plein déploiement.
@@ -478,6 +479,8 @@ async function readSitePages(siteSlug) {
             docs: pagesRes.docs.map(page => ({
               title: page.title,
               slug: page.slug,
+              metaTitle: page.metaTitle || undefined,
+              metaDescription: page.metaDescription || undefined,
               layout: page.layout ? page.layout.map(block => {
                 const { id, ...fields } = block;
                 if (block.blockType === 'gallery' && fields.images) {
@@ -962,6 +965,8 @@ app.post('/api/site-pages', auth.authenticate, auth.requireAuth, auth.requireSit
           const pageData = {
             title: pageInput.title,
             slug: pageInput.slug,
+            metaTitle: pageInput.metaTitle || null,
+            metaDescription: pageInput.metaDescription || null,
             site: siteDoc.id,
             layout: pageInput.layout ? pageInput.layout.map(block => {
               const { blockType, id, ...fields } = block;
@@ -1482,6 +1487,18 @@ async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
     // Garde : ne pas déployer un build sans sortie exploitable (dist vide malgré exit 0)
     if (!fs.existsSync(DIST_DIR) || !fs.existsSync(path.join(DIST_DIR, 'index.html'))) {
       throw new Error("Build sans sortie exploitable (dist/index.html absent) : déploiement annulé, site actuel préservé.");
+    }
+    // SEO : sitemap.xml + robots.txt générés dans le dist avant publication
+    // (non bloquant : un échec ici ne doit pas empêcher le déploiement)
+    try {
+      const pagesData = await readSitePages(siteSlug);
+      const slugs = (pagesData.docs || []).map((p) => p.slug).filter(Boolean);
+      if (slugs.length > 0) {
+        fs.writeFileSync(path.join(DIST_DIR, 'sitemap.xml'), seo.generateSitemap(site.domain, slugs), 'utf-8');
+        fs.writeFileSync(path.join(DIST_DIR, 'robots.txt'), seo.generateRobots(site.domain), 'utf-8');
+      }
+    } catch (seoErr) {
+      fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] SEO non généré : ${seoErr.message}\n`);
     }
     // 1. Copier le nouveau contenu à côté (même volume → rename atomique ensuite)
     fs.rmSync(tmpDir, { recursive: true, force: true });

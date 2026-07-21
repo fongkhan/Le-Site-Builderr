@@ -5,6 +5,7 @@ import { useToast } from '../../components/ui/ToastContext';
 import { Spinner } from '../../components/ui/Spinner';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
+import { Modal } from '../../components/ui/Modal';
 import { UnsavedChangesPrompt } from '../../components/ui/UnsavedChangesPrompt';
 import { BlockEditor } from './BlockEditor';
 import { PagePreview } from './PagePreview';
@@ -27,6 +28,7 @@ export function CmsPage() {
   const [editingBlockIdx, setEditingBlockIdx] = useState<number | null>(null);
   const [selectedPageIdx, setSelectedPageIdx] = useState(0);
   const [blockToRemove, setBlockToRemove] = useState<number | null>(null);
+  const [creatingPage, setCreatingPage] = useState(false);
 
   // Autosave débouncé : le timer diffère la sauvegarde ; les refs évitent les tirs concurrents
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -151,6 +153,35 @@ export function CmsPage() {
     }, true);
   };
 
+  // Édite un champ de la page courante (SEO : metaTitle/metaDescription) — débouncé
+  const mutatePageField = (field: 'metaTitle' | 'metaDescription', value: string) => {
+    const updated = structuredClone(pagesData);
+    updated.docs[selectedPageIdx][field] = value;
+    setPagesData(updated);
+    scheduleSave(updated);
+  };
+
+  // Crée une page (slug dérivé du titre, dédupliqué) et la sélectionne
+  const createPage = (title: string) => {
+    const base = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'page';
+    let slug = base;
+    let suffix = 2;
+    while (pagesData.docs.some((d) => d.slug === slug)) {
+      slug = `${base}-${suffix++}`;
+    }
+    const updated = structuredClone(pagesData);
+    updated.docs.push({
+      title,
+      slug,
+      layout: [structuredClone(BLOCK_DEFAULTS.hero)],
+    });
+    setPagesData(updated);
+    saveNow(updated);
+    setSelectedPageIdx(updated.docs.length - 1);
+    setEditingBlockIdx(null);
+    toast.success(`Page « ${title} » créée (adresse : /${slug}/).`);
+  };
+
   if (loading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}>
@@ -173,6 +204,15 @@ export function CmsPage() {
           onCancel={() => setBlockToRemove(null)}
         />
       )}
+      {creatingPage && (
+        <NewPageModal
+          onCancel={() => setCreatingPage(false)}
+          onCreate={(title) => {
+            createPage(title);
+            setCreatingPage(false);
+          }}
+        />
+      )}
       <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 20, maxHeight: 'calc(100vh - 240px)', overflowY: 'auto' }}>
         <h2 style={{ fontSize: '1.4rem' }}>
           🗃️ Sections de la page
@@ -188,20 +228,59 @@ export function CmsPage() {
           Modifiez l'ordre et le contenu des sections. Vos changements sont enregistrés automatiquement.
         </p>
 
-        {pagesData.docs.length > 1 && (
-          <div>
-            <label className="field-label" htmlFor="page-select">Page à éditer</label>
-            <select
-              id="page-select"
-              className="select-dark"
-              value={selectedPageIdx}
-              onChange={(e) => { setSelectedPageIdx(Number(e.target.value)); setEditingBlockIdx(null); }}
-            >
-              {pagesData.docs.map((p, i) => (
-                <option key={p.slug || i} value={i}>{p.title || p.slug || `Page ${i + 1}`}</option>
-              ))}
-            </select>
-          </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          {pagesData.docs.length > 1 && (
+            <div style={{ flex: 1, minWidth: 180 }}>
+              <label className="field-label" htmlFor="page-select">Page à éditer</label>
+              <select
+                id="page-select"
+                className="select-dark"
+                value={selectedPageIdx}
+                onChange={(e) => { setSelectedPageIdx(Number(e.target.value)); setEditingBlockIdx(null); }}
+              >
+                {pagesData.docs.map((p, i) => (
+                  <option key={p.slug || i} value={i}>{p.title || p.slug || `Page ${i + 1}`}</option>
+                ))}
+              </select>
+            </div>
+          )}
+          <button className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: '0.85rem' }} onClick={() => setCreatingPage(true)}>
+            + Nouvelle page
+          </button>
+        </div>
+
+        {activePage && (
+          <details style={{ border: '1px solid var(--border-color)', borderRadius: 8, padding: '8px 12px' }}>
+            <summary style={{ cursor: 'pointer', fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>
+              🔎 Référencement (SEO) — {activePage.title}
+            </summary>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10 }}>
+              <div>
+                <label className="field-label" htmlFor="seo-title">Titre de l'onglet (balise title)</label>
+                <input
+                  id="seo-title"
+                  type="text"
+                  className="input-text"
+                  style={{ padding: 6, fontSize: '0.875rem' }}
+                  placeholder={activePage.title}
+                  value={activePage.metaTitle || ''}
+                  onChange={(e) => mutatePageField('metaTitle', e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="field-label" htmlFor="seo-desc">Description (moteurs de recherche)</label>
+                <textarea
+                  id="seo-desc"
+                  className="input-text"
+                  style={{ padding: 6, fontSize: '0.875rem' }}
+                  rows={2}
+                  placeholder="Décrivez cette page en une ou deux phrases…"
+                  value={activePage.metaDescription || ''}
+                  onChange={(e) => mutatePageField('metaDescription', e.target.value)}
+                />
+              </div>
+            </div>
+          </details>
         )}
 
         {activePage ? (
@@ -279,5 +358,41 @@ export function CmsPage() {
         {activePage && <PagePreview page={activePage} theme={theme} />}
       </div>
     </div>
+  );
+}
+
+// Saisie du titre d'une nouvelle page (le slug/l'adresse est dérivé automatiquement)
+function NewPageModal({ onCancel, onCreate }: { onCancel: () => void; onCreate: (title: string) => void }) {
+  const [title, setTitle] = useState('');
+  const valid = title.trim().length >= 2;
+
+  return (
+    <Modal
+      title="📄 Nouvelle page"
+      subtitle="Elle apparaîtra dans le menu de navigation du site après le prochain déploiement."
+      onClose={onCancel}
+      maxWidth={440}
+      footer={
+        <>
+          <button className="btn btn-secondary" onClick={onCancel}>Annuler</button>
+          <button className="btn btn-primary" disabled={!valid} onClick={() => valid && onCreate(title.trim())}>
+            Créer la page
+          </button>
+        </>
+      }
+    >
+      <div>
+        <label className="field-label" htmlFor="new-page-title">Titre de la page *</label>
+        <input
+          id="new-page-title"
+          type="text"
+          className="input-text"
+          placeholder="ex : Contact, À propos, Nos horaires…"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && valid) onCreate(title.trim()); }}
+        />
+      </div>
+    </Modal>
   );
 }

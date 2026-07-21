@@ -21,12 +21,15 @@ export async function getStaticPaths() {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
     const data = await response.json();
-    
+
+    // Liste (titre, slug) de toutes les pages : alimente le menu de navigation
+    const allPages = data.docs.map((p: any) => ({ title: p.title, slug: p.slug }));
+
     return data.docs.map((page: any) => {
       const slug = page.slug === 'home' ? undefined : page.slug;
       return {
         params: { slug },
-        props: { page },
+        props: { page, allPages },
       };
     });
   } catch (error: any) {
@@ -54,7 +57,7 @@ export async function getStaticPaths() {
   }
 }
 
-const { page } = Astro.props;
+const { page, allPages = [] } = Astro.props;
 
 // Mapping des types de blocs vers les composants Astro correspondants
 const blockMap: Record<string, any> = {
@@ -68,7 +71,12 @@ const blockMap: Record<string, any> = {
 };
 ---
 
-<Layout title={page.title}>
+<Layout
+  title={page.metaTitle || page.title}
+  description={page.metaDescription}
+  pages={allPages}
+  currentSlug={page.slug}
+>
   <main>
     {page.layout && page.layout.map((block: any) => {
       const Component = blockMap[block.blockType];

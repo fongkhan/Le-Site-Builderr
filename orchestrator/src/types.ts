@@ -56,6 +56,8 @@ export interface Block {
 export interface PageDoc {
   title: string;
   slug: string;
+  metaTitle?: string;
+  metaDescription?: string;
   layout: Block[];
 }
 

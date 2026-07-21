@@ -287,6 +287,16 @@ export default buildConfig({
           required: true,
         },
         {
+          // SEO : balise <title> de la page (repli sur title si vide)
+          name: 'metaTitle',
+          type: 'text',
+        },
+        {
+          // SEO : <meta name="description">
+          name: 'metaDescription',
+          type: 'textarea',
+        },
+        {
           name: 'site',
           type: 'relationship',
           relationTo: 'payload_sites',
