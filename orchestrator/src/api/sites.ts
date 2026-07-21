@@ -27,6 +27,20 @@ export function testHostingConnection(): Promise<{ ok: boolean; message?: string
   return apiFetch('/api/hosting/test', { method: 'POST' });
 }
 
+// Versions de déploiement (admin only) : liste + retour arrière
+export interface Release {
+  id: string;
+  date: string;
+}
+
+export function fetchReleases(slug: string): Promise<Release[]> {
+  return apiFetch<Release[]>(`/api/sites/${slug}/releases`);
+}
+
+export function rollbackRelease(slug: string, release: string): Promise<{ success: boolean; release: string }> {
+  return apiFetch(`/api/sites/${slug}/rollback`, { method: 'POST', body: JSON.stringify({ release }) });
+}
+
 export function createSite(input: { name: string; domain?: string; stack?: string; documentRoot?: string; repositoryPath?: string }): Promise<{ success: boolean; site: Site }> {
   return apiFetch('/api/sites', { method: 'POST', body: JSON.stringify(input) });
 }

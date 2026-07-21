@@ -24,6 +24,7 @@ server/data/site_*
 server/data/sites.json
 server/data/ai-usage.json
 repositories/
+releases/
 
 # Local environment variables
 .env

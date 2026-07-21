@@ -117,6 +117,21 @@ if (client.token) {
   check('Client : GET /api/hosting/status -> 403', (await req('/api/hosting/status', { token: client.token })).status === 403);
 }
 
+// ---- Releases & rollback (admin only) ----
+{
+  check('Releases : anonyme -> 401', (await req('/api/sites/boulangerie-artisanale/releases')).status === 401);
+  if (client.token) {
+    check('Releases : client -> 403', (await req('/api/sites/boulangerie-artisanale/releases', { token: client.token })).status === 403);
+    check('Rollback : client -> 403', (await req('/api/sites/boulangerie-artisanale/rollback', { method: 'POST', body: { release: '1' }, token: client.token })).status === 403);
+  }
+  if (admin.token) {
+    const rel = await req('/api/sites/boulangerie-artisanale/releases', { token: admin.token });
+    check('Releases : admin -> 200 (tableau)', rel.status === 200 && Array.isArray(rel.json));
+    check('Rollback : identifiant hostile -> 400', (await req('/api/sites/boulangerie-artisanale/rollback', { method: 'POST', body: { release: '../../etc' }, token: admin.token })).status === 400);
+    check('Rollback : release inexistante -> 400', (await req('/api/sites/boulangerie-artisanale/rollback', { method: 'POST', body: { release: '1111111111111' }, token: admin.token })).status === 400);
+  }
+}
+
 // ---- Hébergement (admin only) ----
 if (admin.token) {
   const hs = await req('/api/hosting/status', { token: admin.token });

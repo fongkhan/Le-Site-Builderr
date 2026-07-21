@@ -16,6 +16,7 @@ const aiQuota = require('./ai-quota');
 const { generateSlug, assertSafePath } = require('./lib/paths');
 const { validateTheme } = require('./lib/theme');
 const { getHosting } = require('./lib/hosting');
+const releases = require('./lib/releases');
 
 // Driver d'hébergement (simulation par défaut ; cpanel = publication réelle o2switch).
 // Config invalide → échec immédiat et explicite au boot plutôt qu'en plein déploiement.
@@ -221,6 +222,9 @@ const DIST_DIR = path.join(ASTRO_PROJECT_DIR, 'dist');
 const PUBLIC_HTML_DIR = path.resolve(__dirname, '../simulated_public_html');
 // Racine des dépôts de sources provisionnés (cohérent avec l'onboarding)
 const REPOSITORIES_DIR = path.resolve(path.dirname(PUBLIC_HTML_DIR), 'repositories');
+// Versions de déploiement conservées pour rollback (N dernières par site)
+const RELEASES_DIR = path.resolve(path.dirname(PUBLIC_HTML_DIR), 'releases');
+const DEPLOY_KEEP_RELEASES = Number.parseInt(process.env.DEPLOY_KEEP_RELEASES ?? '', 10) || 3;
 const LOCK_FILE = path.join(ASTRO_PROJECT_DIR, 'build.lock');
 
 // Domaine attribué à un site à sa création.
@@ -826,6 +830,71 @@ app.get('/api/sites/:slug/files/view', auth.authenticate, auth.requireAdmin, asy
   }
 });
 
+// --- Releases & rollback (admin only) ---
+
+// Versions de déploiement disponibles pour un site (plus récentes d'abord)
+app.get('/api/sites/:slug/releases', auth.authenticate, auth.requireAdmin, async (req, res) => {
+  try {
+    const site = await sitesStore.getSiteBySlug(req.params.slug);
+    if (!site) return res.status(404).json({ error: "Site non trouvé." });
+    res.json(releases.listReleases(RELEASES_DIR, req.params.slug));
+  } catch (e) {
+    sendError(res, "Impossible de lister les versions.", e);
+  }
+});
+
+// Rollback : republie une version conservée dans le documentRoot (bascule atomique).
+app.post('/api/sites/:slug/rollback', auth.authenticate, auth.requireAdmin, async (req, res) => {
+  const slug = req.params.slug;
+  try {
+    // Pas de rollback pendant un build : le pipeline va justement remplacer la cible
+    if (buildLockHeld || buildStatus.inProgress || fs.existsSync(LOCK_FILE)) {
+      return res.status(409).json({ error: "Un build est en cours : réessayez quand il sera terminé." });
+    }
+    const site = await sitesStore.getSiteBySlug(slug);
+    if (!site) return res.status(404).json({ error: "Site non trouvé." });
+
+    // L'identifiant client n'est jamais utilisé comme chemin : la release est résolue
+    // depuis RELEASES_DIR/slug uniquement (identifiants hostiles → null → 400).
+    const releaseDir = releases.resolveRelease(RELEASES_DIR, slug, req.body?.release);
+    if (!releaseDir) return res.status(400).json({ error: "Version inconnue ou invalide." });
+
+    const siteDestDir = site.documentRoot;
+    assertSafePath(siteDestDir, PUBLIC_HTML_DIR);
+    const tmpDir = siteDestDir + '.tmp-rollback';
+    const oldDir = siteDestDir + '.old-rollback';
+    try {
+      // Même motif atomique que le déploiement : copie complète puis bascule par rename
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      fs.mkdirSync(tmpDir, { recursive: true });
+      fs.cpSync(releaseDir, tmpDir, { recursive: true, force: true });
+      fs.rmSync(oldDir, { recursive: true, force: true });
+      if (fs.existsSync(siteDestDir)) fs.renameSync(siteDestDir, oldDir);
+      fs.renameSync(tmpDir, siteDestDir);
+      fs.rmSync(oldDir, { recursive: true, force: true });
+    } catch (swapErr) {
+      try {
+        if (!fs.existsSync(siteDestDir) && fs.existsSync(oldDir)) fs.renameSync(oldDir, siteDestDir);
+      } catch (restoreErr) {
+        console.error('Échec de restauration après rollback raté :', restoreErr.message);
+      }
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+      throw swapErr;
+    }
+
+    // En mode cpanel : republier aussi la version restaurée sur l'hébergement réel
+    if (hosting.isRemote) {
+      await hosting.publish(slug, siteDestDir);
+    }
+
+    updateSiteStatus(slug, 'active');
+    fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] ROLLBACK : site "${slug}" restauré sur la release ${req.body.release}.\n`);
+    res.json({ success: true, release: req.body.release });
+  } catch (e) {
+    sendError(res, "Échec du retour à la version précédente.", e);
+  }
+});
+
 // --- ENDPOINTS CMS ---
 
 // Pages (le paramètre ?site= est obligatoire, l'accès est vérifié par ownership)
@@ -1331,6 +1400,15 @@ async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
     fs.rmSync(oldDir, { recursive: true, force: true });
 
     fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] DÉPLOIEMENT LOCAL SUCCÈS : Fichiers synchronisés vers ${siteDestDir} !\n`);
+
+    // Conserver une version horodatée pour le rollback (non bloquant si ça échoue)
+    try {
+      const releaseId = releases.saveRelease(RELEASES_DIR, siteSlug, DIST_DIR);
+      const pruned = releases.pruneReleases(RELEASES_DIR, siteSlug, DEPLOY_KEEP_RELEASES);
+      fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] Release ${releaseId} conservée${pruned.length ? ` (purge : ${pruned.join(', ')})` : ''}.\n`);
+    } catch (relErr) {
+      fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] Release non conservée : ${relErr.message}\n`);
+    }
   } catch (deployError) {
     console.error(`Erreur de déploiement : ${deployError.message}`);
     // Rollback : si la cible a été écartée mais pas remplacée, la restaurer
