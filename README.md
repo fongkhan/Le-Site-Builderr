@@ -38,55 +38,87 @@ Règles clés :
 
 ## 🚀 Démarrage Rapide
 
-### Prérequis
-* [Node.js](https://nodejs.org/) v22+
-* npm v10+
-* **PostgreSQL** (requis pour l'authentification et Payload CMS)
+### Étape 1 — Prérequis
 
-### Configuration
-Copiez `server/.env.example` vers `server/.env` et renseignez au minimum :
+* [Node.js](https://nodejs.org/) **v22.12 ou plus** — vérifiez avec `node -v`. Une version plus ancienne (18/20) fera échouer Vite et Astro avec des erreurs cryptiques (voir Dépannage).
+* npm v10+ (fourni avec Node 22).
+* Une base **PostgreSQL** (étape 2 — Docker recommandé, aucune installation manuelle).
+
+### Étape 2 — Base de données PostgreSQL
+
+**Option A (recommandée) — Docker :**
 
 ```bash
-DATABASE_URI=postgres://user:password@127.0.0.1:5432/metabuilder_db
-PAYLOAD_SECRET=<valeur aléatoire de 32+ caractères, ex: openssl rand -hex 32>
-# Au moins une clé IA pour l'onboarding :
-OPENAI_API_KEY=...       # ou ANTHROPIC_API_KEY / GEMINI_API_KEY
+docker compose up -d
 ```
 
-Options facultatives dans `server/.env` :
+C'est tout : la base `metabuilder_db` est créée automatiquement avec les identifiants attendus par `server/.env.example` (`postgres` / `postgrespassword`, port 5432).
+
+**Option B — PostgreSQL installé nativement :** créez la base vous-même (elle n'est **pas** créée automatiquement) :
 
 ```bash
-AI_DAILY_QUOTA=10          # générations IA/jour par client (admins illimités ; 0 = bloqué)
-SMTP_HOST=                 # envoi des emails de réinitialisation ; vide = email loggé en console (dev)
-SMTP_PORT=587
-SMTP_USER=
-SMTP_PASS=
-EMAIL_FROM=noreply@localhost
+# macOS / Linux
+createdb -U postgres metabuilder_db
+# ou depuis psql (toutes plateformes, y compris Windows via pgAdmin ou psql) :
+psql -U postgres -c "CREATE DATABASE metabuilder_db;"
 ```
 
-> **Mode sans base de données** : sans `DATABASE_URI`, le serveur démarre en mode simulation JSON mais **toutes les routes protégées répondent 503** (pas d'authentification possible). Pour du développement local uniquement, `DEV_NO_AUTH=true` désactive l'authentification (toutes les requêtes sont admin) — une bannière d'avertissement s'affiche alors dans l'interface. **À ne jamais utiliser en production.**
->
-> **Source de vérité** : quand la base est disponible, **Payload CMS est la source de vérité** de tous les sites (le fichier `sites.json` ne sert plus que de fallback en mode sans DB, et est importé automatiquement au premier démarrage).
+Puis adaptez `DATABASE_URI` dans `server/.env` à vos identifiants.
 
-### Lancement
+### Étape 3 — Configuration
 
 ```bash
-# Installer les dépendances
+cp server/.env.example server/.env        # Windows : copy server\.env.example server\.env
+```
+
+Puis éditez `server/.env` :
+* `DATABASE_URI` — déjà correct si vous utilisez Docker (option A).
+* `PAYLOAD_SECRET` — remplacez par une valeur aléatoire de 32+ caractères (ex. `openssl rand -hex 32`).
+* Au moins une clé IA pour l'onboarding : `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` ou `GEMINI_API_KEY` (facultatif pour explorer l'interface — sans clé, seul l'assistant IA est indisponible).
+
+Options facultatives : `AI_DAILY_QUOTA` (générations IA/jour par client, 0 = bloqué), `SMTP_*` (emails de réinitialisation ; vide = lien loggé en console en dev).
+
+### Étape 4 — Installation des dépendances
+
+```bash
 npm install
 cd server && npm install
 cd ../orchestrator && npm install
 cd ../client-template && npm install
-
-# Démarrer la stack (serveur + orchestrateur) depuis la racine
-cd .. && npm start
+cd ..
 ```
+
+### Étape 5 — Lancement
+
+```bash
+npm start
+```
+
+Le lanceur vérifie d'abord les prérequis (version de Node, `.env`, dépendances, PostgreSQL joignable) et affiche la commande corrective si quelque chose manque. **Le premier démarrage prend environ une minute** (Payload pousse son schéma en base et crée les comptes de démonstration).
 
 * **Orchestrateur (SaaS UI)** : `http://localhost:5173` → page de connexion
 * **Serveur API & Webhook** : `http://localhost:4000`
 * **Panel Payload (admins)** : `http://localhost:5173/admin` (proxifié) ou `http://localhost:4000/admin`
 * **Prévisualisation des sites déployés** : `http://localhost:5173/preview/<slug>/index.html`
 
+Connectez-vous avec les comptes de démonstration (section « Sécurité par compte » ci-dessus) : `admin@admin.com` / `password123`.
+
 En dev, le front proxifie `/api`, `/webhook`, `/preview`, `/admin` et `/_next` vers le port 4000 (cookies same-origin, aucun réglage CORS côté navigateur).
+
+> **Mode sans base de données** : sans `DATABASE_URI`, le serveur démarre en mode simulation JSON mais **toutes les routes protégées répondent 503** (pas d'authentification possible). Pour du développement local uniquement, `DEV_NO_AUTH=true` désactive l'authentification (toutes les requêtes sont admin) — une bannière d'avertissement s'affiche alors dans l'interface. **À ne jamais utiliser en production.**
+>
+> **Source de vérité** : quand la base est disponible, **Payload CMS est la source de vérité** de tous les sites (le fichier `sites.json` ne sert plus que de fallback en mode sans DB, et est importé automatiquement au premier démarrage).
+
+### 🛟 Dépannage
+
+| Symptôme | Cause probable | Solution |
+|---|---|---|
+| Le login échoue avec une erreur **503** | PostgreSQL injoignable ou `server/.env` absent/incomplet | `docker compose up -d`, puis vérifiez `DATABASE_URI` dans `server/.env` et relancez |
+| `crypto.hash is not a function` ou Vite/Astro refuse de démarrer | Node trop ancien (< 22.12) | Installez Node 22 LTS (`node -v` pour vérifier) |
+| `Cannot find module './vendor-chunks/...'` ou erreurs `MODULE_NOT_FOUND` dans `.next` | Cache Next.js corrompu (kill brutal, double serveur) | Arrêtez tout, `rm -rf server/.next`, relancez `npm start` |
+| `EADDRINUSE` port 4000 ou 5173 | Un ancien process tourne encore | Tuez-le (`npx kill-port 4000 5173` ou via le gestionnaire de tâches) |
+| Premier démarrage très long (~1 min) sans erreur | Normal : push du schéma Payload + seed des comptes | Patientez jusqu'à « Serveur Meta-Builder démarré » |
+| `role "postgres" does not exist` / `database "metabuilder_db" does not exist` (option B) | Base ou utilisateur jamais créés | Créez la base (étape 2, option B) ou passez à Docker (option A) |
 
 ---
 
