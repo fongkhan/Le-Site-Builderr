@@ -293,6 +293,17 @@ if (admin.token && client.token) {
   if (createdId) await req(`/api/users/${createdId}`, { method: 'DELETE', token: admin.token });
 }
 
+// ---- Formulaire de contact public (rate-limité, honeypot) ----
+{
+  const valid = { name: 'Jean Test', email: 'jean@exemple.fr', message: 'Bonjour, ceci est un test.' };
+  const ok = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: valid });
+  check('Contact : message valide -> 200', ok.status === 200 && ok.json?.success === true, `HTTP ${ok.status}`);
+  check('Contact : site inconnu -> 404', (await req('/api/contact/site-inexistant', { method: 'POST', body: valid })).status === 404);
+  check('Contact : corps invalide -> 400', (await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { name: '', email: 'pas-un-email', message: '' } })).status === 400);
+  const hp = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { ...valid, company: 'robot inc' } });
+  check('Contact : honeypot rempli -> 200 silencieux', hp.status === 200 && hp.json?.success === true);
+}
+
 // ---- Audit & export/import (admin only) ----
 {
   check('Audit : anonyme -> 401', (await req('/api/audit')).status === 401);

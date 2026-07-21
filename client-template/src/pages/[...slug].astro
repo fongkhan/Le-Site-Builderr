@@ -7,6 +7,9 @@ import Gallery from '../components/blocks/Gallery.astro';
 import Testimonials from '../components/blocks/Testimonials.astro';
 import FAQ from '../components/blocks/FAQ.astro';
 import Pricing from '../components/blocks/Pricing.astro';
+import Contact from '../components/blocks/Contact.astro';
+import Info from '../components/blocks/Info.astro';
+import Footer from '../components/blocks/Footer.astro';
 
 // Récupération des routes statiques lors de la génération (SSG).
 // L'API est protégée : le webhook de build fournit ACTIVE_SITE_SLUG et BUILD_TOKEN via l'environnement.
@@ -67,7 +70,10 @@ const blockMap: Record<string, any> = {
   'gallery': Gallery,
   'testimonials': Testimonials,
   'faq': FAQ,
-  'pricing': Pricing
+  'pricing': Pricing,
+  'contact': Contact,
+  'info': Info,
+  'footer': Footer
 };
 ---
 

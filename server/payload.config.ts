@@ -432,6 +432,43 @@ export default buildConfig({
                 },
               ],
             },
+            {
+              // Formulaire de contact fonctionnel (poste vers /api/contact/<slug>)
+              slug: 'contact',
+              fields: [
+                { name: 'title', type: 'text' },
+                { name: 'subtitle', type: 'text' },
+                { name: 'ctaText', type: 'text' },
+              ],
+            },
+            {
+              // Infos pratiques : adresse, téléphone, email, horaires
+              slug: 'info',
+              fields: [
+                { name: 'title', type: 'text' },
+                { name: 'address', type: 'text' },
+                { name: 'phone', type: 'text' },
+                { name: 'email', type: 'text' },
+                { name: 'hours', type: 'textarea' },
+              ],
+            },
+            {
+              // Pied de page : mentions + réseaux sociaux (rendu sous le contenu)
+              slug: 'footer',
+              fields: [
+                { name: 'text', type: 'text' },
+                {
+                  name: 'socials',
+                  type: 'group',
+                  fields: [
+                    { name: 'facebook', type: 'text' },
+                    { name: 'instagram', type: 'text' },
+                    { name: 'linkedin', type: 'text' },
+                    { name: 'x', type: 'text' },
+                  ],
+                },
+              ],
+            },
           ],
         },
       ],

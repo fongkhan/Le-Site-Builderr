@@ -203,6 +203,53 @@ export function PagePreview({ page, theme }: { page: PageDoc; theme: Theme }) {
           );
         }
 
+        if (block.blockType === 'contact') {
+          return (
+            <div key={index} style={{ padding: '50px 20px' }}>
+              <h2 style={headingStyle}>{block.title}</h2>
+              {block.subtitle && <p style={{ textAlign: 'center', marginBottom: 20, opacity: 0.85 }}>{block.subtitle}</p>}
+              <div style={{ maxWidth: 480, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <input disabled placeholder="Votre nom" style={{ padding: 10, borderRadius: theme.radius, border: '1px solid rgba(0,0,0,0.15)' }} />
+                <input disabled placeholder="Votre email" style={{ padding: 10, borderRadius: theme.radius, border: '1px solid rgba(0,0,0,0.15)' }} />
+                <textarea disabled placeholder="Votre message…" rows={3} style={{ padding: 10, borderRadius: theme.radius, border: '1px solid rgba(0,0,0,0.15)' }} />
+                <button disabled style={{ backgroundColor: theme.colors.primary, color: '#fff', border: 'none', borderRadius: theme.radius, padding: '10px 20px', fontWeight: 600 }}>
+                  {block.ctaText || 'Envoyer'}
+                </button>
+              </div>
+            </div>
+          );
+        }
+
+        if (block.blockType === 'info') {
+          return (
+            <div key={index} style={{ padding: '50px 20px' }}>
+              <h2 style={headingStyle}>{block.title}</h2>
+              <div style={{ maxWidth: 480, margin: '0 auto', backgroundColor: theme.colors.secondary + '33', borderRadius: theme.radius, padding: 20, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {block.address && <div>📍 {block.address}</div>}
+                {block.phone && <div>📞 {block.phone}</div>}
+                {block.email && <div>✉️ {block.email}</div>}
+                {block.hours && <div style={{ whiteSpace: 'pre-line' }}>🕒 {block.hours}</div>}
+              </div>
+            </div>
+          );
+        }
+
+        if (block.blockType === 'footer') {
+          const socials = Object.entries(block.socials || {}).filter(([, url]) => url);
+          return (
+            <div key={index} style={{ padding: '25px 20px', borderTop: '1px solid rgba(0,0,0,0.1)', textAlign: 'center', fontSize: '0.9rem', opacity: 0.85 }}>
+              <div>{block.text}</div>
+              {socials.length > 0 && (
+                <div style={{ marginTop: 8, display: 'flex', gap: 12, justifyContent: 'center' }}>
+                  {socials.map(([network]) => (
+                    <span key={network} style={{ textTransform: 'capitalize', color: theme.colors.primary, fontWeight: 600 }}>{network}</span>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        }
+
         return null;
       })}
     </div>

@@ -51,6 +51,14 @@ export interface Block {
     ctaText: string;
     isPopular: boolean;
   }[];
+  // Bloc info (infos pratiques)
+  address?: string;
+  phone?: string;
+  email?: string;
+  hours?: string;
+  // Bloc footer
+  text?: string;
+  socials?: { facebook?: string; instagram?: string; linkedin?: string; x?: string };
 }
 
 export interface PageDoc {

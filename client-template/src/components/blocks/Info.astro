@@ -1,0 +1,75 @@
+---
+interface Props {
+  data: {
+    title?: string;
+    address?: string;
+    phone?: string;
+    email?: string;
+    hours?: string;
+  };
+}
+
+const { data } = Astro.props;
+---
+
+<section class="info-section">
+  <div class="container">
+    <h2>{data.title || 'Infos pratiques'}</h2>
+    <div class="info-card">
+      {data.address && <div class="info-row"><span class="info-icon">📍</span><span>{data.address}</span></div>}
+      {data.phone && <div class="info-row"><span class="info-icon">📞</span><a href={`tel:${data.phone.replace(/\s/g, '')}`}>{data.phone}</a></div>}
+      {data.email && <div class="info-row"><span class="info-icon">✉️</span><a href={`mailto:${data.email}`}>{data.email}</a></div>}
+      {data.hours && <div class="info-row"><span class="info-icon">🕒</span><span class="info-hours">{data.hours}</span></div>}
+    </div>
+  </div>
+</section>
+
+<style>
+  .info-section {
+    padding: 80px 20px;
+    background-color: var(--color-bg);
+  }
+
+  .container {
+    max-width: 560px;
+    margin: 0 auto;
+    text-align: center;
+  }
+
+  .info-section h2 {
+    font-size: 2.5rem;
+    margin-bottom: 40px;
+  }
+
+  .info-card {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 30px;
+    border-radius: var(--border-radius);
+    background-color: color-mix(in srgb, var(--color-secondary) 30%, transparent);
+    text-align: left;
+  }
+
+  .info-row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    font-size: 1.05rem;
+  }
+
+  .info-icon {
+    font-size: 1.2rem;
+    flex-shrink: 0;
+  }
+
+  .info-hours {
+    white-space: pre-line;
+  }
+
+  .info-card a {
+    color: var(--color-primary);
+    text-decoration: none;
+    font-weight: 600;
+  }
+</style>

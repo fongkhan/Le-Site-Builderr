@@ -108,13 +108,15 @@ const loginLimiter = makeLimiter(
 );
 const onboardLimiter = makeLimiter(30, "Trop de générations demandées. Réessayez dans quelques minutes.");
 const webhookLimiter = makeLimiter(60, "Trop de requêtes de build reçues. Réessayez plus tard.");
+const contactLimiter = makeLimiter(10, "Trop de messages envoyés. Réessayez dans quelques minutes.");
 app.use('/api/users/login', loginLimiter); // route servie par Next → le limiter next() vers elle
 app.use('/api/onboard', onboardLimiter);
 app.use('/webhook/rebuild', webhookLimiter);
+app.use('/api/contact', contactLimiter);
 // Le parsing JSON ne s'applique QU'AUX routes Express custom : les routes déléguées à
 // Next/Payload (login, REST Payload, /admin) doivent recevoir leur flux de requête intact.
 const jsonParser = express.json({ limit: '10mb' });
-const EXPRESS_ROUTE_PREFIXES = ['/api/sites', '/api/site-pages', '/api/theme', '/api/config', '/api/onboard', '/api/build-status', '/api/hosting', '/webhook', '/internal'];
+const EXPRESS_ROUTE_PREFIXES = ['/api/sites', '/api/site-pages', '/api/theme', '/api/config', '/api/onboard', '/api/build-status', '/api/hosting', '/api/contact', '/webhook', '/internal'];
 app.use((req, res, next) => {
   const handledByExpress = EXPRESS_ROUTE_PREFIXES.some(p => req.path === p || req.path.startsWith(p + '/'));
   if (!handledByExpress) return next();
@@ -1280,6 +1282,48 @@ app.post('/api/hosting/test', auth.authenticate, auth.requireAdmin, async (req, 
   }
 });
 
+// --- Formulaire de contact des sites publiés (PUBLIC, rate-limité) ---
+// Appelé par les sites générés (autre origine en production) : CORS ouvert sur cette
+// route uniquement — aucun cookie/credential impliqué, validation stricte + honeypot.
+app.post('/api/contact/:slug', cors(), async (req, res) => {
+  try {
+    const site = await sitesStore.getSiteBySlug(req.params.slug);
+    if (!site) return res.status(404).json({ error: "Site inconnu." });
+
+    const { name, email, message, company } = req.body || {};
+
+    // Honeypot : un humain ne remplit jamais ce champ caché. On répond 200 sans
+    // rien envoyer pour ne pas donner d'indice aux robots.
+    if (typeof company === 'string' && company.trim() !== '') {
+      return res.json({ success: true });
+    }
+
+    const isNonEmpty = (v, max) => typeof v === 'string' && v.trim().length > 0 && v.length <= max;
+    if (!isNonEmpty(name, 120) || !isNonEmpty(message, 5000) || !isNonEmpty(email, 200) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: "Nom, email valide et message sont requis." });
+    }
+
+    const owners = await getSiteOwnersMap();
+    const recipients = owners[site.slug] || [];
+    const subject = `📬 Nouveau message via ${site.name}`;
+    const text =
+      `Nouveau message reçu depuis le site « ${site.name} » (${site.domain}) :\n\n` +
+      `Nom : ${name.trim()}\nEmail : ${email.trim()}\n\n${message.trim()}\n\n` +
+      `— Envoyé par le formulaire de contact Meta-Builder`;
+
+    if (recipients.length > 0) {
+      await sendMail(recipients, subject, text);
+    } else {
+      // Aucun compte rattaché : ne pas perdre le message pour autant
+      console.log(`📬 [Contact] Message pour « ${site.slug} » (aucun propriétaire rattaché) :\n${text}`);
+    }
+    logAudit(req, 'contact.recu', site.slug, `de=${email.trim()}`);
+    res.json({ success: true });
+  } catch (e) {
+    sendError(res, "Impossible d'envoyer le message pour le moment.", e);
+  }
+});
+
 // --- Journal d'audit (admin only, lecture seule) ---
 app.get('/api/audit', auth.authenticate, auth.requireAdmin, async (req, res) => {
   try {
@@ -1534,23 +1578,14 @@ function finalizeBuild(siteSlug, siteName, status, excerpt) {
   );
 }
 
-// Email de fin de build aux propriétaires du site. Même convention que le reset de
-// mot de passe : sans SMTP_HOST, la notification est écrite dans la console (dev).
+// Envoi d'email générique. Même convention que le reset de mot de passe : sans
+// SMTP_HOST, le message est écrit dans la console (mode développement).
 let mailTransport = null;
-async function notifyBuildResult(siteSlug, siteName, status, durationMs) {
-  const owners = await getSiteOwnersMap();
-  const emails = owners[siteSlug] || [];
+async function sendMail(recipients, subject, text) {
+  const emails = Array.isArray(recipients) ? recipients : [recipients];
   if (emails.length === 0) return;
-
-  const ok = status === 'success';
-  const seconds = durationMs ? Math.round(durationMs / 1000) : null;
-  const subject = `${ok ? '✅ Déploiement réussi' : '❌ Déploiement échoué'} — ${siteName}`;
-  const text = ok
-    ? `Le site « ${siteName} » a été déployé avec succès${seconds ? ` en ${seconds} s` : ''}.\nAperçu : /preview/${siteSlug}/index.html`
-    : `Le déploiement du site « ${siteName} » a échoué${seconds ? ` après ${seconds} s` : ''}.\nConsultez les logs de build dans l'orchestrateur pour le détail.`;
-
   if (!process.env.SMTP_HOST) {
-    console.log(`📧 [Dev] ${subject} → ${emails.join(', ')}`);
+    console.log(`📧 [Dev] ${subject} → ${emails.join(', ')}\n${text}`);
     return;
   }
   if (!mailTransport) {
@@ -1563,6 +1598,22 @@ async function notifyBuildResult(siteSlug, siteName, status, durationMs) {
   }
   const from = process.env.EMAIL_FROM || 'noreply@localhost';
   await Promise.all(emails.map((to) => mailTransport.sendMail({ from, to, subject, text })));
+}
+
+// Email de fin de build aux propriétaires du site.
+async function notifyBuildResult(siteSlug, siteName, status, durationMs) {
+  const owners = await getSiteOwnersMap();
+  const emails = owners[siteSlug] || [];
+  if (emails.length === 0) return;
+
+  const ok = status === 'success';
+  const seconds = durationMs ? Math.round(durationMs / 1000) : null;
+  const subject = `${ok ? '✅ Déploiement réussi' : '❌ Déploiement échoué'} — ${siteName}`;
+  const text = ok
+    ? `Le site « ${siteName} » a été déployé avec succès${seconds ? ` en ${seconds} s` : ''}.\nAperçu : /preview/${siteSlug}/index.html`
+    : `Le déploiement du site « ${siteName} » a échoué${seconds ? ` après ${seconds} s` : ''}.\nConsultez les logs de build dans l'orchestrateur pour le détail.`;
+
+  await sendMail(emails, subject, text);
 }
 
 async function startBuild(siteSlug) {

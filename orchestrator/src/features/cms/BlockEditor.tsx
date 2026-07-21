@@ -267,6 +267,51 @@ export function BlockEditor({ block, siteSlug, onChange, onNestedChange, onArray
           {addButton('Ajouter une formule', 'plans')}
         </>
       )}
+
+      {block.blockType === 'contact' && (
+        <>
+          <label className="field-label">Titre du bloc</label>
+          {input(block.title, (v) => onChange('title', v))}
+          <label className="field-label">Texte d'introduction</label>
+          <textarea className="input-text" style={{ padding: 6, fontSize: '0.875rem' }} value={block.subtitle || ''} onChange={(e) => onChange('subtitle', e.target.value)} />
+          <label className="field-label">Texte du bouton d'envoi</label>
+          {input(block.ctaText, (v) => onChange('ctaText', v))}
+          <span className="field-label" style={{ fontStyle: 'italic' }}>
+            Les messages envoyés depuis le site arrivent par email aux comptes rattachés au site.
+          </span>
+        </>
+      )}
+
+      {block.blockType === 'info' && (
+        <>
+          <label className="field-label">Titre du bloc</label>
+          {input(block.title, (v) => onChange('title', v))}
+          <label className="field-label">Adresse</label>
+          {input(block.address, (v) => onChange('address', v))}
+          <label className="field-label">Téléphone</label>
+          {input(block.phone, (v) => onChange('phone', v))}
+          <label className="field-label">Email affiché</label>
+          {input(block.email, (v) => onChange('email', v))}
+          <label className="field-label">Horaires (une ligne par jour)</label>
+          <textarea className="input-text" style={{ padding: 6, fontSize: '0.875rem' }} rows={3} value={block.hours || ''} onChange={(e) => onChange('hours', e.target.value)} />
+        </>
+      )}
+
+      {block.blockType === 'footer' && (
+        <>
+          <label className="field-label">Texte du pied de page</label>
+          {input(block.text, (v) => onChange('text', v))}
+          {(['facebook', 'instagram', 'linkedin', 'x'] as const).map((network) => (
+            <div key={network}>
+              <label className="field-label" style={{ textTransform: 'capitalize' }}>{network === 'x' ? 'X (Twitter)' : network}</label>
+              {input(block.socials?.[network], (v) => onChange('socials', { ...(block.socials || {}), [network]: v }))}
+            </div>
+          ))}
+          <span className="field-label" style={{ fontStyle: 'italic' }}>
+            Placez ce bloc en dernier : il est rendu tout en bas de la page.
+          </span>
+        </>
+      )}
     </>
   );
 }
