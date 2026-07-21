@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
 import { fetchPages, fetchTheme, savePages } from '../../api/sites';
+import { aiAssist } from '../../api/ai';
 import { useToast } from '../../components/ui/ToastContext';
 import { Spinner } from '../../components/ui/Spinner';
 import { EmptyState } from '../../components/ui/EmptyState';
@@ -29,6 +30,7 @@ export function CmsPage() {
   const [selectedPageIdx, setSelectedPageIdx] = useState(0);
   const [blockToRemove, setBlockToRemove] = useState<number | null>(null);
   const [creatingPage, setCreatingPage] = useState(false);
+  const [seoLoading, setSeoLoading] = useState(false);
 
   // Autosave débouncé : le timer diffère la sauvegarde ; les refs évitent les tirs concurrents
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -161,6 +163,31 @@ export function CmsPage() {
     scheduleSave(updated);
   };
 
+  // Génère les meta SEO de la page courante à partir de son contenu (titres/textes)
+  const generateSeo = async () => {
+    const page = pagesData.docs[selectedPageIdx];
+    if (!page) return;
+    const content = page.layout
+      .map((b) => [b.title, b.subtitle, b.text].filter(Boolean).join(' '))
+      .filter(Boolean)
+      .join('\n')
+      .slice(0, 3000);
+    setSeoLoading(true);
+    try {
+      const { metaTitle, metaDescription } = await aiAssist(site.slug, 'seo', content || page.title, site.name);
+      const updated = structuredClone(pagesData);
+      if (metaTitle) updated.docs[selectedPageIdx].metaTitle = metaTitle;
+      if (metaDescription) updated.docs[selectedPageIdx].metaDescription = metaDescription;
+      setPagesData(updated);
+      scheduleSave(updated);
+      toast.success('Meta SEO générées par l’IA.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "L'assistant IA n'a pas pu répondre.");
+    } finally {
+      setSeoLoading(false);
+    }
+  };
+
   // Crée une page (slug dérivé du titre, dédupliqué) et la sélectionne
   const createPage = (title: string) => {
     const base = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'page';
@@ -279,6 +306,14 @@ export function CmsPage() {
                   onChange={(e) => mutatePageField('metaDescription', e.target.value)}
                 />
               </div>
+              <button
+                className="btn btn-secondary"
+                style={{ padding: '6px 12px', fontSize: '0.85rem', alignSelf: 'flex-start' }}
+                onClick={generateSeo}
+                disabled={seoLoading}
+              >
+                {seoLoading ? '✨ Génération…' : '✨ Générer les meta SEO'}
+              </button>
             </div>
           </details>
         )}

@@ -9,7 +9,7 @@ try {
   }
 } catch (e) {}
 
-const { runOnboard } = require('./ai');
+const { runOnboard, runAssist } = require('./ai');
 const auth = require('./auth');
 const sitesStore = require('./sites-store');
 const aiQuota = require('./ai-quota');
@@ -116,7 +116,7 @@ app.use('/api/contact', contactLimiter);
 // Le parsing JSON ne s'applique QU'AUX routes Express custom : les routes déléguées à
 // Next/Payload (login, REST Payload, /admin) doivent recevoir leur flux de requête intact.
 const jsonParser = express.json({ limit: '10mb' });
-const EXPRESS_ROUTE_PREFIXES = ['/api/sites', '/api/site-pages', '/api/theme', '/api/config', '/api/onboard', '/api/build-status', '/api/hosting', '/api/contact', '/webhook', '/internal'];
+const EXPRESS_ROUTE_PREFIXES = ['/api/sites', '/api/site-pages', '/api/theme', '/api/config', '/api/onboard', '/api/build-status', '/api/hosting', '/api/contact', '/api/ai', '/webhook', '/internal'];
 app.use((req, res, next) => {
   const handledByExpress = EXPRESS_ROUTE_PREFIXES.some(p => req.path === p || req.path.startsWith(p + '/'));
   if (!handledByExpress) return next();
@@ -1362,6 +1362,32 @@ app.get('/api/config', auth.authenticate, auth.requireAuth, (req, res) => {
 });
 
 // --- MOCK AI ENDPOINTS ---
+
+// Assistant de rédaction pour le CMS (améliorer un texte, générer une description,
+// proposer des meta SEO). Auth + ownership du site + quota IA (comme l'onboarding).
+app.post('/api/ai/assist', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.body && req.body.site), async (req, res) => {
+  const { action, input, context, provider } = req.body || {};
+  if (!['rewrite', 'generate-description', 'seo'].includes(action)) {
+    return res.status(400).json({ error: "Action d'assistance invalide." });
+  }
+
+  const reservation = await aiQuota.reserveSlot(req.user);
+  if (!reservation.ok) {
+    return res.status(429).json({
+      error: `Quota IA journalier atteint (${reservation.quota.used}/${reservation.quota.limit}). Réinitialisation à minuit.`,
+      quota: reservation.quota
+    });
+  }
+
+  try {
+    const result = await runAssist(provider, { action, input, context });
+    res.json(result);
+  } catch (error) {
+    // Échec IA (clé absente, appel raté…) : on libère le créneau (jamais décompté sur échec)
+    await aiQuota.releaseSlot(req.user.id);
+    return sendError(res, "L'assistant IA n'a pas pu répondre.", error);
+  }
+});
 
 // Assistant d'Onboarding (Routage Stack, Ébauche & Thème) — accessible aux admins ET aux clients :
 // le site créé est automatiquement rattaché au compte de l'utilisateur connecté.

@@ -1,7 +1,59 @@
 import { useRef, useState } from 'react';
 import { uploadMedia } from '../../api/media';
+import { aiAssist } from '../../api/ai';
 import { useToast } from '../../components/ui/ToastContext';
 import type { Block } from '../../types';
+
+// Champ texte avec bouton « ✨ » : réécrit/améliore le contenu via l'assistant IA.
+function AiText({ siteSlug, value, onChange, multiline, placeholder }: {
+  siteSlug: string;
+  value: string | undefined;
+  onChange: (v: string) => void;
+  multiline?: boolean;
+  placeholder?: string;
+}) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+
+  const improve = async () => {
+    if (!value || !value.trim()) {
+      toast.info('Écrivez d’abord un texte, puis ✨ l’améliore.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const { text } = await aiAssist(siteSlug, 'rewrite', value);
+      if (text) {
+        onChange(text);
+        toast.success('Texte amélioré par l’IA.');
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "L'assistant IA n'a pas pu répondre.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', gap: 6, alignItems: multiline ? 'flex-start' : 'center' }}>
+      {multiline ? (
+        <textarea className="input-text" style={{ padding: 6, fontSize: '0.875rem', flex: 1 }} value={value || ''} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
+      ) : (
+        <input type="text" className="input-text" style={{ padding: 6, fontSize: '0.875rem', flex: 1 }} value={value || ''} placeholder={placeholder} onChange={(e) => onChange(e.target.value)} />
+      )}
+      <button
+        type="button"
+        className="btn btn-secondary"
+        style={{ padding: '4px 8px', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+        onClick={improve}
+        disabled={busy}
+        title="Améliorer ce texte avec l'IA"
+      >
+        {busy ? '…' : '✨'}
+      </button>
+    </div>
+  );
+}
 
 interface BlockEditorProps {
   block: Block;
@@ -130,9 +182,9 @@ export function BlockEditor({ block, siteSlug, onChange, onNestedChange, onArray
       {block.blockType === 'hero' && (
         <>
           <label className="field-label">Titre Hero</label>
-          {input(block.title, (v) => onChange('title', v))}
+          <AiText siteSlug={siteSlug} value={block.title} onChange={(v) => onChange('title', v)} />
           <label className="field-label">Sous-titre</label>
-          <textarea className="input-text" style={{ padding: 6, fontSize: '0.875rem' }} value={block.subtitle || ''} onChange={(e) => onChange('subtitle', e.target.value)} />
+          <AiText siteSlug={siteSlug} value={block.subtitle} onChange={(v) => onChange('subtitle', v)} multiline />
           <label className="field-label">Texte du bouton</label>
           {input(block.ctaText, (v) => onChange('ctaText', v))}
           <label className="field-label">Image de fond</label>
@@ -273,7 +325,7 @@ export function BlockEditor({ block, siteSlug, onChange, onNestedChange, onArray
           <label className="field-label">Titre du bloc</label>
           {input(block.title, (v) => onChange('title', v))}
           <label className="field-label">Texte d'introduction</label>
-          <textarea className="input-text" style={{ padding: 6, fontSize: '0.875rem' }} value={block.subtitle || ''} onChange={(e) => onChange('subtitle', e.target.value)} />
+          <AiText siteSlug={siteSlug} value={block.subtitle} onChange={(v) => onChange('subtitle', v)} multiline />
           <label className="field-label">Texte du bouton d'envoi</label>
           {input(block.ctaText, (v) => onChange('ctaText', v))}
           <span className="field-label" style={{ fontStyle: 'italic' }}>

@@ -257,6 +257,19 @@ if (process.env.AI_DAILY_QUOTA === '0' && client.token && admin.token) {
     const after = await req('/api/users/me', { token: client.token });
     check('Quota : tentative aiDailyQuota=9999 par le client neutralisée', after.json?.user?.aiDailyQuota == null, JSON.stringify(after.json?.user?.aiDailyQuota));
   }
+
+  // Assistant IA du CMS : même quota que l'onboarding, ownership sur ?site
+  const assistOwn = await req('/api/ai/assist', { method: 'POST', body: { site: 'boulangerie-artisanale', action: 'rewrite', input: 'Bonjour' }, token: client.token });
+  check('AI assist : client sur SON site, quota épuisé -> 429', assistOwn.status === 429, `HTTP ${assistOwn.status}`);
+}
+
+// ---- Assistant IA du CMS : auth & ownership (indépendant du quota) ----
+{
+  check('AI assist : anonyme -> 401', (await req('/api/ai/assist', { method: 'POST', body: { site: 'boulangerie-artisanale', action: 'rewrite', input: 'x' } })).status === 401);
+  if (client.token) {
+    check("AI assist : client sur un autre site -> 403", (await req('/api/ai/assist', { method: 'POST', body: { site: 'site-dun-autre', action: 'rewrite', input: 'x' }, token: client.token })).status === 403);
+    check('AI assist : action invalide -> 400', (await req('/api/ai/assist', { method: 'POST', body: { site: 'boulangerie-artisanale', action: 'pirater', input: 'x' }, token: client.token })).status === 400);
+  }
 }
 
 // ---- Réinitialisation de mot de passe ----
