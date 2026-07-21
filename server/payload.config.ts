@@ -456,6 +456,34 @@ export default buildConfig({
       ],
     },
     {
+      // Médiathèque par site : images téléversées depuis le CMS. Servies par Payload
+      // sous /api/media/file/<nom> (lecture contrôlée par ownership) ; au déploiement,
+      // les fichiers référencés sont copiés dans le site statique sous /media/.
+      slug: 'media',
+      upload: {
+        staticDir: path.resolve(dirname, 'uploads'),
+        mimeTypes: ['image/*'],
+      },
+      admin: {
+        useAsTitle: 'filename',
+      },
+      access: {
+        read: isAdminOrSiteClient,
+        create: canCreatePage, // même règle que les pages : admin, ou client propriétaire du site cible
+        update: isAdminOrSiteClient,
+        delete: isAdminOrSiteClient,
+      },
+      fields: [
+        {
+          name: 'site',
+          type: 'relationship',
+          relationTo: 'payload_sites',
+          required: true,
+          index: true,
+        },
+      ],
+    },
+    {
       // Historique des builds/déploiements. Écrit uniquement par le serveur
       // (overrideAccess) ; lecture panel réservée aux admins — les clients y
       // accèdent via l'endpoint Express /api/sites/:slug/builds (ownership vérifié).

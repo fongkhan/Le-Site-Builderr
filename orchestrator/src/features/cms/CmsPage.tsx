@@ -310,6 +310,7 @@ export function CmsPage() {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10, borderTop: '1px solid var(--border-color)', paddingTop: 10 }}>
                     <BlockEditor
                       block={block}
+                      siteSlug={site.slug}
                       onChange={(field, value) => handleBlockChange(idx, field, value)}
                       onNestedChange={(nestedField, index, field, value) => handleBlockNestedChange(idx, nestedField, index, field, value)}
                       onArrayChange={(field, value, immediate) => handleBlockArrayChange(idx, field, value, immediate)}

@@ -117,6 +117,41 @@ if (client.token) {
   check('Client : GET /api/hosting/status -> 403', (await req('/api/hosting/status', { token: client.token })).status === 403);
 }
 
+// ---- Médiathèque (ownership à la création) ----
+{
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+  const uploadAs = async (token, siteId) => {
+    const form = new FormData();
+    form.append('file', new Blob([png], { type: 'image/png' }), 'pixel.png');
+    form.append('_payload', JSON.stringify({ site: siteId }));
+    const res = await fetch(`${BASE}/api/media`, {
+      method: 'POST',
+      headers: { Origin: ORIGIN, ...(token ? { Cookie: `payload-token=${token}` } : {}) },
+      body: form,
+    });
+    let json = null;
+    try { json = await res.clone().json(); } catch { /* non-JSON */ }
+    return { status: res.status, json };
+  };
+
+  const anon = await uploadAs(null, 1);
+  check('Media : upload anonyme -> 401/403', anon.status === 401 || anon.status === 403, `HTTP ${anon.status}`);
+
+  if (client.token && admin.token) {
+    // id du site du client (boulangerie-artisanale) via l'API admin
+    const siteRes = await req('/api/payload_sites?where[slug][equals]=boulangerie-artisanale&limit=1&depth=0', { token: admin.token });
+    const ownSiteId = siteRes.json?.docs?.[0]?.id;
+    if (ownSiteId) {
+      const ok = await uploadAs(client.token, ownSiteId);
+      check('Media : client -> upload sur SON site accepté', ok.status === 201 && Boolean(ok.json?.doc?.url), `HTTP ${ok.status}`);
+      const denied = await uploadAs(client.token, 999999);
+      check('Media : client -> upload sur un autre site refusé', denied.status === 403 || denied.status === 400, `HTTP ${denied.status}`);
+      // Nettoyage du média de test
+      if (ok.json?.doc?.id) await req(`/api/media/${ok.json.doc.id}`, { method: 'DELETE', token: admin.token });
+    }
+  }
+}
+
 // ---- Historique des builds (admin ou propriétaire) ----
 {
   check('Builds : anonyme -> 401', (await req('/api/sites/boulangerie-artisanale/builds')).status === 401);

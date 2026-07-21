@@ -18,6 +18,7 @@ const { validateTheme } = require('./lib/theme');
 const { getHosting } = require('./lib/hosting');
 const releases = require('./lib/releases');
 const seo = require('./lib/seo');
+const media = require('./lib/media');
 
 // Driver d'hébergement (simulation par défaut ; cpanel = publication réelle o2switch).
 // Config invalide → échec immédiat et explicite au boot plutôt qu'en plein déploiement.
@@ -225,6 +226,8 @@ const PUBLIC_HTML_DIR = path.resolve(__dirname, '../simulated_public_html');
 const REPOSITORIES_DIR = path.resolve(path.dirname(PUBLIC_HTML_DIR), 'repositories');
 // Versions de déploiement conservées pour rollback (N dernières par site)
 const RELEASES_DIR = path.resolve(path.dirname(PUBLIC_HTML_DIR), 'releases');
+// Fichiers de la médiathèque (collection Payload « media », staticDir)
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const DEPLOY_KEEP_RELEASES = Number.parseInt(process.env.DEPLOY_KEEP_RELEASES ?? '', 10) || 3;
 const LOCK_FILE = path.join(ASTRO_PROJECT_DIR, 'build.lock');
 
@@ -1500,6 +1503,27 @@ async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
     } catch (seoErr) {
       fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] SEO non généré : ${seoErr.message}\n`);
     }
+    // Médiathèque : copier dans le dist les images référencées par les pages
+    // (URLs /media/… réécrites par le canal interne) — le site publié est autonome.
+    try {
+      const pagesData = await readSitePages(siteSlug);
+      const filenames = media.collectMediaFilenames(pagesData);
+      if (filenames.length > 0) {
+        const mediaOut = path.join(DIST_DIR, 'media');
+        fs.mkdirSync(mediaOut, { recursive: true });
+        let copied = 0;
+        for (const name of filenames) {
+          const src = path.join(UPLOADS_DIR, path.basename(name));
+          if (fs.existsSync(src)) {
+            fs.copyFileSync(src, path.join(mediaOut, path.basename(name)));
+            copied++;
+          }
+        }
+        if (copied > 0) fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] Médias copiés dans le site : ${copied} fichier(s).\n`);
+      }
+    } catch (mediaErr) {
+      fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] Copie des médias échouée : ${mediaErr.message}\n`);
+    }
     // 1. Copier le nouveau contenu à côté (même volume → rename atomique ensuite)
     fs.rmSync(tmpDir, { recursive: true, force: true });
     fs.mkdirSync(tmpDir, { recursive: true });
@@ -1631,7 +1655,9 @@ app.get('/internal/site-pages', async (req, res) => {
   }
   const siteSlug = req.query.site || activeBuildingSite || await getSiteFromRequest(req);
   try {
-    res.json(await readSitePages(siteSlug));
+    // Les URLs de la médiathèque (/api/media/file/…) sont réécrites en /media/… :
+    // le site statique publié est autonome (les fichiers y sont copiés au déploiement).
+    res.json(media.rewriteMediaUrls(await readSitePages(siteSlug)));
   } catch (e) {
     sendError(res, "Impossible de lire les pages du site.", e);
   }

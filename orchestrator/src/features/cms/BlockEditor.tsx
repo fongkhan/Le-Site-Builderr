@@ -1,10 +1,75 @@
+import { useRef, useState } from 'react';
+import { uploadMedia } from '../../api/media';
+import { useToast } from '../../components/ui/ToastContext';
 import type { Block } from '../../types';
 
 interface BlockEditorProps {
   block: Block;
+  siteSlug: string;
   onChange: (field: string, value: unknown) => void;
   onNestedChange: (nestedField: string, index: number, field: string, value: unknown) => void;
   onArrayChange: (field: string, value: unknown[], immediate?: boolean) => void;
+}
+
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+
+// Champ image : URL libre OU téléversement dans la médiathèque du site (bouton 📤).
+function ImageField({ siteSlug, value, placeholder, onChange }: {
+  siteSlug: string;
+  value: string | undefined;
+  placeholder?: string;
+  onChange: (url: string) => void;
+}) {
+  const toast = useToast();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+
+  const handleFile = async (file: File | undefined) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast.error('Veuillez choisir un fichier image (PNG, JPEG, WebP…).');
+      return;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      toast.error('Image trop volumineuse (4 Mo maximum).');
+      return;
+    }
+    setUploading(true);
+    try {
+      const { url } = await uploadMedia(siteSlug, file);
+      onChange(url);
+      toast.success('Image téléversée dans la médiathèque.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Échec du téléversement.');
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+      <input
+        type="text"
+        className="input-text"
+        style={{ padding: 4, fontSize: '0.825rem', flex: 1 }}
+        placeholder={placeholder || 'URL de l’image ou 📤'}
+        value={value || ''}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <button
+        type="button"
+        className="btn btn-secondary"
+        style={{ padding: '4px 8px', fontSize: '0.8rem', whiteSpace: 'nowrap' }}
+        onClick={() => fileRef.current?.click()}
+        disabled={uploading}
+        title="Téléverser une image dans la médiathèque du site"
+      >
+        {uploading ? '…' : '📤'}
+      </button>
+      <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleFile(e.target.files?.[0])} />
+    </div>
+  );
 }
 
 // Gabarit d'un nouvel item par type de bloc (pour le bouton « + ajouter »).
@@ -17,7 +82,7 @@ const NEW_ITEM: Record<string, unknown> = {
 };
 
 // Champs d'édition rapide d'un bloc (affichés quand le bloc est déplié)
-export function BlockEditor({ block, onChange, onNestedChange, onArrayChange }: BlockEditorProps) {
+export function BlockEditor({ block, siteSlug, onChange, onNestedChange, onArrayChange }: BlockEditorProps) {
   const input = (value: string | undefined, set: (v: string) => void, placeholder = '') => (
     <input type="text" className="input-text" style={{ padding: 6, fontSize: '0.875rem' }} value={value || ''} placeholder={placeholder} onChange={(e) => set(e.target.value)} />
   );
@@ -70,8 +135,8 @@ export function BlockEditor({ block, onChange, onNestedChange, onArrayChange }: 
           <textarea className="input-text" style={{ padding: 6, fontSize: '0.875rem' }} value={block.subtitle || ''} onChange={(e) => onChange('subtitle', e.target.value)} />
           <label className="field-label">Texte du bouton</label>
           {input(block.ctaText, (v) => onChange('ctaText', v))}
-          <label className="field-label">Image de fond (URL)</label>
-          {input(block.backgroundImage, (v) => onChange('backgroundImage', v))}
+          <label className="field-label">Image de fond</label>
+          <ImageField siteSlug={siteSlug} value={block.backgroundImage} onChange={(v) => onChange('backgroundImage', v)} />
         </>
       )}
 
@@ -99,7 +164,7 @@ export function BlockEditor({ block, onChange, onNestedChange, onArrayChange }: 
               {itemHeader(`Produit ${i + 1}`, 'products', i)}
               <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Nom" value={prod.name} onChange={(e) => onNestedChange('products', i, 'name', e.target.value)} />
               <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Prix" value={prod.price} onChange={(e) => onNestedChange('products', i, 'price', e.target.value)} />
-              <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem' }} placeholder="Image (URL)" value={prod.image || ''} onChange={(e) => onNestedChange('products', i, 'image', e.target.value)} />
+              <ImageField siteSlug={siteSlug} value={prod.image} placeholder="Image du produit" onChange={(v) => onNestedChange('products', i, 'image', v)} />
             </div>
           ))}
           {addButton('Ajouter un produit', 'products')}
@@ -113,18 +178,18 @@ export function BlockEditor({ block, onChange, onNestedChange, onArrayChange }: 
           <label className="field-label" style={{ marginTop: 4 }}>Images (URL)</label>
           {block.images?.map((url, i) => (
             <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}>
-              <input
-                type="text"
-                className="input-text"
-                style={{ padding: 4, fontSize: '0.825rem', flex: 1 }}
-                placeholder="https://…"
-                value={url}
-                onChange={(e) => {
-                  const next = [...(block.images ?? [])];
-                  next[i] = e.target.value;
-                  onArrayChange('images', next);
-                }}
-              />
+              <div style={{ flex: 1 }}>
+                <ImageField
+                  siteSlug={siteSlug}
+                  value={url}
+                  placeholder="https://…"
+                  onChange={(v) => {
+                    const next = [...(block.images ?? [])];
+                    next[i] = v;
+                    onArrayChange('images', next);
+                  }}
+                />
+              </div>
               <button type="button" onClick={() => removeItem('images', i)} aria-label={`Supprimer l'image ${i + 1}`} style={{ background: 'none', border: 'none', color: 'var(--accent-rose)', cursor: 'pointer', fontSize: '0.85rem' }}>✕</button>
             </div>
           ))}
@@ -149,7 +214,7 @@ export function BlockEditor({ block, onChange, onNestedChange, onArrayChange }: 
               <textarea className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} value={testi.quote} onChange={(e) => onNestedChange('testimonials', i, 'quote', e.target.value)} />
               <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Auteur" value={testi.author} onChange={(e) => onNestedChange('testimonials', i, 'author', e.target.value)} />
               <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Rôle" value={testi.role} onChange={(e) => onNestedChange('testimonials', i, 'role', e.target.value)} />
-              <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem' }} placeholder="Avatar (URL)" value={testi.avatar} onChange={(e) => onNestedChange('testimonials', i, 'avatar', e.target.value)} />
+              <ImageField siteSlug={siteSlug} value={testi.avatar} placeholder="Avatar" onChange={(v) => onNestedChange('testimonials', i, 'avatar', v)} />
             </div>
           ))}
           {addButton('Ajouter un témoignage', 'testimonials')}
