@@ -122,6 +122,28 @@ En dev, le front proxifie `/api`, `/webhook`, `/preview`, `/admin` et `/_next` v
 
 ---
 
+## 🌍 Passer en production sur o2switch (API cPanel)
+
+Par défaut, tout est **simulé localement** (`HOSTING_DRIVER=simulation`) : domaine fictif, SSL fictif, publication dans `simulated_public_html/`. Pour publier **réellement** sur votre hébergement o2switch :
+
+1. **Créez un jeton API** dans votre cPanel : ▸ *Sécurité* ▸ **« Gérer les jetons d'API »** ▸ Créer. Copiez le jeton (affiché une seule fois). ⚠️ Ce jeton donne accès à votre hébergement : ne le committez jamais.
+2. **Configurez `server/.env`** :
+   ```bash
+   HOSTING_DRIVER=cpanel
+   CPANEL_HOST=votre-serveur.o2switch.net   # l'hôte de votre cPanel
+   CPANEL_USER=votre-identifiant
+   CPANEL_API_TOKEN=le-jeton-créé-en-1
+   CPANEL_ROOT_DOMAIN=mondomaine.fr         # parent des sous-domaines créés
+   ```
+3. **Redémarrez, puis testez** : Panel Admin ▸ encart **« Hébergement »** ▸ *Tester la connexion*.
+
+Ce que fait le mode cPanel :
+* à la **création d'un site** : le sous-domaine `<slug>.mondomaine.fr` est créé automatiquement (document root `public_html/<slug>`), et AutoSSL prend le relais pour le certificat (`sslStatus` passe de « pending » à « actif » après le premier déploiement couvert) ;
+* au **déploiement** : le build Astro est publié sur l'hébergement (archive → upload → extraction) *en plus* de l'aperçu local `/preview` qui continue de fonctionner ;
+* le jeton API n'apparaît **jamais** dans les logs, les erreurs ni les réponses HTTP.
+
+---
+
 ## 🧭 Parcours utilisateur
 
 **Client** : Connexion → « Mes sites » (ou onboarding direct s'il n'a aucun site) → Onboarding IA (description, fonctionnalités, inspiration) → le site est créé et rattaché à son compte → **Design** (tokens) → **Contenu** (blocs) → **Déploiement** (build + publication, logs en direct) → lien « Voir le site en ligne ».

@@ -54,6 +54,7 @@ async function login(email, password) {
   check('Anonyme : GET /internal/site-pages sans jeton -> 401', (await req('/internal/site-pages?site=boulangerie-artisanale')).status === 401);
   check('Anonyme : GET /api/config -> 401', (await req('/api/config')).status === 401);
   check('Anonyme : GET /api/sites/owners -> 401', (await req('/api/sites/owners')).status === 401);
+  check('Anonyme : GET /api/hosting/status -> 401', (await req('/api/hosting/status')).status === 401);
 }
 
 // ---- Client : uniquement ses sites ----
@@ -113,6 +114,16 @@ if (admin.token) {
 
 if (client.token) {
   check('Client : GET /api/sites/owners -> 403', (await req('/api/sites/owners', { token: client.token })).status === 403);
+  check('Client : GET /api/hosting/status -> 403', (await req('/api/hosting/status', { token: client.token })).status === 403);
+}
+
+// ---- Hébergement (admin only) ----
+if (admin.token) {
+  const hs = await req('/api/hosting/status', { token: admin.token });
+  check('Hébergement : status admin -> 200 avec driver', hs.status === 200 && typeof hs.json?.driver === 'string', JSON.stringify(hs.json?.driver));
+  check('Hébergement : status ne fuite jamais de jeton', !JSON.stringify(hs.json || {}).toLowerCase().includes('token'));
+  const ht = await req('/api/hosting/test', { method: 'POST', token: admin.token });
+  check('Hébergement : test admin -> ok en simulation', ht.status === 200 && ht.json?.ok === true, JSON.stringify(ht.json));
 }
 
 // ---- Robustesse : validation slug + confinement des chemins (Lot 1) ----

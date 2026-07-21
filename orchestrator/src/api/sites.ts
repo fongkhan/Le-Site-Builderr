@@ -10,6 +10,23 @@ export function fetchSiteOwners(): Promise<Record<string, string[]>> {
   return apiFetch<Record<string, string[]>>('/api/sites/owners');
 }
 
+// Hébergement (admin only) : driver actif (simulation | cpanel) et test de connexion
+export interface HostingStatus {
+  driver: 'simulation' | 'cpanel';
+  description: string;
+  host?: string;
+  user?: string;
+  rootDomain?: string;
+}
+
+export function fetchHostingStatus(): Promise<HostingStatus> {
+  return apiFetch<HostingStatus>('/api/hosting/status');
+}
+
+export function testHostingConnection(): Promise<{ ok: boolean; message?: string; error?: string }> {
+  return apiFetch('/api/hosting/test', { method: 'POST' });
+}
+
 export function createSite(input: { name: string; domain?: string; stack?: string; documentRoot?: string; repositoryPath?: string }): Promise<{ success: boolean; site: Site }> {
   return apiFetch('/api/sites', { method: 'POST', body: JSON.stringify(input) });
 }

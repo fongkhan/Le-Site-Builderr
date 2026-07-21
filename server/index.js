@@ -111,7 +111,7 @@ app.use('/webhook/rebuild', webhookLimiter);
 // Le parsing JSON ne s'applique QU'AUX routes Express custom : les routes déléguées à
 // Next/Payload (login, REST Payload, /admin) doivent recevoir leur flux de requête intact.
 const jsonParser = express.json({ limit: '10mb' });
-const EXPRESS_ROUTE_PREFIXES = ['/api/sites', '/api/site-pages', '/api/theme', '/api/config', '/api/onboard', '/api/build-status', '/webhook', '/internal'];
+const EXPRESS_ROUTE_PREFIXES = ['/api/sites', '/api/site-pages', '/api/theme', '/api/config', '/api/onboard', '/api/build-status', '/api/hosting', '/webhook', '/internal'];
 app.use((req, res, next) => {
   const handledByExpress = EXPRESS_ROUTE_PREFIXES.some(p => req.path === p || req.path.startsWith(p + '/'));
   if (!handledByExpress) return next();
@@ -1000,6 +1000,21 @@ app.post('/api/theme', auth.authenticate, auth.requireAuth, auth.requireSiteAcce
 });
 
 // Configuration et clés disponibles (booléens uniquement, jamais les clés elles-mêmes)
+// --- Hébergement (admin only) : état du driver et test de connexion cPanel ---
+// status() ne renvoie JAMAIS le jeton API (hôte/utilisateur/domaine racine seulement).
+app.get('/api/hosting/status', auth.authenticate, auth.requireAdmin, (req, res) => {
+  res.json(hosting.status());
+});
+
+app.post('/api/hosting/test', auth.authenticate, auth.requireAdmin, async (req, res) => {
+  try {
+    res.json(await hosting.testConnection());
+  } catch (e) {
+    // Message contrôlé par le driver (jamais le jeton) mais on reste générique côté HTTP
+    res.status(502).json({ ok: false, error: e.message });
+  }
+});
+
 app.get('/api/config', auth.authenticate, auth.requireAuth, (req, res) => {
   res.json({
     availableProviders: {
