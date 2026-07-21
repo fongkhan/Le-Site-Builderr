@@ -132,6 +132,24 @@ function sendError(res, publicMsg, err, status = 500) {
   if (!res.headersSent) res.status(status).json({ error: publicMsg });
 }
 
+// Journal d'audit des actions sensibles (collection audit_logs, admin only en lecture).
+// Fire-and-forget : l'audit n'échoue jamais une requête métier.
+function logAudit(req, action, target, details = '') {
+  if (!payloadInstance) return;
+  payloadInstance
+    .create({
+      collection: 'audit_logs',
+      data: {
+        action,
+        actor: (req && req.user && req.user.email) || 'système',
+        target: String(target || ''),
+        details: String(details || '').slice(0, 1000),
+      },
+      overrideAccess: true,
+    })
+    .catch((e) => console.error('Audit non enregistré :', e.message));
+}
+
 if (auth.DEV_NO_AUTH) {
   console.warn('⚠️⚠️⚠️  [Sécurité] DEV_NO_AUTH=true : TOUTES les requêtes sont traitées comme un admin. À ne JAMAIS utiliser en production. ⚠️⚠️⚠️');
 }
@@ -590,6 +608,7 @@ app.post('/api/sites', auth.authenticate, auth.requireAdmin, async (req, res) =>
     fs.writeFileSync(getSitePagesFile(slug), JSON.stringify(defaultPages, null, 2), 'utf-8');
     fs.writeFileSync(getSiteThemeFile(slug), JSON.stringify(defaultTheme, null, 2), 'utf-8');
 
+    logAudit(req, 'site.creation', slug, `nom=${name}`);
     res.json({ success: true, site: newSite });
   } catch (e) {
     sendError(res, "Impossible de créer le site.", e);
@@ -645,6 +664,7 @@ app.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (req,
       fs.rmSync(site.documentRoot, { recursive: true, force: true });
     }
 
+    logAudit(req, 'site.suppression', req.params.slug, `fichiers=${Boolean(deleteFiles)}`);
     res.json({ success: true, message: "Site supprimé avec succès." });
   } catch (e) {
     sendError(res, "Impossible de supprimer le site.", e);
@@ -735,6 +755,7 @@ app.post('/api/sites/import', auth.authenticate, auth.requireAdmin, async (req, 
     // Provision local files repository without Git
     provisionRepository(newSite.repositoryPath);
 
+    logAudit(req, 'site.import', slug);
     res.json({ success: true, site: newSite });
   } catch (e) {
     sendError(res, "Impossible d'importer le site.", e);
@@ -927,11 +948,146 @@ app.post('/api/sites/:slug/rollback', auth.authenticate, auth.requireAdmin, asyn
 
     updateSiteStatus(slug, 'active');
     fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] ROLLBACK : site "${slug}" restauré sur la release ${req.body.release}.\n`);
+    logAudit(req, 'site.rollback', slug, `release=${req.body.release}`);
     res.json({ success: true, release: req.body.release });
   } catch (e) {
     sendError(res, "Échec du retour à la version précédente.", e);
   }
 });
+
+// --- Export / import de site (admin only) ---
+
+// Export : archive zip streamée contenant meta.json, pages.json, theme.json et le
+// build déployé (dist/) s'il existe. Sert de sauvegarde ou de transfert.
+app.get('/api/sites/:slug/export', auth.authenticate, auth.requireAdmin, async (req, res) => {
+  try {
+    const site = await sitesStore.getSiteBySlug(req.params.slug);
+    if (!site) return res.status(404).json({ error: "Site non trouvé." });
+
+    const archiver = require('archiver');
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="site-${site.slug}.zip"`);
+
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    archive.on('error', (e) => { console.error('Erreur export zip :', e.message); res.destroy(); });
+    archive.pipe(res);
+
+    const meta = { slug: site.slug, name: site.name, domain: site.domain, stack: site.stack, exportedAt: new Date().toISOString() };
+    archive.append(JSON.stringify(meta, null, 2), { name: 'meta.json' });
+    archive.append(JSON.stringify(await readSitePages(site.slug), null, 2), { name: 'pages.json' });
+
+    const themeFile = getSiteThemeFile(site.slug);
+    if (fs.existsSync(themeFile)) {
+      archive.file(themeFile, { name: 'theme.json' });
+    }
+    if (site.documentRoot && fs.existsSync(site.documentRoot)) {
+      try {
+        assertSafePath(site.documentRoot, PUBLIC_HTML_DIR);
+        archive.directory(site.documentRoot, 'dist');
+      } catch {
+        // documentRoot hérité hors périmètre : on exporte sans le build
+      }
+    }
+    logAudit(req, 'site.export', site.slug);
+    await archive.finalize();
+  } catch (e) {
+    sendError(res, "Échec de l'export du site.", e);
+  }
+});
+
+// Import : recrée un site depuis une archive d'export. Corps = zip brut (bornés à 50 Mo).
+// Anti zip-slip : chaque entrée est filtrée (basename/segments contrôlés) et écrite
+// uniquement sous le documentRoot fraîchement créé via assertSafePath.
+app.post('/api/sites/import-archive',
+  auth.authenticate, auth.requireAdmin,
+  express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '50mb' }),
+  async (req, res) => {
+    try {
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+        return res.status(400).json({ error: "Archive manquante (envoyez le zip en corps de requête, Content-Type: application/zip)." });
+      }
+      const AdmZip = require('adm-zip');
+      let zip;
+      try {
+        zip = new AdmZip(req.body);
+      } catch {
+        return res.status(400).json({ error: "Archive illisible : zip invalide." });
+      }
+
+      const readEntry = (name) => {
+        const entry = zip.getEntry(name);
+        return entry ? zip.readAsText(entry) : null;
+      };
+
+      let meta;
+      try {
+        meta = JSON.parse(readEntry('meta.json') || '');
+      } catch {
+        return res.status(400).json({ error: "meta.json absent ou invalide dans l'archive." });
+      }
+
+      const baseSlug = generateSlug(meta.slug || meta.name || '');
+      if (!baseSlug) return res.status(400).json({ error: "Slug invalide dans meta.json." });
+      let slug = baseSlug;
+      let suffix = 2;
+      while (await sitesStore.getSiteBySlug(slug)) slug = `${baseSlug}-${suffix++}`;
+
+      const documentRoot = path.join(PUBLIC_HTML_DIR, slug).replace(/\\/g, '/');
+      const newSite = await sitesStore.createSite({
+        slug,
+        name: meta.name || slug,
+        domain: await resolveSiteDomain(slug),
+        documentRoot,
+        repositoryPath: "",
+        stack: meta.stack || "Astro SSG",
+        createdWithTool: true,
+        status: "draft",
+        sslStatus: initialSslStatus()
+      });
+
+      // Pages : fichier JSON de fallback (repris par le CMS puis persisté dans Payload
+      // à la première sauvegarde). Thème : validé avant écriture.
+      const pagesRaw = readEntry('pages.json');
+      if (pagesRaw) {
+        try {
+          const pagesData = JSON.parse(pagesRaw);
+          if (pagesData && Array.isArray(pagesData.docs)) {
+            fs.writeFileSync(getSitePagesFile(slug), JSON.stringify(pagesData, null, 2), 'utf-8');
+          }
+        } catch { /* pages illisibles : le site démarre avec les pages par défaut */ }
+      }
+      const themeRaw = readEntry('theme.json');
+      if (themeRaw) {
+        try {
+          const themeData = JSON.parse(themeRaw);
+          if (validateTheme(themeData && themeData.theme).ok) {
+            fs.writeFileSync(getSiteThemeFile(slug), JSON.stringify(themeData, null, 2), 'utf-8');
+          }
+        } catch { /* thème illisible : défaut au premier enregistrement */ }
+      }
+
+      // Build embarqué (dist/) : extraction contrôlée entrée par entrée
+      let extracted = 0;
+      for (const entry of zip.getEntries()) {
+        if (entry.isDirectory || !entry.entryName.startsWith('dist/')) continue;
+        const relative = entry.entryName.slice('dist/'.length);
+        // refuser toute entrée louche (segments vides, "..", chemins absolus)
+        const segments = relative.split('/');
+        if (segments.some((s) => s === '' || s === '.' || s === '..')) continue;
+        const dest = path.join(documentRoot, ...segments);
+        assertSafePath(dest, PUBLIC_HTML_DIR);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, entry.getData());
+        extracted++;
+      }
+      if (extracted > 0) updateSiteStatus(slug, 'active');
+
+      logAudit(req, 'site.import-archive', slug, `fichiers=${extracted}`);
+      res.json({ success: true, site: newSite, extractedFiles: extracted });
+    } catch (e) {
+      sendError(res, "Échec de l'import de l'archive.", e);
+    }
+  });
 
 // --- ENDPOINTS CMS ---
 
@@ -1124,6 +1280,29 @@ app.post('/api/hosting/test', auth.authenticate, auth.requireAdmin, async (req, 
   }
 });
 
+// --- Journal d'audit (admin only, lecture seule) ---
+app.get('/api/audit', auth.authenticate, auth.requireAdmin, async (req, res) => {
+  try {
+    if (!payloadInstance) return res.json([]);
+    const out = await payloadInstance.find({
+      collection: 'audit_logs',
+      sort: '-createdAt',
+      limit: 50,
+      depth: 0,
+      overrideAccess: true,
+    });
+    res.json(out.docs.map((d) => ({
+      action: d.action,
+      actor: d.actor,
+      target: d.target,
+      details: d.details,
+      createdAt: d.createdAt,
+    })));
+  } catch (e) {
+    sendError(res, "Impossible de lire le journal d'audit.", e);
+  }
+});
+
 app.get('/api/config', auth.authenticate, auth.requireAuth, (req, res) => {
   res.json({
     availableProviders: {
@@ -1235,6 +1414,7 @@ app.post('/api/onboard', auth.authenticate, auth.requireAuth, async (req, res) =
       }
     }
 
+    logAudit(req, 'site.creation-ia', finalSlug, `nom=${siteName}`);
     res.json({
       qualification: result.qualification,
       pages: result.pages || defaultPages,
@@ -1616,6 +1796,7 @@ app.post('/webhook/rebuild', auth.authenticate, auth.requireAuth, auth.requireSi
 
   // Mémoriser le déclencheur pour l'historique et les notifications
   buildTriggers.set(siteSlug, (req.user && req.user.email) || 'système');
+  logAudit(req, 'build.declenchement', siteSlug);
 
   // Créneau réservé : démarrage immédiat (startBuild consomme le verrou déjà posé)
   if (reserved) {

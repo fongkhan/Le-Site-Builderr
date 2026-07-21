@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { createSite, deleteSite, scanSites, fetchSiteOwners, fetchHostingStatus, testHostingConnection } from '../../api/sites';
-import type { HostingStatus } from '../../api/sites';
+import { createSite, deleteSite, scanSites, fetchSiteOwners, fetchHostingStatus, testHostingConnection, fetchAuditLog, importSiteArchive } from '../../api/sites';
+import type { HostingStatus, AuditEntry } from '../../api/sites';
+import { useRef } from 'react';
 import { useSites } from '../../state/SitesContext';
 import { useBuildStatus } from '../../hooks/useBuildStatus';
 import { useToast } from '../../components/ui/ToastContext';
@@ -73,6 +74,10 @@ export function AdminPanel() {
         onFiles={setFileManagerSite}
         onDelete={setSiteToDelete}
       />
+
+      <ImportArchivePanel onImported={refresh} />
+
+      <AuditPanel />
 
       {editSite && <EditSiteModal site={editSite} onClose={() => setEditSite(null)} onSaved={refresh} />}
       {fileManagerSite && <FileManagerModal site={fileManagerSite} onClose={() => setFileManagerSite(null)} />}
@@ -173,6 +178,101 @@ function HostingPanel() {
       <button className="btn btn-secondary" onClick={handleTest} disabled={testing} style={{ whiteSpace: 'nowrap' }}>
         {testing ? 'Test en cours…' : '🔌 Tester la connexion'}
       </button>
+    </div>
+  );
+}
+
+// Import d'une sauvegarde de site (archive zip produite par le bouton Exporter)
+function ImportArchivePanel({ onImported }: { onImported: () => void }) {
+  const toast = useToast();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+
+  const handleFile = async (file: File | undefined) => {
+    if (!file) return;
+    if (!file.name.endsWith('.zip')) {
+      toast.error('Choisissez une archive .zip exportée depuis le panel.');
+      return;
+    }
+    setImporting(true);
+    try {
+      const r = await importSiteArchive(file);
+      toast.success(`Site « ${r.site.name} » importé (${r.extractedFiles} fichier(s) de build restauré(s)).`);
+      onImported();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Échec de l'import de l'archive.");
+    } finally {
+      setImporting(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  return (
+    <div className="glass-panel" style={{ display: 'flex', alignItems: 'center', gap: 15, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: '1.5rem' }}>📦</span>
+      <div style={{ flex: 1, minWidth: 220 }}>
+        <strong>Restaurer une sauvegarde</strong>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: 4 }}>
+          Importez une archive exportée (bouton « Exporter » d'un site) : contenu, thème et build sont recréés sous un nouveau slug.
+        </p>
+      </div>
+      <button className="btn btn-secondary" onClick={() => fileRef.current?.click()} disabled={importing} style={{ whiteSpace: 'nowrap' }}>
+        {importing ? 'Import en cours…' : '📥 Importer une archive'}
+      </button>
+      <input ref={fileRef} type="file" accept=".zip,application/zip" style={{ display: 'none' }} onChange={(e) => handleFile(e.target.files?.[0])} />
+    </div>
+  );
+}
+
+// Journal d'audit : 50 dernières actions sensibles (lecture seule)
+function AuditPanel() {
+  const [entries, setEntries] = useState<AuditEntry[]>([]);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (open) fetchAuditLog().then(setEntries).catch(() => setEntries([]));
+  }, [open]);
+
+  return (
+    <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <button
+        onClick={() => setOpen(!open)}
+        style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '1.1rem', fontWeight: 700, padding: 0 }}
+        aria-expanded={open}
+      >
+        <span>🧾 Journal d'audit</span>
+        <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>{open ? '▲ replier' : '▼ afficher'}</span>
+      </button>
+      {open && (
+        entries.length === 0 ? (
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Aucune action enregistrée pour le moment.</p>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table className="table-cpanel" style={{ fontSize: '0.85rem' }}>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Action</th>
+                  <th>Par</th>
+                  <th>Cible</th>
+                  <th>Détails</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entries.map((e, i) => (
+                  <tr key={i}>
+                    <td style={{ whiteSpace: 'nowrap', color: 'var(--text-muted)' }}>{new Date(e.createdAt).toLocaleString()}</td>
+                    <td><span className="badge">{e.action}</span></td>
+                    <td>{e.actor || '—'}</td>
+                    <td><code>{e.target || '—'}</code></td>
+                    <td style={{ color: 'var(--text-muted)' }}>{e.details || ''}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      )}
     </div>
   );
 }
@@ -470,6 +570,9 @@ function SitesTable({ sites, owners, onEdit, onFiles, onDelete }: {
                         <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '0.8rem' }} onClick={() => onFiles(site)}>
                           📁 Fichiers
                         </button>
+                        <a href={`/api/sites/${site.slug}/export`} download className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '0.8rem', textDecoration: 'none' }} title="Télécharger une sauvegarde (contenu + thème + build)">
+                          📦 Exporter
+                        </a>
                         <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '0.8rem', borderColor: 'rgba(244,63,94,0.4)', color: 'var(--red-300)' }} onClick={() => onDelete(site)}>
                           Supprimer
                         </button>

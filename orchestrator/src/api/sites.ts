@@ -53,6 +53,34 @@ export function fetchBuildHistory(slug: string): Promise<BuildHistoryEntry[]> {
   return apiFetch<BuildHistoryEntry[]>(`/api/sites/${slug}/builds`);
 }
 
+// Journal d'audit (admin only) : 50 dernières actions sensibles
+export interface AuditEntry {
+  action: string;
+  actor: string | null;
+  target: string | null;
+  details: string | null;
+  createdAt: string;
+}
+
+export function fetchAuditLog(): Promise<AuditEntry[]> {
+  return apiFetch<AuditEntry[]>('/api/audit');
+}
+
+// Import d'une archive d'export de site (zip brut en corps de requête)
+export async function importSiteArchive(file: File): Promise<{ success: boolean; site: Site; extractedFiles: number }> {
+  const res = await fetch('/api/sites/import-archive', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/zip' },
+    body: file,
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error((data && data.error) || `Erreur HTTP ${res.status}`);
+  }
+  return data;
+}
+
 export function createSite(input: { name: string; domain?: string; stack?: string; documentRoot?: string; repositoryPath?: string }): Promise<{ success: boolean; site: Site }> {
   return apiFetch('/api/sites', { method: 'POST', body: JSON.stringify(input) });
 }

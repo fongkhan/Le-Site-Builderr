@@ -170,6 +170,27 @@ export default buildConfig({
             return data
           },
         ],
+        afterChange: [
+          // Journal d'audit : trace la création de comptes (la création passe par
+          // l'API REST Payload, hors des endpoints Express — d'où le hook ici).
+          ({ req, doc, operation }) => {
+            if (operation === 'create') {
+              req.payload
+                .create({
+                  collection: 'audit_logs',
+                  data: {
+                    action: 'utilisateur.creation',
+                    actor: (req?.user as any)?.email || 'système',
+                    target: doc.email,
+                    details: `roles=${(doc.roles || []).join(',')}`,
+                  },
+                  overrideAccess: true,
+                })
+                .catch(() => {}) // l'audit n'est jamais bloquant
+            }
+            return doc
+          },
+        ],
       },
       fields: [
         {
@@ -453,6 +474,28 @@ export default buildConfig({
           name: 'radius',
           type: 'text',
         },
+      ],
+    },
+    {
+      // Journal d'audit des actions sensibles (création/suppression de site, comptes,
+      // rollback, builds…). Écrit uniquement par le serveur (overrideAccess) ;
+      // lecture réservée aux admins, aucune modification possible.
+      slug: 'audit_logs',
+      admin: {
+        useAsTitle: 'action',
+        defaultColumns: ['action', 'actor', 'target', 'createdAt'],
+      },
+      access: {
+        read: isAdmin,
+        create: () => false,
+        update: () => false,
+        delete: isAdmin,
+      },
+      fields: [
+        { name: 'action', type: 'text', required: true, index: true },
+        { name: 'actor', type: 'text' },
+        { name: 'target', type: 'text' },
+        { name: 'details', type: 'textarea' },
       ],
     },
     {

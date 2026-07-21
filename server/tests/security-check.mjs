@@ -293,6 +293,55 @@ if (admin.token && client.token) {
   if (createdId) await req(`/api/users/${createdId}`, { method: 'DELETE', token: admin.token });
 }
 
+// ---- Audit & export/import (admin only) ----
+{
+  check('Audit : anonyme -> 401', (await req('/api/audit')).status === 401);
+  check('Export : anonyme -> 401', (await req('/api/sites/boulangerie-artisanale/export')).status === 401);
+  if (client.token) {
+    check('Audit : client -> 403', (await req('/api/audit', { token: client.token })).status === 403);
+    check('Export : client -> 403', (await req('/api/sites/boulangerie-artisanale/export', { token: client.token })).status === 403);
+  }
+  if (admin.token) {
+    const audit = await req('/api/audit', { token: admin.token });
+    check('Audit : admin -> 200 (tableau)', audit.status === 200 && Array.isArray(audit.json));
+
+    const exp = await fetch(`${BASE}/api/sites/boulangerie-artisanale/export`, { headers: { Origin: ORIGIN, Cookie: `payload-token=${admin.token}` } });
+    check('Export : admin -> 200 (zip)', exp.status === 200 && (exp.headers.get('content-type') || '').includes('zip'));
+    const zipBuf = Buffer.from(await exp.arrayBuffer());
+    check('Export : archive non vide', zipBuf.length > 200, `${zipBuf.length} octets`);
+
+    // Cycle complet : ré-import de l'archive exportée → nouveau site sous slug dédupliqué
+    const imp = await fetch(`${BASE}/api/sites/import-archive`, {
+      method: 'POST',
+      headers: { Origin: ORIGIN, Cookie: `payload-token=${admin.token}`, 'Content-Type': 'application/zip' },
+      body: zipBuf,
+    });
+    const impJson = await imp.json().catch(() => null);
+    check('Import : archive exportée ré-importée', imp.status === 200 && impJson?.success === true && impJson?.site?.slug?.startsWith('boulangerie-artisanale-'), JSON.stringify(impJson?.site?.slug));
+    if (impJson?.site?.slug) {
+      await req(`/api/sites/${impJson.site.slug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+    }
+
+    // Anti zip-slip : une archive aux entrées hostiles ne doit rien extraire hors périmètre
+    const { createRequire } = await import('node:module');
+    const AdmZip = createRequire(import.meta.url)('adm-zip');
+    const evil = new AdmZip();
+    evil.addFile('meta.json', Buffer.from(JSON.stringify({ slug: 'test-zip-slip', name: 'Zip Slip' })));
+    evil.addFile('dist/../../evil.txt', Buffer.from('owned'));
+    evil.addFile('dist/../evil2.txt', Buffer.from('owned'));
+    const slip = await fetch(`${BASE}/api/sites/import-archive`, {
+      method: 'POST',
+      headers: { Origin: ORIGIN, Cookie: `payload-token=${admin.token}`, 'Content-Type': 'application/zip' },
+      body: evil.toBuffer(),
+    });
+    const slipJson = await slip.json().catch(() => null);
+    check('Import : entrées zip-slip ignorées (0 fichier extrait)', slip.status === 200 && slipJson?.extractedFiles === 0, JSON.stringify(slipJson?.extractedFiles));
+    if (slipJson?.site?.slug) {
+      await req(`/api/sites/${slipJson.site.slug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+    }
+  }
+}
+
 // ---- Durcissement HTTP : en-têtes helmet ----
 {
   const r = await req('/api/config');
