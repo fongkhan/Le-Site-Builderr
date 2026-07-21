@@ -15,6 +15,18 @@ const sitesStore = require('./sites-store');
 const aiQuota = require('./ai-quota');
 const { generateSlug, assertSafePath } = require('./lib/paths');
 const { validateTheme } = require('./lib/theme');
+const { getHosting } = require('./lib/hosting');
+
+// Driver d'hébergement (simulation par défaut ; cpanel = publication réelle o2switch).
+// Config invalide → échec immédiat et explicite au boot plutôt qu'en plein déploiement.
+let hosting;
+try {
+  hosting = getHosting();
+} catch (hostingErr) {
+  console.error(`❌ [Hébergement] ${hostingErr.message}`);
+  process.exit(1);
+}
+console.log(`✔ [Hébergement] Driver actif : ${hosting.name}`);
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -1222,69 +1234,112 @@ async function startBuild(siteSlug) {
   };
 
   exec(cmd, { env: buildEnv }, (error, stdout, stderr) => {
-    activeBuildingSite = null;
-    buildStatus.buildingSite = null;
-
-    if (error) {
-      console.error(`Erreur de build : ${error.message}`);
-      fs.appendFileSync(LOGS_FILE, `\n[${new Date().toLocaleTimeString()}] ERREUR DE BUILD :\n${error.message}\n${stderr}\n`);
-      buildStatus.status = "error";
-      buildStatus.error = error.message;
-      updateSiteStatus(siteSlug, 'error');
-    } else {
-      fs.appendFileSync(LOGS_FILE, `\n[${new Date().toLocaleTimeString()}] RÉSULTAT DU BUILD ASTRO :\n${stdout}\n`);
-      fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] Astro compilé. Déploiement atomique vers ${site.documentRoot}...\n`);
-
-      // Déploiement atomique : on ne détruit JAMAIS le site live avant qu'une copie
-      // complète soit prête (copie dans .tmp puis bascule par rename, avec rollback).
-      const siteDestDir = site.documentRoot;
-      const tmpDir = siteDestDir + '.tmp-' + siteSlug;
-      const oldDir = siteDestDir + '.old-' + siteSlug;
-      try {
-        // Défensif : ne rien détruire hors périmètre (site aux données héritées)
-        assertSafePath(siteDestDir, PUBLIC_HTML_DIR);
-        // Garde : ne pas déployer un build sans sortie exploitable (dist vide malgré exit 0)
-        if (!fs.existsSync(DIST_DIR) || !fs.existsSync(path.join(DIST_DIR, 'index.html'))) {
-          throw new Error("Build sans sortie exploitable (dist/index.html absent) : déploiement annulé, site actuel préservé.");
-        }
-        // 1. Copier le nouveau contenu à côté (même volume → rename atomique ensuite)
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-        fs.mkdirSync(tmpDir, { recursive: true });
-        fs.cpSync(DIST_DIR, tmpDir, { recursive: true, force: true });
-        // 2. Bascule : écarter l'ancien, promouvoir le nouveau, supprimer l'ancien
-        fs.rmSync(oldDir, { recursive: true, force: true });
-        if (fs.existsSync(siteDestDir)) fs.renameSync(siteDestDir, oldDir);
-        fs.renameSync(tmpDir, siteDestDir);
-        fs.rmSync(oldDir, { recursive: true, force: true });
-
-        fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] DÉPLOIEMENT SUCCÈS : Fichiers synchronisés vers ${siteDestDir} !\n`);
-        buildStatus.status = "success";
-        buildStatus.lastCompleted = new Date().toLocaleString();
-        updateSiteStatus(siteSlug, 'active');
-      } catch (deployError) {
-        console.error(`Erreur de déploiement : ${deployError.message}`);
-        // Rollback : si la cible a été écartée mais pas remplacée, la restaurer
-        try {
-          if (!fs.existsSync(siteDestDir) && fs.existsSync(oldDir)) fs.renameSync(oldDir, siteDestDir);
-        } catch (rollbackErr) {
-          console.error('Échec du rollback de déploiement :', rollbackErr.message);
-        }
-        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
-        fs.appendFileSync(LOGS_FILE, `\n[${new Date().toLocaleTimeString()}] ERREUR DE DÉPLOIEMENT :\n${deployError.message}\n`);
-        buildStatus.status = "error";
-        buildStatus.error = deployError.message;
+    // Le traitement du résultat est async (publication distante éventuelle) mais le
+    // point de sortie reste UNIQUE : libération des verrous dans le finally.
+    handleBuildResult(siteSlug, site, error, stdout, stderr)
+      .catch((e) => {
+        console.error('Erreur inattendue de post-build :', e.message);
+        buildStatus.status = 'error';
+        buildStatus.error = 'Erreur interne de déploiement.';
         updateSiteStatus(siteSlug, 'error');
-      }
-    }
-
-    // Point de sortie unique : libérer les verrous puis enchaîner sur la file
-    if (fs.existsSync(LOCK_FILE)) {
-      fs.unlinkSync(LOCK_FILE);
-    }
-    buildStatus.inProgress = false;
-    buildLockHeld = false;
-    drainQueue();
+      })
+      .finally(() => {
+        if (fs.existsSync(LOCK_FILE)) {
+          fs.unlinkSync(LOCK_FILE);
+        }
+        buildStatus.inProgress = false;
+        buildLockHeld = false;
+        drainQueue();
+      });
   });
+}
+
+async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
+  activeBuildingSite = null;
+  buildStatus.buildingSite = null;
+
+  if (error) {
+    console.error(`Erreur de build : ${error.message}`);
+    fs.appendFileSync(LOGS_FILE, `\n[${new Date().toLocaleTimeString()}] ERREUR DE BUILD :\n${error.message}\n${stderr}\n`);
+    buildStatus.status = "error";
+    buildStatus.error = error.message;
+    updateSiteStatus(siteSlug, 'error');
+    return;
+  }
+
+  fs.appendFileSync(LOGS_FILE, `\n[${new Date().toLocaleTimeString()}] RÉSULTAT DU BUILD ASTRO :\n${stdout}\n`);
+  fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] Astro compilé. Déploiement atomique vers ${site.documentRoot}...\n`);
+
+  // Déploiement atomique LOCAL : sert l'aperçu (/preview) et constitue la publication
+  // en mode simulation. On ne détruit JAMAIS le site live avant qu'une copie complète
+  // soit prête (copie dans .tmp puis bascule par rename, avec rollback).
+  const siteDestDir = site.documentRoot;
+  const tmpDir = siteDestDir + '.tmp-' + siteSlug;
+  const oldDir = siteDestDir + '.old-' + siteSlug;
+  try {
+    // Défensif : ne rien détruire hors périmètre (site aux données héritées)
+    assertSafePath(siteDestDir, PUBLIC_HTML_DIR);
+    // Garde : ne pas déployer un build sans sortie exploitable (dist vide malgré exit 0)
+    if (!fs.existsSync(DIST_DIR) || !fs.existsSync(path.join(DIST_DIR, 'index.html'))) {
+      throw new Error("Build sans sortie exploitable (dist/index.html absent) : déploiement annulé, site actuel préservé.");
+    }
+    // 1. Copier le nouveau contenu à côté (même volume → rename atomique ensuite)
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.cpSync(DIST_DIR, tmpDir, { recursive: true, force: true });
+    // 2. Bascule : écarter l'ancien, promouvoir le nouveau, supprimer l'ancien
+    fs.rmSync(oldDir, { recursive: true, force: true });
+    if (fs.existsSync(siteDestDir)) fs.renameSync(siteDestDir, oldDir);
+    fs.renameSync(tmpDir, siteDestDir);
+    fs.rmSync(oldDir, { recursive: true, force: true });
+
+    fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] DÉPLOIEMENT LOCAL SUCCÈS : Fichiers synchronisés vers ${siteDestDir} !\n`);
+  } catch (deployError) {
+    console.error(`Erreur de déploiement : ${deployError.message}`);
+    // Rollback : si la cible a été écartée mais pas remplacée, la restaurer
+    try {
+      if (!fs.existsSync(siteDestDir) && fs.existsSync(oldDir)) fs.renameSync(oldDir, siteDestDir);
+    } catch (rollbackErr) {
+      console.error('Échec du rollback de déploiement :', rollbackErr.message);
+    }
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    fs.appendFileSync(LOGS_FILE, `\n[${new Date().toLocaleTimeString()}] ERREUR DE DÉPLOIEMENT :\n${deployError.message}\n`);
+    buildStatus.status = "error";
+    buildStatus.error = deployError.message;
+    updateSiteStatus(siteSlug, 'error');
+    return;
+  }
+
+  // Publication DISTANTE (mode cpanel uniquement ; no-op en simulation) : zip du dist,
+  // upload et extraction sur l'hébergement o2switch, puis rafraîchissement du statut
+  // SSL réel (AutoSSL). En cas d'échec distant, l'aperçu local reste intact mais le
+  // build est marqué en erreur : en mode cpanel, l'intention est la mise en ligne.
+  if (hosting.isRemote) {
+    try {
+      fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] Publication cPanel vers public_html/${siteSlug}...\n`);
+      await hosting.publish(siteSlug, DIST_DIR);
+      fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] PUBLICATION cPanel SUCCÈS (https://${site.domain}).\n`);
+      try {
+        const ssl = await hosting.getSslStatus(site.domain);
+        await sitesStore.updateSite(siteSlug, { sslStatus: ssl });
+        fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] Statut SSL (AutoSSL) : ${ssl}.\n`);
+      } catch (sslErr) {
+        // Non bloquant : le SSL AutoSSL peut mettre du temps, on garde le statut actuel
+        fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] Statut SSL indisponible : ${sslErr.message}\n`);
+      }
+    } catch (remoteErr) {
+      console.error(`Erreur de publication cPanel : ${remoteErr.message}`);
+      fs.appendFileSync(LOGS_FILE, `\n[${new Date().toLocaleTimeString()}] ERREUR DE PUBLICATION cPanel :\n${remoteErr.message}\n`);
+      buildStatus.status = "error";
+      buildStatus.error = `Publication cPanel échouée : ${remoteErr.message}`;
+      updateSiteStatus(siteSlug, 'error');
+      return;
+    }
+  }
+
+  buildStatus.status = "success";
+  buildStatus.lastCompleted = new Date().toLocaleString();
+  updateSiteStatus(siteSlug, 'active');
 }
 
 app.post('/webhook/rebuild', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site), async (req, res) => {
