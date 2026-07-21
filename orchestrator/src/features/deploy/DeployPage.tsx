@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
-import { triggerRebuild, fetchReleases, rollbackRelease } from '../../api/sites';
-import type { Release } from '../../api/sites';
+import { triggerRebuild, fetchReleases, rollbackRelease, fetchBuildHistory } from '../../api/sites';
+import type { Release, BuildHistoryEntry } from '../../api/sites';
 import { useAuth } from '../../auth/AuthContext';
 import { useBuildStatus } from '../../hooks/useBuildStatus';
 import { useSites } from '../../state/SitesContext';
@@ -141,7 +141,39 @@ export function DeployPage() {
           {buildStatus.logs || 'Console initialisée. En attente de build…'}
           <div ref={logsEndRef} />
         </div>
+        <BuildHistoryPanel siteSlug={site.slug} buildingThisSite={buildingThisSite} />
         <ReleasesPanel siteSlug={site.slug} buildingThisSite={buildingThisSite} />
+      </div>
+    </div>
+  );
+}
+
+// Historique des 10 derniers builds du site (admin et propriétaire).
+function BuildHistoryPanel({ siteSlug, buildingThisSite }: { siteSlug: string; buildingThisSite: boolean }) {
+  const [items, setItems] = useState<BuildHistoryEntry[]>([]);
+
+  useEffect(() => {
+    if (!buildingThisSite) {
+      fetchBuildHistory(siteSlug).then(setItems).catch(() => setItems([]));
+    }
+  }, [siteSlug, buildingThisSite]);
+
+  if (items.length === 0) return null;
+
+  return (
+    <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: 12 }}>
+      <h4 style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: 8 }}>📜 Historique des builds</h4>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {items.map((b, i) => (
+          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, fontSize: '0.8rem', padding: '4px 8px', borderRadius: 4, background: 'rgba(255,255,255,0.02)' }}>
+            <span style={{ color: b.status === 'success' ? 'var(--accent-emerald)' : 'var(--accent-rose)', fontWeight: 700 }}>
+              {b.status === 'success' ? '✅ Succès' : '❌ Échec'}
+            </span>
+            <span style={{ color: 'var(--text-muted)' }}>{new Date(b.createdAt).toLocaleString()}</span>
+            <span style={{ color: 'var(--text-muted)' }}>{b.durationMs != null ? `${Math.round(b.durationMs / 1000)} s` : '—'}</span>
+            <span style={{ color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>{b.triggeredBy || '—'}</span>
+          </div>
+        ))}
       </div>
     </div>
   );

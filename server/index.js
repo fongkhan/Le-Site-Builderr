@@ -524,22 +524,28 @@ app.get('/api/sites', auth.authenticate, auth.requireAuth, async (req, res) => {
   }
 });
 
+// Carte { slug: [emails] } des propriétaires de sites (jointure users.sites → slug).
+// Partagée entre l'endpoint owners et les notifications de fin de build.
+async function getSiteOwnersMap() {
+  if (!payloadInstance) return {};
+  // depth:1 peuple la relation users.sites (on récupère le slug de chaque site)
+  const usersRes = await payloadInstance.find({ collection: 'users', depth: 1, limit: 1000, overrideAccess: true });
+  const owners = {};
+  for (const u of usersRes.docs) {
+    for (const site of (u.sites || [])) {
+      const slug = site && typeof site === 'object' ? site.slug : null;
+      if (!slug) continue;
+      (owners[slug] ||= []).push(u.email);
+    }
+  }
+  return owners;
+}
+
 // Propriétaires de chaque site (admin only) : { slug: [emails] }. Déclaré AVANT toute
 // route paramétrée /api/sites/:xxx pour éviter toute collision de matching Express.
 app.get('/api/sites/owners', auth.authenticate, auth.requireAdmin, async (req, res) => {
   try {
-    if (!payloadInstance) return res.json({});
-    // depth:1 peuple la relation users.sites (on récupère le slug de chaque site)
-    const usersRes = await payloadInstance.find({ collection: 'users', depth: 1, limit: 1000, overrideAccess: true });
-    const owners = {};
-    for (const u of usersRes.docs) {
-      for (const site of (u.sites || [])) {
-        const slug = site && typeof site === 'object' ? site.slug : null;
-        if (!slug) continue;
-        (owners[slug] ||= []).push(u.email);
-      }
-    }
-    res.json(owners);
+    res.json(await getSiteOwnersMap());
   } catch (e) {
     sendError(res, "Impossible de lire les propriétaires des sites.", e);
   }
@@ -840,6 +846,32 @@ app.get('/api/sites/:slug/releases', auth.authenticate, auth.requireAdmin, async
     res.json(releases.listReleases(RELEASES_DIR, req.params.slug));
   } catch (e) {
     sendError(res, "Impossible de lister les versions.", e);
+  }
+});
+
+// Historique des builds d'un site (admin ou propriétaire — ownership vérifié).
+app.get('/api/sites/:slug/builds', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.params.slug), async (req, res) => {
+  try {
+    const site = await sitesStore.getSiteBySlug(req.params.slug);
+    if (!site) return res.status(404).json({ error: "Site non trouvé." });
+    if (!payloadInstance) return res.json([]);
+    const siteDoc = await sitesStore.getOrCreatePayloadDoc(req.params.slug);
+    const out = await payloadInstance.find({
+      collection: 'builds',
+      where: { site: { equals: siteDoc.id } },
+      sort: '-createdAt',
+      limit: 10,
+      depth: 0,
+      overrideAccess: true,
+    });
+    res.json(out.docs.map((b) => ({
+      status: b.status,
+      durationMs: b.durationMs ?? null,
+      triggeredBy: b.triggeredBy ?? null,
+      createdAt: b.createdAt,
+    })));
+  } catch (e) {
+    sendError(res, "Impossible de lire l'historique des builds.", e);
   }
 });
 
@@ -1220,6 +1252,11 @@ let buildStatus = {
 // le verrou physique orphelin est nettoyé au boot ci-dessous.
 const buildQueue = [];
 
+// Déclencheur (email) et heure de départ des builds, pour l'historique (collection
+// « builds ») et les notifications. Volatiles comme la file : perte au restart OK.
+const buildTriggers = new Map();
+const buildStartTimes = new Map();
+
 // Verrou mémoire synchrone : posé AVANT tout await pour fermer la fenêtre TOCTOU
 // (deux webhooks concurrents ne peuvent plus démarrer deux builds simultanés).
 let buildLockHeld = false;
@@ -1285,6 +1322,61 @@ function drainQueue() {
 // Lance un build : pose le verrou, exécute astro build, copie vers documentRoot,
 // puis libère le verrou et draine la file — quel que soit le résultat.
 // Précondition : buildLockHeld doit déjà être true (réservé par le webhook ou drainQueue).
+// Clôture d'un build (succès ou erreur) : historisation en base + notification email
+// aux propriétaires. Entièrement non bloquant : un échec ici n'affecte jamais le build.
+function finalizeBuild(siteSlug, siteName, status, excerpt) {
+  const startedAt = buildStartTimes.get(siteSlug);
+  const durationMs = startedAt ? Date.now() - startedAt : null;
+  const triggeredBy = buildTriggers.get(siteSlug) || 'système';
+  buildStartTimes.delete(siteSlug);
+  buildTriggers.delete(siteSlug);
+
+  (async () => {
+    if (!payloadInstance) return;
+    const siteDoc = await sitesStore.getOrCreatePayloadDoc(siteSlug);
+    await payloadInstance.create({
+      collection: 'builds',
+      data: { site: siteDoc.id, status, durationMs, triggeredBy, logExcerpt: String(excerpt || '').slice(-1500) },
+      overrideAccess: true,
+    });
+  })().catch((e) => console.error('Historique de build non enregistré :', e.message));
+
+  notifyBuildResult(siteSlug, siteName, status, durationMs).catch((e) =>
+    console.error('Notification de build non envoyée :', e.message)
+  );
+}
+
+// Email de fin de build aux propriétaires du site. Même convention que le reset de
+// mot de passe : sans SMTP_HOST, la notification est écrite dans la console (dev).
+let mailTransport = null;
+async function notifyBuildResult(siteSlug, siteName, status, durationMs) {
+  const owners = await getSiteOwnersMap();
+  const emails = owners[siteSlug] || [];
+  if (emails.length === 0) return;
+
+  const ok = status === 'success';
+  const seconds = durationMs ? Math.round(durationMs / 1000) : null;
+  const subject = `${ok ? '✅ Déploiement réussi' : '❌ Déploiement échoué'} — ${siteName}`;
+  const text = ok
+    ? `Le site « ${siteName} » a été déployé avec succès${seconds ? ` en ${seconds} s` : ''}.\nAperçu : /preview/${siteSlug}/index.html`
+    : `Le déploiement du site « ${siteName} » a échoué${seconds ? ` après ${seconds} s` : ''}.\nConsultez les logs de build dans l'orchestrateur pour le détail.`;
+
+  if (!process.env.SMTP_HOST) {
+    console.log(`📧 [Dev] ${subject} → ${emails.join(', ')}`);
+    return;
+  }
+  if (!mailTransport) {
+    const nodemailer = require('nodemailer');
+    mailTransport = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number.parseInt(process.env.SMTP_PORT ?? '', 10) || 587,
+      auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } : undefined,
+    });
+  }
+  const from = process.env.EMAIL_FROM || 'noreply@localhost';
+  await Promise.all(emails.map((to) => mailTransport.sendMail({ from, to, subject, text })));
+}
+
 async function startBuild(siteSlug) {
   buildLockHeld = true; // défensif (idempotent) : garantit le verrou même si l'appelant l'a oublié
   const site = await sitesStore.getSiteBySlug(siteSlug);
@@ -1302,6 +1394,7 @@ async function startBuild(siteSlug) {
   buildStatus.status = "running";
   buildStatus.error = null;
   buildStatus.buildingSite = siteSlug;
+  buildStartTimes.set(siteSlug, Date.now());
 
   fs.writeFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] DÉMARRAGE : Build du site "${site.name}" (${siteSlug})...\n`, 'utf-8');
 
@@ -1370,6 +1463,7 @@ async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
     buildStatus.status = "error";
     buildStatus.error = error.message;
     updateSiteStatus(siteSlug, 'error');
+    finalizeBuild(siteSlug, site.name, 'error', `${error.message}\n${stderr || ''}`);
     return;
   }
 
@@ -1422,6 +1516,7 @@ async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
     buildStatus.status = "error";
     buildStatus.error = deployError.message;
     updateSiteStatus(siteSlug, 'error');
+    finalizeBuild(siteSlug, site.name, 'error', deployError.message);
     return;
   }
 
@@ -1448,6 +1543,7 @@ async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
       buildStatus.status = "error";
       buildStatus.error = `Publication cPanel échouée : ${remoteErr.message}`;
       updateSiteStatus(siteSlug, 'error');
+      finalizeBuild(siteSlug, site.name, 'error', remoteErr.message);
       return;
     }
   }
@@ -1455,6 +1551,7 @@ async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
   buildStatus.status = "success";
   buildStatus.lastCompleted = new Date().toLocaleString();
   updateSiteStatus(siteSlug, 'active');
+  finalizeBuild(siteSlug, site.name, 'success', stdout);
 }
 
 app.post('/webhook/rebuild', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site), async (req, res) => {
@@ -1475,6 +1572,9 @@ app.post('/webhook/rebuild', auth.authenticate, auth.requireAuth, auth.requireSi
     if (reserved) buildLockHeld = false; // libérer la réservation prise à tort
     return res.status(404).json({ error: "Site non trouvé dans la base cPanel." });
   }
+
+  // Mémoriser le déclencheur pour l'historique et les notifications
+  buildTriggers.set(siteSlug, (req.user && req.user.email) || 'système');
 
   // Créneau réservé : démarrage immédiat (startBuild consomme le verrou déjà posé)
   if (reserved) {

@@ -117,6 +117,18 @@ if (client.token) {
   check('Client : GET /api/hosting/status -> 403', (await req('/api/hosting/status', { token: client.token })).status === 403);
 }
 
+// ---- Historique des builds (admin ou propriétaire) ----
+{
+  check('Builds : anonyme -> 401', (await req('/api/sites/boulangerie-artisanale/builds')).status === 401);
+  if (client.token) {
+    check('Builds : client sur SON site -> 200 (tableau)', await (async () => {
+      const r = await req('/api/sites/boulangerie-artisanale/builds', { token: client.token });
+      return r.status === 200 && Array.isArray(r.json);
+    })());
+    check("Builds : client sur un autre site -> 403", (await req('/api/sites/site-dun-autre/builds', { token: client.token })).status === 403);
+  }
+}
+
 // ---- Releases & rollback (admin only) ----
 {
   check('Releases : anonyme -> 401', (await req('/api/sites/boulangerie-artisanale/releases')).status === 401);

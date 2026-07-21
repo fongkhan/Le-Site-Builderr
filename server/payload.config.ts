@@ -445,6 +445,43 @@ export default buildConfig({
         },
       ],
     },
+    {
+      // Historique des builds/déploiements. Écrit uniquement par le serveur
+      // (overrideAccess) ; lecture panel réservée aux admins — les clients y
+      // accèdent via l'endpoint Express /api/sites/:slug/builds (ownership vérifié).
+      slug: 'builds',
+      admin: {
+        useAsTitle: 'id',
+        defaultColumns: ['site', 'status', 'durationMs', 'triggeredBy', 'createdAt'],
+      },
+      access: {
+        read: isAdmin,
+        create: () => false,
+        update: () => false,
+        delete: isAdmin,
+      },
+      fields: [
+        {
+          name: 'site',
+          type: 'relationship',
+          relationTo: 'payload_sites',
+          required: true,
+          index: true,
+        },
+        {
+          name: 'status',
+          type: 'select',
+          options: [
+            { label: 'Succès', value: 'success' },
+            { label: 'Erreur', value: 'error' },
+          ],
+          required: true,
+        },
+        { name: 'durationMs', type: 'number' },
+        { name: 'triggeredBy', type: 'text' },
+        { name: 'logExcerpt', type: 'textarea' },
+      ],
+    },
   ],
   typescript: {
     outputFile: path.resolve(dirname, 'payload-types.ts'),

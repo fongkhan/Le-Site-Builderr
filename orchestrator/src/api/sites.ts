@@ -41,6 +41,18 @@ export function rollbackRelease(slug: string, release: string): Promise<{ succes
   return apiFetch(`/api/sites/${slug}/rollback`, { method: 'POST', body: JSON.stringify({ release }) });
 }
 
+// Historique des builds d'un site (admin ou propriétaire)
+export interface BuildHistoryEntry {
+  status: 'success' | 'error';
+  durationMs: number | null;
+  triggeredBy: string | null;
+  createdAt: string;
+}
+
+export function fetchBuildHistory(slug: string): Promise<BuildHistoryEntry[]> {
+  return apiFetch<BuildHistoryEntry[]>(`/api/sites/${slug}/builds`);
+}
+
 export function createSite(input: { name: string; domain?: string; stack?: string; documentRoot?: string; repositoryPath?: string }): Promise<{ success: boolean; site: Site }> {
   return apiFetch('/api/sites', { method: 'POST', body: JSON.stringify(input) });
 }
