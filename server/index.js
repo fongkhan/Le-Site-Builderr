@@ -223,6 +223,28 @@ const PUBLIC_HTML_DIR = path.resolve(__dirname, '../simulated_public_html');
 const REPOSITORIES_DIR = path.resolve(path.dirname(PUBLIC_HTML_DIR), 'repositories');
 const LOCK_FILE = path.join(ASTRO_PROJECT_DIR, 'build.lock');
 
+// Domaine attribué à un site à sa création.
+// - simulation : motif fictif historique <slug>.o2switch.site (ou domaine fourni).
+// - cpanel : sous-domaine RÉEL <slug>.<rootDomain> créé via l'API (idempotent) ; un
+//   domaine explicitement fourni est respecté (domaine custom déjà configuré côté
+//   cPanel), sauf s'il s'agit du motif fictif hérité d'un scan.
+async function resolveSiteDomain(slug, explicitDomain) {
+  const isFakePattern = typeof explicitDomain === 'string' && explicitDomain.endsWith('.o2switch.site');
+  if (explicitDomain && !isFakePattern) return explicitDomain;
+  if (!hosting.isRemote) return explicitDomain || `${slug}.o2switch.site`;
+  const { domain, created } = await hosting.ensureSubdomain(slug);
+  if (created) {
+    fs.appendFileSync(LOGS_FILE, `[${new Date().toLocaleTimeString()}] Sous-domaine cPanel créé : ${domain}\n`);
+  }
+  return domain;
+}
+
+// SSL initial : fictivement actif en simulation ; en cpanel, AutoSSL doit d'abord
+// émettre le certificat (statut rafraîchi au premier déploiement).
+function initialSslStatus() {
+  return hosting.isRemote ? 'pending' : 'active';
+}
+
 // Confine documentRoot/repositoryPath fournis par le client sous leurs racines autorisées.
 // Renvoie true si OK, sinon envoie une 400 et renvoie false (l'appelant doit s'arrêter).
 // Un chemin arbitraire (ex. "/etc") deviendrait la cible de fs.rmSync au build/delete.
@@ -536,13 +558,13 @@ app.post('/api/sites', auth.authenticate, auth.requireAdmin, async (req, res) =>
     const newSite = await sitesStore.createSite({
       slug,
       name,
-      domain: domain || `${slug}.o2switch.site`,
+      domain: await resolveSiteDomain(slug, domain),
       documentRoot: (documentRoot || path.join(PUBLIC_HTML_DIR, slug)).replace(/\\/g, '/'),
       repositoryPath: (repositoryPath || "").replace(/\\/g, '/'),
       stack: stack || "Astro SSG",
       createdWithTool: true,
       status: "draft",
-      sslStatus: "active"
+      sslStatus: initialSslStatus()
     });
 
     // Provision local files repository without Git
@@ -685,13 +707,13 @@ app.post('/api/sites/import', auth.authenticate, auth.requireAdmin, async (req, 
     const newSite = await sitesStore.createSite({
       slug,
       name: name || slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
-      domain: domain || `${slug}.o2switch.site`,
+      domain: await resolveSiteDomain(slug, domain),
       documentRoot: (documentRoot || path.join(PUBLIC_HTML_DIR, slug)).replace(/\\/g, '/'),
       repositoryPath: (repositoryPath || "").replace(/\\/g, '/'),
       stack: stack || "Plain HTML (Importé)",
       createdWithTool: false,
       status: "active",
-      sslStatus: "active"
+      sslStatus: initialSslStatus()
     });
 
     // Provision local files repository without Git
@@ -1039,14 +1061,14 @@ app.post('/api/onboard', auth.authenticate, auth.requireAuth, async (req, res) =
     const newSite = await sitesStore.createSite({
       slug: finalSlug,
       name: siteName,
-      domain: `${finalSlug}.o2switch.site`,
+      domain: await resolveSiteDomain(finalSlug),
       documentRoot: path.join(PUBLIC_HTML_DIR, finalSlug).replace(/\\/g, '/'),
       repositoryPath: path.join(path.dirname(PUBLIC_HTML_DIR), 'repositories', finalSlug).replace(/\\/g, '/'), // Setup backend repository under repositories/
       stack: result.qualification.stack_requirements.need_medusajs ? "Astro Hybride + Payload + Medusa" :
              result.qualification.stack_requirements.need_payload ? "Astro SSG + Payload CMS" : "Astro SSG",
       createdWithTool: true,
       status: "draft",
-      sslStatus: "active"
+      sslStatus: initialSslStatus()
     });
 
     // Provision local files repository without Git
