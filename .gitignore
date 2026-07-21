@@ -21,6 +21,7 @@ yarn-debug.log*
 yarn-error.log*
 server/data/build-logs.txt
 server/data/site_*
+server/data/stats_*
 server/data/sites.json
 server/data/ai-usage.json
 server/uploads/

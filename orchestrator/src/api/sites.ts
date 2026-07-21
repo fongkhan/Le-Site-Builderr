@@ -53,6 +53,16 @@ export function fetchBuildHistory(slug: string): Promise<BuildHistoryEntry[]> {
   return apiFetch<BuildHistoryEntry[]>(`/api/sites/${slug}/builds`);
 }
 
+// Statistiques de visites (admin ou propriétaire) : total + série jour par jour
+export interface SiteStats {
+  total: number;
+  days: { date: string; count: number }[];
+}
+
+export function fetchSiteStats(slug: string, days = 30): Promise<SiteStats> {
+  return apiFetch<SiteStats>(`/api/sites/${slug}/stats?days=${days}`);
+}
+
 // Journal d'audit (admin only) : 50 dernières actions sensibles
 export interface AuditEntry {
   action: string;

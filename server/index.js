@@ -19,6 +19,7 @@ const { getHosting } = require('./lib/hosting');
 const releases = require('./lib/releases');
 const seo = require('./lib/seo');
 const media = require('./lib/media');
+const stats = require('./lib/stats');
 
 // Driver d'hébergement (simulation par défaut ; cpanel = publication réelle o2switch).
 // Config invalide → échec immédiat et explicite au boot plutôt qu'en plein déploiement.
@@ -109,14 +110,18 @@ const loginLimiter = makeLimiter(
 const onboardLimiter = makeLimiter(30, "Trop de générations demandées. Réessayez dans quelques minutes.");
 const webhookLimiter = makeLimiter(60, "Trop de requêtes de build reçues. Réessayez plus tard.");
 const contactLimiter = makeLimiter(10, "Trop de messages envoyés. Réessayez dans quelques minutes.");
+// Beacon de stats : public, appelé une fois par page vue. Plafond généreux (une même
+// IP peut porter plusieurs visiteurs derrière un NAT) mais borné contre le flood.
+const statsLimiter = makeLimiter(120, "Trop de requêtes.");
 app.use('/api/users/login', loginLimiter); // route servie par Next → le limiter next() vers elle
 app.use('/api/onboard', onboardLimiter);
 app.use('/webhook/rebuild', webhookLimiter);
 app.use('/api/contact', contactLimiter);
+app.use('/api/stats', statsLimiter);
 // Le parsing JSON ne s'applique QU'AUX routes Express custom : les routes déléguées à
 // Next/Payload (login, REST Payload, /admin) doivent recevoir leur flux de requête intact.
 const jsonParser = express.json({ limit: '10mb' });
-const EXPRESS_ROUTE_PREFIXES = ['/api/sites', '/api/site-pages', '/api/theme', '/api/config', '/api/onboard', '/api/build-status', '/api/hosting', '/api/contact', '/api/ai', '/webhook', '/internal'];
+const EXPRESS_ROUTE_PREFIXES = ['/api/sites', '/api/site-pages', '/api/theme', '/api/config', '/api/onboard', '/api/build-status', '/api/hosting', '/api/contact', '/api/ai', '/api/stats', '/webhook', '/internal'];
 app.use((req, res, next) => {
   const handledByExpress = EXPRESS_ROUTE_PREFIXES.some(p => req.path === p || req.path.startsWith(p + '/'));
   if (!handledByExpress) return next();
@@ -304,6 +309,10 @@ function getSitePagesFile(slug) {
 
 function getSiteThemeFile(slug) {
   return path.join(DATA_DIR, `site_${slug}_theme.json`);
+}
+
+function getSiteStatsFile(slug) {
+  return path.join(DATA_DIR, `stats_${slug}.json`);
 }
 
 function provisionRepository(repoPath) {
@@ -1365,6 +1374,47 @@ app.post('/api/contact/:slug', cors(), async (req, res) => {
     res.json({ success: true });
   } catch (e) {
     sendError(res, "Impossible d'envoyer le message pour le moment.", e);
+  }
+});
+
+// --- Statistiques de visites (anonymes, sans cookie ni IP stockée) ---
+
+// Beacon : appelé par le site publié à chaque page vue. PUBLIC (le site déployé n'a pas
+// d'auth), rate-limité, et volontairement silencieux : on ne renvoie jamais d'erreur qui
+// pourrait casser la page, et on ne stocke qu'un compteur agrégé par jour.
+app.post('/api/stats/hit/:slug', cors(), async (req, res) => {
+  // Répond 204 quoi qu'il arrive : le beacon ne doit jamais perturber le site.
+  res.status(204).end();
+  try {
+    const site = await sitesStore.getSiteBySlug(req.params.slug);
+    if (!site) return; // slug inconnu → on ignore silencieusement
+    // On construit le chemin depuis le slug canonique stocké, jamais depuis l'entrée brute.
+    const file = getSiteStatsFile(site.slug);
+    // Lecture + écriture synchrones, sans await entre les deux : atomique vis-à-vis des
+    // autres requêtes (boucle d'évènements mono-thread) → pas de compteur perdu.
+    let data = {};
+    try { data = JSON.parse(fs.readFileSync(file, 'utf-8')); } catch { data = {}; }
+    fs.writeFileSync(file, JSON.stringify(stats.recordHit(data)), 'utf-8');
+  } catch (e) {
+    // Jamais d'exception remontée : le status a déjà été envoyé.
+    console.error('⚠️ [Stats] hit ignoré —', (e && e.message) || e);
+  }
+});
+
+// Lecture des stats d'un site : réservée au propriétaire du site (ou admin).
+app.get('/api/sites/:slug/stats', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.params.slug), async (req, res) => {
+  try {
+    const site = await sitesStore.getSiteBySlug(req.params.slug);
+    if (!site) return res.status(404).json({ error: "Site non trouvé." });
+    let data = {};
+    try { data = JSON.parse(fs.readFileSync(getSiteStatsFile(site.slug), 'utf-8')); } catch { data = {}; }
+    const days = Math.min(Math.max(Number.parseInt(req.query.days, 10) || 30, 1), 90);
+    res.json({
+      total: stats.total(data),
+      days: stats.lastNDays(data, days),
+    });
+  } catch (e) {
+    sendError(res, "Impossible de lire les statistiques du site.", e);
   }
 });
 

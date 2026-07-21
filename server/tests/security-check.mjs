@@ -332,6 +332,26 @@ if (admin.token && client.token) {
   check('Contact : honeypot rempli -> 200 silencieux', hp.status === 200 && hp.json?.success === true);
 }
 
+// ---- Statistiques de visites : beacon public borné, lecture par ownership ----
+{
+  // Le beacon est public (appelé par le site déployé, sans auth) et répond 204 même
+  // pour un slug inconnu — jamais d'erreur qui casserait la page.
+  const hit = await req('/api/stats/hit/boulangerie-artisanale', { method: 'POST' });
+  check('Stats : beacon public -> 204', hit.status === 204, `HTTP ${hit.status}`);
+  const hitUnknown = await req('/api/stats/hit/site-inexistant', { method: 'POST' });
+  check('Stats : beacon slug inconnu -> 204 silencieux', hitUnknown.status === 204, `HTTP ${hitUnknown.status}`);
+
+  // La lecture des stats est réservée au propriétaire / admin.
+  check('Stats : lecture anonyme -> 401', (await req('/api/sites/boulangerie-artisanale/stats')).status === 401);
+  if (client.token) {
+    const own = await req('/api/sites/boulangerie-artisanale/stats', { token: client.token });
+    check('Stats : propriétaire lit ses stats -> 200', own.status === 200 && typeof own.json?.total === 'number' && Array.isArray(own.json?.days), `HTTP ${own.status}`);
+    check("Stats : client sur un autre site -> 403", (await req('/api/sites/site-dun-autre/stats', { token: client.token })).status === 403);
+    // Le beacon vient d'incrémenter le compteur du jour : le total doit être positif.
+    check('Stats : le hit a été comptabilisé (total > 0)', (own.json?.total ?? 0) > 0, `total=${own.json?.total}`);
+  }
+}
+
 // ---- Audit & export/import (admin only) ----
 {
   check('Audit : anonyme -> 401', (await req('/api/audit')).status === 401);

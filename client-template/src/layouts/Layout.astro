@@ -18,6 +18,12 @@ interface Props {
 const { title = "Mon Site Composable", description, pages = [], currentSlug } = Astro.props;
 // La page « home » vit à la racine ; les autres sous /<slug>/
 const pageHref = (slug: string) => (slug === 'home' ? '/' : `/${slug}/`);
+
+// Beacon de statistiques (anonyme) : injecté au build. Vide si le site est construit
+// hors contexte (template autonome) → aucun script émis.
+const statsSlug = process.env.ACTIVE_SITE_SLUG || '';
+const statsApiBase = process.env.PUBLIC_API_BASE || '';
+const beaconUrl = statsSlug ? `${statsApiBase}/api/stats/hit/${statsSlug}` : '';
 ---
 
 <!doctype html>
@@ -44,6 +50,20 @@ const pageHref = (slug: string) => (slug === 'home' ? '/' : `/${slug}/`);
 			</nav>
 		)}
 		<slot />
+		{beaconUrl && (
+			<script define:vars={{ beaconUrl }}>
+				// Statistique de visite anonyme : une page vue = un envoi, sans cookie ni
+				// donnée personnelle. Chargé après le rendu, échoue en silence : ne casse
+				// jamais la page publiée.
+				try {
+					if (navigator.sendBeacon) {
+						navigator.sendBeacon(beaconUrl);
+					} else {
+						fetch(beaconUrl, { method: 'POST', keepalive: true }).catch(() => {});
+					}
+				} catch (e) { /* ignoré volontairement */ }
+			</script>
+		)}
 	</body>
 </html>
 
