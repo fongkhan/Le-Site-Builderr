@@ -1091,6 +1091,50 @@ app.post('/api/sites/import-archive',
     }
   });
 
+// Duplication d'un site (admin) : crée un jumeau (contenu + thème) sous un nouveau slug.
+app.post('/api/sites/:slug/duplicate', auth.authenticate, auth.requireAdmin, async (req, res) => {
+  try {
+    const source = await sitesStore.getSiteBySlug(req.params.slug);
+    if (!source) return res.status(404).json({ error: "Site source introuvable." });
+
+    const base = generateSlug(`${source.slug}-copie`) || `${source.slug}-copie`;
+    let slug = base;
+    let suffix = 2;
+    while (await sitesStore.getSiteBySlug(slug)) slug = `${base}-${suffix++}`;
+
+    const documentRoot = path.join(PUBLIC_HTML_DIR, slug).replace(/\\/g, '/');
+    const newSite = await sitesStore.createSite({
+      slug,
+      name: `${source.name} (copie)`,
+      domain: await resolveSiteDomain(slug),
+      documentRoot,
+      repositoryPath: "",
+      stack: source.stack,
+      createdWithTool: true,
+      status: "draft",
+      sslStatus: initialSslStatus()
+    });
+
+    // Contenu + thème copiés via le fallback JSON (repris par le CMS, persisté dans
+    // Payload à la première sauvegarde) — même approche que l'import d'archive.
+    try {
+      const pagesData = await readSitePages(source.slug);
+      if (pagesData && Array.isArray(pagesData.docs)) {
+        fs.writeFileSync(getSitePagesFile(slug), JSON.stringify(pagesData, null, 2), 'utf-8');
+      }
+    } catch { /* pages source illisibles : le jumeau démarre avec les pages par défaut */ }
+    const srcTheme = getSiteThemeFile(source.slug);
+    if (fs.existsSync(srcTheme)) {
+      try { fs.copyFileSync(srcTheme, getSiteThemeFile(slug)); } catch { /* thème par défaut sinon */ }
+    }
+
+    logAudit(req, 'site.duplication', slug, `source=${source.slug}`);
+    res.json({ success: true, site: newSite });
+  } catch (e) {
+    sendError(res, "Échec de la duplication du site.", e);
+  }
+});
+
 // --- ENDPOINTS CMS ---
 
 // Pages (le paramètre ?site= est obligatoire, l'accès est vérifié par ownership)

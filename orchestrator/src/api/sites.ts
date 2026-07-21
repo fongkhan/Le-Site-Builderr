@@ -66,6 +66,11 @@ export function fetchAuditLog(): Promise<AuditEntry[]> {
   return apiFetch<AuditEntry[]>('/api/audit');
 }
 
+// Duplication d'un site (admin) : crée un jumeau sous un nouveau slug
+export function duplicateSite(slug: string): Promise<{ success: boolean; site: Site }> {
+  return apiFetch(`/api/sites/${slug}/duplicate`, { method: 'POST' });
+}
+
 // Import d'une archive d'export de site (zip brut en corps de requête)
 export async function importSiteArchive(file: File): Promise<{ success: boolean; site: Site; extractedFiles: number }> {
   const res = await fetch('/api/sites/import-archive', {

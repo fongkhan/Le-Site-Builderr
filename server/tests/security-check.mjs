@@ -164,6 +164,21 @@ if (client.token) {
   }
 }
 
+// ---- Duplication de site (admin only) ----
+{
+  check('Duplicate : anonyme -> 401', (await req('/api/sites/boulangerie-artisanale/duplicate', { method: 'POST' })).status === 401);
+  if (client.token) {
+    check('Duplicate : client -> 403', (await req('/api/sites/boulangerie-artisanale/duplicate', { method: 'POST', token: client.token })).status === 403);
+  }
+  if (admin.token) {
+    const dup = await req('/api/sites/boulangerie-artisanale/duplicate', { method: 'POST', token: admin.token });
+    check('Duplicate : admin -> crée un jumeau sous nouveau slug', dup.status === 200 && dup.json?.site?.slug?.startsWith('boulangerie-artisanale-copie'), JSON.stringify(dup.json?.site?.slug));
+    if (dup.json?.site?.slug) {
+      await req(`/api/sites/${dup.json.site.slug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+    }
+  }
+}
+
 // ---- Releases & rollback (admin only) ----
 {
   check('Releases : anonyme -> 401', (await req('/api/sites/boulangerie-artisanale/releases')).status === 401);

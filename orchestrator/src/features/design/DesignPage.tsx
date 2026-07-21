@@ -17,6 +17,15 @@ const COLOR_FIELDS: { key: keyof Theme['colors']; label: string }[] = [
   { key: 'text', label: 'Couleur du texte' },
 ];
 
+// Palettes prêtes à l'emploi (couleurs hex + polices de l'allowlist + radius valide)
+const THEME_PRESETS: { name: string; theme: Theme }[] = [
+  { name: '🥖 Artisan chaleureux', theme: { colors: { primary: '#8B5A2B', secondary: '#F5E6CC', background: '#FAF7F2', text: '#2D241E' }, fonts: { heading: 'Playfair Display', body: 'Inter' }, radius: '12px' } },
+  { name: '🌿 Nature apaisante', theme: { colors: { primary: '#4A6B4A', secondary: '#DCE8D5', background: '#F7FAF5', text: '#26332A' }, fonts: { heading: 'Lora', body: 'Karla' }, radius: '10px' } },
+  { name: '🖤 Élégance sombre', theme: { colors: { primary: '#C9A227', secondary: '#2A2A2A', background: '#111111', text: '#F2F2F2' }, fonts: { heading: 'Outfit', body: 'Inter' }, radius: '4px' } },
+  { name: '🌊 Moderne océan', theme: { colors: { primary: '#2C6E7F', secondary: '#D6ECF0', background: '#FBFDFE', text: '#1C2B30' }, fonts: { heading: 'Space Grotesk', body: 'DM Sans' }, radius: '14px' } },
+  { name: '🌸 Doux pastel', theme: { colors: { primary: '#B5638A', secondary: '#F5E1EC', background: '#FFF9FC', text: '#3A2A33' }, fonts: { heading: 'Outfit', body: 'Plus Jakarta Sans' }, radius: '16px' } },
+];
+
 export function DesignPage() {
   const { site } = useOutletContext<{ site: Site }>();
   const navigate = useNavigate();
@@ -96,6 +105,28 @@ export function DesignPage() {
               </span>
             )}
           </h3>
+
+          <div>
+            <label className="field-label">Palettes prêtes à l'emploi</label>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {THEME_PRESETS.map((preset) => (
+                <button
+                  key={preset.name}
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ padding: '5px 10px', fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: 6 }}
+                  onClick={() => setTheme(structuredClone(preset.theme))}
+                  title={`Appliquer la palette « ${preset.name} »`}
+                >
+                  <span style={{ display: 'inline-flex', gap: 2 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: 2, background: preset.theme.colors.primary, display: 'inline-block' }} />
+                    <span style={{ width: 10, height: 10, borderRadius: 2, background: preset.theme.colors.secondary, display: 'inline-block' }} />
+                  </span>
+                  {preset.name}
+                </button>
+              ))}
+            </div>
+          </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
             {COLOR_FIELDS.map(({ key, label }) => (

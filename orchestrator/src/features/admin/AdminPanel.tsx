@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { createSite, deleteSite, scanSites, fetchSiteOwners, fetchHostingStatus, testHostingConnection, fetchAuditLog, importSiteArchive } from '../../api/sites';
+import { createSite, deleteSite, scanSites, fetchSiteOwners, fetchHostingStatus, testHostingConnection, fetchAuditLog, importSiteArchive, duplicateSite } from '../../api/sites';
 import type { HostingStatus, AuditEntry } from '../../api/sites';
 import { useRef } from 'react';
 import { useSites } from '../../state/SitesContext';
@@ -17,6 +17,17 @@ import type { ScannedSite, Site } from '../../types';
 export function AdminPanel() {
   const { sites, refresh } = useSites();
   const buildStatus = useBuildStatus();
+  const toast = useToast();
+
+  const handleDuplicate = async (site: Site) => {
+    try {
+      const r = await duplicateSite(site.slug);
+      toast.success(`Site dupliqué : « ${r.site.name} » (slug ${r.site.slug}).`);
+      refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Échec de la duplication.');
+    }
+  };
 
   const [editSite, setEditSite] = useState<Site | null>(null);
   const [fileManagerSite, setFileManagerSite] = useState<Site | null>(null);
@@ -73,6 +84,7 @@ export function AdminPanel() {
         onEdit={setEditSite}
         onFiles={setFileManagerSite}
         onDelete={setSiteToDelete}
+        onDuplicate={handleDuplicate}
       />
 
       <ImportArchivePanel onImported={refresh} />
@@ -462,18 +474,45 @@ const STATUS_DISPLAY: Record<string, { label: string; color: string }> = {
   draft: { label: 'Brouillon', color: 'var(--amber-400)' },
 };
 
-function SitesTable({ sites, owners, onEdit, onFiles, onDelete }: {
+function SitesTable({ sites, owners, onEdit, onFiles, onDelete, onDuplicate }: {
   sites: Site[];
   owners: Record<string, string[]>;
   onEdit: (s: Site) => void;
   onFiles: (s: Site) => void;
   onDelete: (s: Site) => void;
+  onDuplicate: (s: Site) => void;
 }) {
+  const [query, setQuery] = useState('');
+  const [sortKey, setSortKey] = useState<'name' | 'status' | 'stack'>('name');
+
+  const q = query.trim().toLowerCase();
+  const filtered = sites
+    .filter((s) => !q || s.name.toLowerCase().includes(q) || s.slug.toLowerCase().includes(q) || (s.domain || '').toLowerCase().includes(q))
+    .slice()
+    .sort((a, b) => String(a[sortKey] || '').localeCompare(String(b[sortKey] || ''), 'fr'));
+
   return (
     <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      <h3 style={{ fontSize: '1.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: 10 }}>
-        🌐 Sites hébergés (structure cPanel)
-      </h3>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', borderBottom: '1px solid var(--border-color)', paddingBottom: 10 }}>
+        <h3 style={{ fontSize: '1.5rem' }}>🌐 Sites hébergés (structure cPanel)</h3>
+        {sites.length > 0 && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input
+              type="search"
+              className="input-text"
+              style={{ padding: '6px 10px', fontSize: '0.85rem', minWidth: 180 }}
+              placeholder="🔍 Rechercher un site…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+            <select className="select-dark" value={sortKey} onChange={(e) => setSortKey(e.target.value as typeof sortKey)} style={{ padding: '6px 10px', fontSize: '0.85rem' }}>
+              <option value="name">Trier par nom</option>
+              <option value="status">Trier par statut</option>
+              <option value="stack">Trier par stack</option>
+            </select>
+          </div>
+        )}
+      </div>
 
       {sites.length === 0 ? (
         <EmptyState
@@ -486,6 +525,8 @@ function SitesTable({ sites, owners, onEdit, onFiles, onDelete }: {
             </Link>
           }
         />
+      ) : filtered.length === 0 ? (
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Aucun site ne correspond à « {query} ».</p>
       ) : (
         <div style={{ overflowX: 'auto' }}>
           <table className="table-cpanel">
@@ -503,7 +544,7 @@ function SitesTable({ sites, owners, onEdit, onFiles, onDelete }: {
               </tr>
             </thead>
             <tbody>
-              {sites.map((site) => {
+              {filtered.map((site) => {
                 const status = STATUS_DISPLAY[site.status] ?? STATUS_DISPLAY.draft;
                 const deployed = site.status === 'active';
                 return (
@@ -573,6 +614,9 @@ function SitesTable({ sites, owners, onEdit, onFiles, onDelete }: {
                         <a href={`/api/sites/${site.slug}/export`} download className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '0.8rem', textDecoration: 'none' }} title="Télécharger une sauvegarde (contenu + thème + build)">
                           📦 Exporter
                         </a>
+                        <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '0.8rem' }} onClick={() => onDuplicate(site)} title="Créer un jumeau de ce site (contenu + thème)">
+                          ⧉ Dupliquer
+                        </button>
                         <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '0.8rem', borderColor: 'rgba(244,63,94,0.4)', color: 'var(--red-300)' }} onClick={() => onDelete(site)}>
                           Supprimer
                         </button>
