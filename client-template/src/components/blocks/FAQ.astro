@@ -12,7 +12,22 @@ interface Props {
 }
 
 const { data } = Astro.props;
+
+// Données structurées FAQPage (schema.org) : aide les moteurs à afficher les
+// questions/réponses en résultat enrichi. Sérialisation sûre (échappe « < »).
+const faqEntities = (data.items || [])
+  .filter((i) => i && i.question && i.answer)
+  .map((i) => ({
+    '@type': 'Question',
+    name: i.question,
+    acceptedAnswer: { '@type': 'Answer', text: i.answer },
+  }));
+const faqLd = faqEntities.length
+  ? JSON.stringify({ '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: faqEntities }).replace(/</g, '\\u003c')
+  : null;
 ---
+
+{faqLd && <script type="application/ld+json" set:html={faqLd} />}
 
 <section class="faq-section">
   <div class="container">

@@ -1922,7 +1922,10 @@ async function startBuild(siteSlug) {
     ...process.env,
     ACTIVE_SITE_SLUG: siteSlug,
     BUILD_TOKEN,
-    ORCHESTRATOR_URL: `http://127.0.0.1:${process.env.PORT || 4000}`
+    ORCHESTRATOR_URL: `http://127.0.0.1:${process.env.PORT || 4000}`,
+    // Métadonnées du site pour les balises Open Graph et les données structurées (JSON-LD)
+    PUBLIC_SITE_NAME: (site && site.name) || siteSlug,
+    PUBLIC_SITE_URL: site && site.domain ? `https://${site.domain}` : '',
   };
 
   exec(cmd, { env: buildEnv }, (error, stdout, stderr) => {

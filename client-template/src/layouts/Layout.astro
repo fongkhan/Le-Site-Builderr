@@ -24,6 +24,18 @@ const pageHref = (slug: string) => (slug === 'home' ? '/' : `/${slug}/`);
 const statsSlug = process.env.ACTIVE_SITE_SLUG || '';
 const statsApiBase = process.env.PUBLIC_API_BASE || '';
 const beaconUrl = statsSlug ? `${statsApiBase}/api/stats/hit/${statsSlug}` : '';
+
+// Métadonnées de partage (Open Graph / Twitter) + URL canonique. PUBLIC_SITE_NAME/URL
+// sont injectés au build ; en construction autonome, on retombe sur des valeurs neutres.
+const siteName = process.env.PUBLIC_SITE_NAME || title;
+const siteUrl = process.env.PUBLIC_SITE_URL || '';
+// Le site est publié à la racine de son (sous-)domaine ; on retire le préfixe de base
+// « /sites/<slug> » utilisé par le build pour obtenir l'URL publique réelle.
+const activeSlug = process.env.ACTIVE_SITE_SLUG || '';
+const basePrefix = activeSlug ? `/sites/${activeSlug}` : '';
+let relPath = Astro.url.pathname;
+if (basePrefix && relPath.startsWith(basePrefix)) relPath = relPath.slice(basePrefix.length) || '/';
+const canonicalUrl = siteUrl ? siteUrl.replace(/\/$/, '') + relPath : '';
 ---
 
 <!doctype html>
@@ -35,7 +47,18 @@ const beaconUrl = statsSlug ? `${statsApiBase}/api/stats/hit/${statsSlug}` : '';
 		<meta name="generator" content={Astro.generator} />
 		<title>{title}</title>
 		{description && <meta name="description" content={description} />}
-		
+		{canonicalUrl && <link rel="canonical" href={canonicalUrl} />}
+
+		<!-- Partage social (Open Graph / Twitter) -->
+		<meta property="og:type" content="website" />
+		<meta property="og:title" content={title} />
+		{description && <meta property="og:description" content={description} />}
+		<meta property="og:site_name" content={siteName} />
+		{canonicalUrl && <meta property="og:url" content={canonicalUrl} />}
+		<meta name="twitter:card" content="summary" />
+		<meta name="twitter:title" content={title} />
+		{description && <meta name="twitter:description" content={description} />}
+
 		<!-- Google Fonts pré-chargées pour correspondre aux palettes IA -->
 		<link rel="preconnect" href="https://fonts.googleapis.com">
 		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
