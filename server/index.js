@@ -576,6 +576,31 @@ async function getSiteOwnersMap() {
   return owners;
 }
 
+// Emails des propriétaires d'UN seul site. Contrairement à getSiteOwnersMap (qui balaie
+// toute la collection users), on filtre côté base sur la relation users.sites → adapté
+// aux chemins fréquents/publics (formulaire de contact, notifications de build) sans
+// charger tous les comptes. Lecture sans effet de bord (jamais de création implicite).
+async function getSiteOwners(slug) {
+  if (!payloadInstance || !slug) return [];
+  const siteRes = await payloadInstance.find({
+    collection: 'payload_sites',
+    where: { slug: { equals: slug } },
+    limit: 1,
+    depth: 0,
+    overrideAccess: true,
+  });
+  const siteId = siteRes.docs[0]?.id;
+  if (!siteId) return [];
+  const usersRes = await payloadInstance.find({
+    collection: 'users',
+    where: { sites: { in: [siteId] } },
+    depth: 0,
+    limit: 1000,
+    overrideAccess: true,
+  });
+  return usersRes.docs.map((u) => u.email).filter(Boolean);
+}
+
 // Propriétaires de chaque site (admin only) : { slug: [emails] }. Déclaré AVANT toute
 // route paramétrée /api/sites/:xxx pour éviter toute collision de matching Express.
 app.get('/api/sites/owners', auth.authenticate, auth.requireAdmin, async (req, res) => {
@@ -1356,8 +1381,7 @@ app.post('/api/contact/:slug', cors(), async (req, res) => {
       return res.status(400).json({ error: "Nom, email valide et message sont requis." });
     }
 
-    const owners = await getSiteOwnersMap();
-    const recipients = owners[site.slug] || [];
+    const recipients = await getSiteOwners(site.slug);
     const subject = `📬 Nouveau message via ${site.name}`;
     const text =
       `Nouveau message reçu depuis le site « ${site.name} » (${site.domain}) :\n\n` +
@@ -1722,8 +1746,7 @@ async function sendMail(recipients, subject, text) {
 
 // Email de fin de build aux propriétaires du site.
 async function notifyBuildResult(siteSlug, siteName, status, durationMs) {
-  const owners = await getSiteOwnersMap();
-  const emails = owners[siteSlug] || [];
+  const emails = await getSiteOwners(siteSlug);
   if (emails.length === 0) return;
 
   const ok = status === 'success';
