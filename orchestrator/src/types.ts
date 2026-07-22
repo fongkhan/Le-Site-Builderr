@@ -51,6 +51,8 @@ export interface Block {
     ctaText: string;
     isPopular: boolean;
   }[];
+  // Bloc appointment (demande de rendez-vous)
+  services?: { name: string }[];
   // Bloc info (infos pratiques)
   address?: string;
   phone?: string;

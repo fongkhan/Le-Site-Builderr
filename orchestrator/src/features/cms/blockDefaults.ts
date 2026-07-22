@@ -62,6 +62,16 @@ export const BLOCK_DEFAULTS: Record<string, Block> = {
     subtitle: 'Une question, un projet ? Écrivez-nous, nous répondons rapidement.',
     ctaText: 'Envoyer le message',
   },
+  appointment: {
+    blockType: 'appointment',
+    title: 'Prendre rendez-vous',
+    subtitle: 'Choisissez une prestation et proposez un créneau : nous vous confirmons rapidement.',
+    ctaText: 'Demander un rendez-vous',
+    services: [
+      { name: 'Prestation 1' },
+      { name: 'Prestation 2' },
+    ],
+  },
   info: {
     blockType: 'info',
     title: 'Infos pratiques',
@@ -86,6 +96,7 @@ export const BLOCK_LABELS: Record<string, string> = {
   faq: 'FAQ',
   pricing: 'Tarifs',
   contact: 'Contact',
+  appointment: 'Prise de RDV',
   info: 'Infos pratiques',
   footer: 'Pied de page',
 };
