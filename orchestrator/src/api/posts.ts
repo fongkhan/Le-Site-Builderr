@@ -6,6 +6,7 @@ export interface Post {
   excerpt?: string;
   coverImage?: string;
   body?: string;
+  tags?: string;
   publishedAt?: string | null;
   status?: 'draft' | 'published' | string;
 }

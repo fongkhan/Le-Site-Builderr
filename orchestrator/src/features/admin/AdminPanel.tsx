@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { createSite, deleteSite, scanSites, fetchSiteOwners, fetchHostingStatus, testHostingConnection, fetchAuditLog, importSiteArchive, duplicateSite } from '../../api/sites';
-import type { HostingStatus, AuditEntry } from '../../api/sites';
+import { createSite, deleteSite, scanSites, fetchSiteOwners, fetchHostingStatus, testHostingConnection, fetchAuditLog, importSiteArchive, duplicateSite, fetchAdminOverview, fetchBackups, createBackup } from '../../api/sites';
+import type { HostingStatus, AuditEntry, AdminOverview, BackupsInfo } from '../../api/sites';
 import { useRef } from 'react';
 import { useSites } from '../../state/SitesContext';
 import { useBuildStatus } from '../../hooks/useBuildStatus';
@@ -67,7 +67,11 @@ export function AdminPanel() {
 
       <StatsBanner sitesCount={sites.length} buildInProgress={buildStatus.inProgress} buildingSite={buildStatus.buildingSite} queueLength={buildStatus.queueLength ?? 0} />
 
+      <OverviewPanel />
+
       <HostingPanel />
+
+      <BackupsPanel />
 
       <div className="grid-2col">
         <ScanPanel
@@ -139,6 +143,132 @@ function StatsBanner({ sitesCount, buildInProgress, buildingSite, queueLength }:
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+// Mini-courbe SVG (sparkline) des visites, sans dépendance.
+function Sparkline({ series }: { series: number[] }) {
+  const w = 90, h = 22;
+  const max = Math.max(1, ...series);
+  const n = series.length;
+  if (n === 0) return <svg width={w} height={h} />;
+  const pts = series.map((v, i) => `${(i / Math.max(1, n - 1)) * w},${h - (v / max) * (h - 2) - 1}`).join(' ');
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" aria-hidden="true">
+      <polyline points={pts} fill="none" stroke="var(--accent-emerald)" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// Vue d'ensemble multi-sites : totaux + tableau (statut, domaine/SSL, visites 30 j + sparkline).
+function OverviewPanel() {
+  const [data, setData] = useState<AdminOverview | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchAdminOverview()
+      .then((d) => !cancelled && setData(d))
+      .catch(() => !cancelled && setData(null))
+      .finally(() => !cancelled && setLoading(false));
+    return () => { cancelled = true; };
+  }, []);
+
+  if (loading || !data) return null;
+
+  const tile = (label: string, value: number | string, color: string) => (
+    <div className="glass-panel" style={{ padding: '14px 18px', borderLeft: `4px solid ${color}`, minWidth: 130 }}>
+      <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{value}</div>
+      <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{label}</div>
+    </div>
+  );
+
+  return (
+    <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: 10 }}>📊 Vue d'ensemble</h3>
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        {tile('Sites', data.totals.sites, 'var(--accent-blue)')}
+        {tile('En ligne', data.totals.active, 'var(--accent-emerald)')}
+        {tile('Visites (30 j)', data.totals.visits30.toLocaleString('fr-FR'), 'var(--accent-emerald)')}
+        {tile('Domaines perso', data.totals.customDomains, 'var(--purple-300)')}
+      </div>
+      <div style={{ overflowX: 'auto' }}>
+        <table className="table-cpanel" style={{ width: '100%', fontSize: '0.85rem' }}>
+          <thead>
+            <tr><th>Site</th><th>Statut</th><th>Domaine</th><th>SSL</th><th style={{ textAlign: 'right' }}>Visites 30 j</th><th>Tendance</th></tr>
+          </thead>
+          <tbody>
+            {data.sites.map((s) => (
+              <tr key={s.slug}>
+                <td style={{ fontWeight: 600 }}>{s.name}<div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 400 }}>{s.slug}</div></td>
+                <td><span style={{ color: s.status === 'active' ? 'var(--accent-emerald)' : s.status === 'error' ? 'var(--accent-rose)' : 'var(--text-muted)' }}>{s.status}</span></td>
+                <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {s.domain}
+                  {s.domainStatus === 'active' && <span className="badge" style={{ marginLeft: 6, fontSize: '0.65rem', color: 'var(--accent-emerald)' }}>perso</span>}
+                </td>
+                <td>{s.sslStatus === 'active' ? '🔒' : '⚠'}</td>
+                <td style={{ textAlign: 'right', fontWeight: 600 }}>{s.visits30.toLocaleString('fr-FR')}</td>
+                <td><Sparkline series={s.series} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// Sauvegardes automatiques : configuration, déclenchement manuel, téléchargement.
+function BackupsPanel() {
+  const toast = useToast();
+  const [info, setInfo] = useState<BackupsInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const load = () => { fetchBackups().then(setInfo).catch(() => setInfo(null)); };
+  useEffect(load, []);
+
+  const handleBackup = async () => {
+    setBusy(true);
+    try {
+      const res = await createBackup();
+      toast.success(`Sauvegarde créée : ${res.filename}`);
+      load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Échec de la sauvegarde.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!info) return null;
+  const fmtSize = (n: number) => (n < 1024 * 1024 ? `${Math.round(n / 1024)} Ko` : `${(n / 1024 / 1024).toFixed(1)} Mo`);
+
+  return (
+    <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', borderBottom: '1px solid var(--border-color)', paddingBottom: 10 }}>
+        <h3 style={{ margin: 0 }}>💾 Sauvegardes du contenu</h3>
+        <button className="btn btn-secondary" onClick={handleBackup} disabled={busy}>{busy ? 'Sauvegarde…' : 'Sauvegarder maintenant'}</button>
+      </div>
+      <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', margin: 0 }}>
+        Sauvegardes automatiques :{' '}
+        {info.config.enabled
+          ? <span style={{ color: 'var(--accent-emerald)' }}>activées — toutes les {info.config.intervalHours} h, {info.config.keep} conservées</span>
+          : <span style={{ color: 'var(--amber-400)' }}>désactivées (définir <code>BACKUP_ENABLED=true</code> pour planifier)</span>}
+        . Contenu sauvegardé : pages, thèmes et articles de tous les sites.
+      </p>
+      {info.backups.length === 0 ? (
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem', margin: 0 }}>Aucune sauvegarde pour l'instant.</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflowY: 'auto' }}>
+          {info.backups.map((b) => (
+            <div key={b.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, fontSize: '0.82rem', padding: '5px 8px', background: 'rgba(255,255,255,0.02)', borderRadius: 6 }}>
+              <span style={{ color: 'var(--text-muted)' }}>{new Date(b.createdAt).toLocaleString('fr-FR')} · {fmtSize(b.size)}</span>
+              <a className="btn btn-secondary" style={{ padding: '2px 10px', fontSize: '0.75rem', textDecoration: 'none' }} href={`/api/admin/backups/download?name=${encodeURIComponent(b.name)}`}>Télécharger</a>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
