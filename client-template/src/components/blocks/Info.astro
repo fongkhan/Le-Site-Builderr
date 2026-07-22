@@ -10,7 +10,27 @@ interface Props {
 }
 
 const { data } = Astro.props;
+
+// Données structurées LocalBusiness (schema.org) : renforce le référencement local
+// (nom, adresse, téléphone, horaires) — les infos que Google met en avant pour un
+// commerce de proximité. Sérialisation sûre (échappe « < »).
+const siteName = process.env.PUBLIC_SITE_NAME || '';
+const siteUrl = process.env.PUBLIC_SITE_URL || '';
+const businessLd = (siteName && (data.address || data.phone || data.email))
+  ? JSON.stringify({
+      '@context': 'https://schema.org',
+      '@type': 'LocalBusiness',
+      name: siteName,
+      ...(siteUrl ? { url: siteUrl } : {}),
+      ...(data.address ? { address: data.address } : {}),
+      ...(data.phone ? { telephone: data.phone } : {}),
+      ...(data.email ? { email: data.email } : {}),
+      ...(data.hours ? { openingHours: data.hours.split('\n').map((l) => l.trim()).filter(Boolean) } : {}),
+    }).replace(/</g, '\\u003c')
+  : null;
 ---
+
+{businessLd && <script type="application/ld+json" set:html={businessLd} />}
 
 <section class="info-section">
   <div class="container">

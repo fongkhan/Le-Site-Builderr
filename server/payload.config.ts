@@ -464,6 +464,22 @@ export default buildConfig({
               ],
             },
             {
+              // Demande de rendez-vous : formulaire (poste vers /api/contact/<slug>)
+              slug: 'appointment',
+              fields: [
+                { name: 'title', type: 'text' },
+                { name: 'subtitle', type: 'text' },
+                { name: 'ctaText', type: 'text' },
+                {
+                  name: 'services',
+                  type: 'array',
+                  fields: [
+                    { name: 'name', type: 'text' },
+                  ],
+                },
+              ],
+            },
+            {
               // Infos pratiques : adresse, téléphone, email, horaires
               slug: 'info',
               fields: [

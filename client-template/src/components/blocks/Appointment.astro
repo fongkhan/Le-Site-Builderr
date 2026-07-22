@@ -1,0 +1,161 @@
+---
+interface Props {
+  data: {
+    title?: string;
+    subtitle?: string;
+    ctaText?: string;
+    services?: { name?: string }[];
+  };
+}
+
+const { data } = Astro.props;
+const services = (data.services || []).map((s) => s?.name).filter(Boolean) as string[];
+
+// La demande de RDV réutilise l'endpoint de contact : le message est composé côté client
+// (prestation + créneau + téléphone) puis envoyé aux propriétaires du site par email.
+const slug = process.env.ACTIVE_SITE_SLUG || '';
+const apiBase = process.env.PUBLIC_API_BASE || '';
+const action = `${apiBase}/api/contact/${slug}`;
+---
+
+<section class="appt-section">
+  <div class="container">
+    <h2>{data.title || 'Prendre rendez-vous'}</h2>
+    {data.subtitle && <p class="appt-intro">{data.subtitle}</p>}
+
+    <form class="appt-form" data-action={action}>
+      <input type="text" name="name" placeholder="Votre nom" required maxlength="120" />
+      <input type="email" name="email" placeholder="Votre email" required maxlength="200" />
+      <input type="tel" name="phone" placeholder="Votre téléphone" maxlength="40" />
+      {services.length > 0 && (
+        <select name="service" aria-label="Prestation souhaitée">
+          <option value="">Prestation souhaitée…</option>
+          {services.map((s) => <option value={s}>{s}</option>)}
+        </select>
+      )}
+      <input type="text" name="slot" placeholder="Créneau souhaité (ex. mardi après-midi)" maxlength="120" />
+      <textarea name="message" placeholder="Précisions (facultatif)…" rows="3" maxlength="4000"></textarea>
+      <!-- Champ anti-robot : caché aux humains, rempli seulement par les bots -->
+      <input type="text" name="company" class="hp-field" tabindex="-1" autocomplete="off" aria-hidden="true" />
+      <button type="submit">{data.ctaText || 'Demander un rendez-vous'}</button>
+      <p class="appt-status" role="status" aria-live="polite"></p>
+    </form>
+  </div>
+</section>
+
+<script>
+  // Envoi en fetch (progressive enhancement) : compose un message clair de demande de RDV
+  // et poste vers l'endpoint de contact. Échoue en douceur, ne casse jamais la page.
+  document.querySelectorAll('.appt-form').forEach((formEl) => {
+    const form = formEl as HTMLFormElement;
+    const status = form.querySelector('.appt-status') as HTMLElement;
+    const button = form.querySelector('button[type="submit"]') as HTMLButtonElement;
+    const val = (n: string) => {
+      const el = form.elements.namedItem(n) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+      return el ? el.value.trim() : '';
+    };
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const service = val('service');
+      const slot = val('slot');
+      const phone = val('phone');
+      const details = val('message');
+      const lines = ['Demande de rendez-vous'];
+      if (service) lines.push(`Prestation : ${service}`);
+      if (slot) lines.push(`Créneau souhaité : ${slot}`);
+      if (phone) lines.push(`Téléphone : ${phone}`);
+      if (details) lines.push('', details);
+      const payload = {
+        name: val('name'),
+        email: val('email'),
+        message: lines.join('\n'),
+        company: val('company'),
+      };
+      button.disabled = true;
+      status.textContent = 'Envoi en cours…';
+      try {
+        const res = await fetch(form.dataset.action || '', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (res.ok) {
+          form.reset();
+          status.textContent = 'Merci ! Votre demande de rendez-vous a bien été envoyée.';
+        } else {
+          const data = await res.json().catch(() => ({}));
+          status.textContent = data.error || 'Une erreur est survenue. Réessayez plus tard.';
+        }
+      } catch {
+        status.textContent = "Impossible d'envoyer la demande pour le moment.";
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
+</script>
+
+<style>
+  .appt-section {
+    padding: 80px 20px;
+    background-color: var(--color-bg);
+  }
+  .container {
+    max-width: 560px;
+    margin: 0 auto;
+    text-align: center;
+  }
+  .appt-section h2 {
+    font-size: 2.5rem;
+    margin-bottom: 15px;
+  }
+  .appt-intro {
+    opacity: 0.85;
+    margin-bottom: 30px;
+  }
+  .appt-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    text-align: left;
+  }
+  .appt-form input,
+  .appt-form select,
+  .appt-form textarea {
+    padding: 12px 14px;
+    border: 1px solid color-mix(in srgb, var(--color-text) 20%, transparent);
+    border-radius: var(--border-radius);
+    font-family: var(--font-body), sans-serif;
+    font-size: 1rem;
+    background-color: #fff;
+    color: #111;
+  }
+  /* Honeypot : invisible pour les humains */
+  .hp-field {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+  }
+  .appt-form button {
+    background-color: var(--color-primary);
+    color: #fff;
+    border: none;
+    border-radius: var(--border-radius);
+    padding: 12px 20px;
+    font-weight: 600;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: opacity 0.2s ease;
+  }
+  .appt-form button:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+  .appt-status {
+    min-height: 1.2em;
+    font-size: 0.9rem;
+    margin: 0;
+  }
+</style>

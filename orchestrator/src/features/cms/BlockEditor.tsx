@@ -131,6 +131,7 @@ const NEW_ITEM: Record<string, unknown> = {
   'product-grid': { name: 'Nouveau produit', price: '0.00 €', image: '' },
   testimonials: { quote: 'Un retour client.', author: 'Prénom Nom', role: 'Client', avatar: '' },
   pricing: { name: 'Nouvelle formule', price: '0.00 €', description: '', features: [], ctaText: 'Choisir', isPopular: false },
+  appointment: { name: 'Nouvelle prestation' },
 };
 
 // Champs d'édition rapide d'un bloc (affichés quand le bloc est déplié)
@@ -330,6 +331,28 @@ export function BlockEditor({ block, siteSlug, onChange, onNestedChange, onArray
           {input(block.ctaText, (v) => onChange('ctaText', v))}
           <span className="field-label" style={{ fontStyle: 'italic' }}>
             Les messages envoyés depuis le site arrivent par email aux comptes rattachés au site.
+          </span>
+        </>
+      )}
+
+      {block.blockType === 'appointment' && (
+        <>
+          <label className="field-label">Titre du bloc</label>
+          {input(block.title, (v) => onChange('title', v))}
+          <label className="field-label">Texte d'introduction</label>
+          <AiText siteSlug={siteSlug} value={block.subtitle} onChange={(v) => onChange('subtitle', v)} multiline />
+          <label className="field-label">Texte du bouton</label>
+          {input(block.ctaText, (v) => onChange('ctaText', v))}
+          <label className="field-label" style={{ marginTop: 4 }}>Prestations proposées</label>
+          {block.services?.map((service, i) => (
+            <div key={i} style={{ border: '1px solid rgba(255,255,255,0.05)', padding: 6, borderRadius: 4, marginTop: 4 }}>
+              {itemHeader(`Prestation ${i + 1}`, 'services', i)}
+              <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem' }} placeholder="Nom de la prestation" value={service.name} onChange={(e) => onNestedChange('services', i, 'name', e.target.value)} />
+            </div>
+          ))}
+          {addButton('Ajouter une prestation', 'services')}
+          <span className="field-label" style={{ fontStyle: 'italic' }}>
+            Les demandes de rendez-vous arrivent par email aux comptes rattachés au site.
           </span>
         </>
       )}
