@@ -283,6 +283,28 @@ export default buildConfig({
           type: 'checkbox',
           defaultValue: false,
         },
+        // --- Domaine personnalisé (rattachement du vrai nom de domaine du client) ---
+        {
+          name: 'customDomain',
+          type: 'text',
+          admin: { description: "Nom de domaine propre du client (ex. mon-commerce.fr). Vide = sous-domaine généré." },
+        },
+        {
+          name: 'domainStatus',
+          type: 'select',
+          options: [
+            { label: 'Aucun (sous-domaine)', value: 'none' },
+            { label: 'En attente de vérification', value: 'pending' },
+            { label: 'Actif', value: 'active' },
+            { label: 'Erreur', value: 'error' },
+          ],
+          defaultValue: 'none',
+        },
+        {
+          name: 'domainVerifyToken',
+          type: 'text',
+          admin: { description: 'Jeton de vérification TXT (généré automatiquement).' },
+        },
       ],
     },
     {
