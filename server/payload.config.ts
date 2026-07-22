@@ -305,6 +305,27 @@ export default buildConfig({
           type: 'text',
           admin: { description: 'Jeton de vérification TXT (généré automatiquement).' },
         },
+        // --- Mesure d'audience (analytics) : chargée après consentement RGPD ---
+        {
+          name: 'analyticsProvider',
+          type: 'select',
+          options: [
+            { label: 'Aucune', value: '' },
+            { label: 'Google Analytics 4', value: 'ga4' },
+            { label: 'Matomo', value: 'matomo' },
+          ],
+          defaultValue: '',
+        },
+        {
+          name: 'analyticsId',
+          type: 'text',
+          admin: { description: 'GA4 : identifiant de mesure G-XXXXXXXXXX. Matomo : idSite numérique.' },
+        },
+        {
+          name: 'analyticsHost',
+          type: 'text',
+          admin: { description: 'Matomo uniquement : hôte du serveur (ex. stats.mondomaine.fr).' },
+        },
       ],
     },
     {
@@ -412,6 +433,8 @@ export default buildConfig({
                     { name: 'author', type: 'text' },
                     { name: 'role', type: 'text' },
                     { name: 'avatar', type: 'text' },
+                    // Note sur 5 (0 = pas de note affichée)
+                    { name: 'rating', type: 'number', min: 0, max: 5 },
                   ],
                 },
               ],
@@ -480,7 +503,7 @@ export default buildConfig({
               ],
             },
             {
-              // Infos pratiques : adresse, téléphone, email, horaires
+              // Infos pratiques : adresse, téléphone, email, horaires, fiche Google
               slug: 'info',
               fields: [
                 { name: 'title', type: 'text' },
@@ -488,6 +511,8 @@ export default buildConfig({
                 { name: 'phone', type: 'text' },
                 { name: 'email', type: 'text' },
                 { name: 'hours', type: 'textarea' },
+                // Lien vers la fiche Google Business Profile (https://…)
+                { name: 'googleBusinessUrl', type: 'text' },
               ],
             },
             {
@@ -508,6 +533,40 @@ export default buildConfig({
               ],
             },
           ],
+        },
+      ],
+    },
+    {
+      // Articles de blog / actualités par site
+      slug: 'posts',
+      admin: { useAsTitle: 'title' },
+      access: {
+        read: isAdminOrSiteClient,
+        create: canCreatePage,
+        update: isAdminOrSiteClient,
+        delete: isAdminOrSiteClient,
+      },
+      fields: [
+        { name: 'title', type: 'text', required: true },
+        { name: 'slug', type: 'text', required: true },
+        { name: 'excerpt', type: 'textarea' },
+        { name: 'coverImage', type: 'text' },
+        { name: 'body', type: 'textarea' },
+        { name: 'publishedAt', type: 'date' },
+        {
+          name: 'status',
+          type: 'select',
+          options: [
+            { label: 'Brouillon', value: 'draft' },
+            { label: 'Publié', value: 'published' },
+          ],
+          defaultValue: 'draft',
+        },
+        {
+          name: 'site',
+          type: 'relationship',
+          relationTo: 'payload_sites',
+          required: true,
         },
       ],
     },

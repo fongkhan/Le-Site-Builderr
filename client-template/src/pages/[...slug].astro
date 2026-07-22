@@ -29,6 +29,17 @@ export async function getStaticPaths() {
     // Liste (titre, slug) de toutes les pages : alimente le menu de navigation
     const allPages = data.docs.map((p: any) => ({ title: p.title, slug: p.slug }));
 
+    // Ajoute une entrée « Actualités » au menu si le blog contient des articles publiés
+    try {
+      const postsRes = await fetch(`${baseUrl}/internal/site-posts?site=${encodeURIComponent(siteSlug)}`, {
+        headers: { 'x-build-token': process.env.BUILD_TOKEN || '' }
+      });
+      if (postsRes.ok) {
+        const postsData = await postsRes.json();
+        if ((postsData.docs || []).length > 0) allPages.push({ title: 'Actualités', slug: 'blog' });
+      }
+    } catch { /* blog optionnel : ignorer en cas d'erreur */ }
+
     return data.docs.map((page: any) => {
       const slug = page.slug === 'home' ? undefined : page.slug;
       return {

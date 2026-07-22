@@ -21,6 +21,7 @@ const seo = require('./lib/seo');
 const media = require('./lib/media');
 const stats = require('./lib/stats');
 const domains = require('./lib/domains');
+const analytics = require('./lib/analytics');
 const dns = require('dns').promises;
 
 // Driver d'hébergement (simulation par défaut ; cpanel = publication réelle o2switch).
@@ -126,7 +127,7 @@ app.use('/api/stats', statsLimiter);
 // Le parsing JSON ne s'applique QU'AUX routes Express custom : les routes déléguées à
 // Next/Payload (login, REST Payload, /admin) doivent recevoir leur flux de requête intact.
 const jsonParser = express.json({ limit: '10mb' });
-const EXPRESS_ROUTE_PREFIXES = ['/api/sites', '/api/site-pages', '/api/theme', '/api/config', '/api/onboard', '/api/build-status', '/api/hosting', '/api/contact', '/api/ai', '/api/stats', '/webhook', '/internal'];
+const EXPRESS_ROUTE_PREFIXES = ['/api/sites', '/api/site-pages', '/api/site-posts', '/api/theme', '/api/config', '/api/onboard', '/api/build-status', '/api/hosting', '/api/contact', '/api/ai', '/api/stats', '/webhook', '/internal'];
 app.use((req, res, next) => {
   const handledByExpress = EXPRESS_ROUTE_PREFIXES.some(p => req.path === p || req.path.startsWith(p + '/'));
   if (!handledByExpress) return next();
@@ -549,6 +550,50 @@ async function readSitePages(siteSlug) {
   }
 }
 
+// --- Blog / actualités : articles par site ---
+function getSitePostsFile(slug) {
+  return path.join(DATA_DIR, `posts_${slug}.json`);
+}
+
+function normalizePost(p) {
+  return {
+    title: p.title || '',
+    slug: p.slug || '',
+    excerpt: p.excerpt || '',
+    coverImage: p.coverImage || '',
+    body: p.body || '',
+    publishedAt: p.publishedAt || null,
+    status: p.status === 'published' ? 'published' : 'draft',
+  };
+}
+
+// Lit les articles d'un site. Payload prioritaire ; repli sur le fichier JSON.
+// publishedOnly=true → uniquement les articles publiés (pour le build public).
+async function readSitePosts(siteSlug, { publishedOnly = false } = {}) {
+  if (payloadInstance) {
+    try {
+      const siteRes = await payloadInstance.find({
+        collection: 'payload_sites', where: { slug: { equals: siteSlug } }, limit: 1, overrideAccess: true,
+      });
+      if (siteRes.docs.length > 0) {
+        const where = { and: [{ site: { equals: siteRes.docs[0].id } }] };
+        if (publishedOnly) where.and.push({ status: { equals: 'published' } });
+        const postsRes = await payloadInstance.find({
+          collection: 'posts', where, sort: '-publishedAt', limit: 500, overrideAccess: true,
+        });
+        return { docs: postsRes.docs.map(normalizePost) };
+      }
+    } catch (dbError) {
+      console.error('Erreur lecture posts de Payload, fallback JSON :', dbError.message);
+    }
+  }
+  const file = getSitePostsFile(siteSlug);
+  let docs = [];
+  try { docs = (JSON.parse(fs.readFileSync(file, 'utf-8')).docs || []).map(normalizePost); } catch { docs = []; }
+  if (publishedOnly) docs = docs.filter((p) => p.status === 'published');
+  return { docs };
+}
+
 // --- MULTI-SITE CPANEL ENDPOINTS ---
 
 // List sites: un admin voit tout, un client uniquement ses sites
@@ -659,9 +704,23 @@ app.post('/api/sites', auth.authenticate, auth.requireAdmin, async (req, res) =>
 // Update manual site metadata (admin uniquement)
 app.put('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (req, res) => {
   const { slug } = req.params;
-  const { name, domain, documentRoot, repositoryPath, stack, sslStatus, status } = req.body;
+  const { name, domain, documentRoot, repositoryPath, stack, sslStatus, status, analyticsProvider, analyticsId, analyticsHost } = req.body;
 
   if (!ensureConfinedPaths(res, { documentRoot, repositoryPath })) return;
+
+  // Mesure d'audience : validation stricte (ces valeurs finissent dans les pages publiées)
+  let analyticsChanges = {};
+  if (analyticsProvider !== undefined || analyticsId !== undefined || analyticsHost !== undefined) {
+    const current = await sitesStore.getSiteBySlug(slug);
+    if (!current) return res.status(404).json({ error: "Site non trouvé." });
+    const checked = analytics.validateAnalytics({
+      provider: analyticsProvider !== undefined ? analyticsProvider : current.analyticsProvider,
+      id: analyticsId !== undefined ? analyticsId : current.analyticsId,
+      host: analyticsHost !== undefined ? analyticsHost : current.analyticsHost,
+    });
+    if (!checked.ok) return res.status(400).json({ error: checked.error });
+    analyticsChanges = checked.value;
+  }
 
   try {
     const site = await sitesStore.updateSite(slug, {
@@ -671,7 +730,8 @@ app.put('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (req, re
       repositoryPath: repositoryPath !== undefined ? (repositoryPath ? repositoryPath.replace(/\\/g, '/') : "") : undefined,
       stack: stack || undefined,
       sslStatus: sslStatus || undefined,
-      status: status || undefined
+      status: status || undefined,
+      ...analyticsChanges
     });
     if (!site) return res.status(404).json({ error: "Site non trouvé." });
     res.json({ success: true, site });
@@ -1246,6 +1306,98 @@ app.post('/api/site-pages', auth.authenticate, auth.requireAuth, auth.requireSit
   const sitePagesFile = getSitePagesFile(siteSlug);
   fs.writeFileSync(sitePagesFile, JSON.stringify(req.body, null, 2), 'utf-8');
   res.json({ success: true, message: "Pages enregistrées avec succès !" });
+});
+
+// --- Blog / actualités (auth + ownership du site) ---
+
+// Liste des articles (brouillons + publiés) pour la gestion dans le CMS.
+app.get('/api/site-posts', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site), async (req, res) => {
+  try {
+    res.json(await readSitePosts(req.query.site));
+  } catch (e) {
+    sendError(res, "Impossible de lire les articles du site.", e);
+  }
+});
+
+// Écrit le fichier JSON miroir depuis la liste courante (repli hors base de données).
+async function writePostsMirror(siteSlug) {
+  try {
+    const { docs } = await readSitePosts(siteSlug);
+    fs.writeFileSync(getSitePostsFile(siteSlug), JSON.stringify({ docs }, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Miroir JSON des articles non écrit :', e.message);
+  }
+}
+
+// Crée ou met à jour un article (identifié par son slug au sein du site).
+app.post('/api/site-posts', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site), async (req, res) => {
+  const siteSlug = req.query.site;
+  const body = req.body || {};
+  const title = typeof body.title === 'string' ? body.title.trim() : '';
+  if (!title) return res.status(400).json({ error: "Le titre de l'article est requis." });
+  // Le slug de l'article est dérivé/validé (jamais vide, URL-safe) — sinon dérivé du titre.
+  const postSlug = generateSlug(body.slug) || generateSlug(title);
+  if (!postSlug) return res.status(400).json({ error: "Titre invalide : impossible d'en dériver une adresse." });
+
+  const post = normalizePost({ ...body, title, slug: postSlug });
+
+  try {
+    if (payloadInstance) {
+      const siteDoc = await sitesStore.getOrCreatePayloadDoc(siteSlug);
+      const existing = await payloadInstance.find({
+        collection: 'posts',
+        where: { and: [{ site: { equals: siteDoc.id } }, { slug: { equals: postSlug } }] },
+        limit: 1, overrideAccess: true,
+      });
+      const data = { ...post, site: siteDoc.id };
+      if (existing.docs.length > 0) {
+        await payloadInstance.update({ collection: 'posts', id: existing.docs[0].id, data, overrideAccess: true });
+      } else {
+        await payloadInstance.create({ collection: 'posts', data, overrideAccess: true });
+      }
+    } else {
+      // Mode sans base : upsert directement dans le fichier JSON
+      let docs = [];
+      try { docs = JSON.parse(fs.readFileSync(getSitePostsFile(siteSlug), 'utf-8')).docs || []; } catch { docs = []; }
+      const idx = docs.findIndex((p) => p.slug === postSlug);
+      if (idx >= 0) docs[idx] = post; else docs.push(post);
+      fs.writeFileSync(getSitePostsFile(siteSlug), JSON.stringify({ docs }, null, 2), 'utf-8');
+    }
+    if (payloadInstance) await writePostsMirror(siteSlug);
+    logAudit(req, 'article.enregistrement', siteSlug, postSlug);
+    res.json({ success: true, slug: postSlug });
+  } catch (e) {
+    sendError(res, "Impossible d'enregistrer l'article.", e);
+  }
+});
+
+// Supprime un article par slug.
+app.delete('/api/site-posts', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site), async (req, res) => {
+  const siteSlug = req.query.site;
+  const postSlug = generateSlug(req.query.slug);
+  if (!postSlug) return res.status(400).json({ error: "Article invalide." });
+  try {
+    if (payloadInstance) {
+      const siteDoc = await sitesStore.getOrCreatePayloadDoc(siteSlug);
+      const existing = await payloadInstance.find({
+        collection: 'posts',
+        where: { and: [{ site: { equals: siteDoc.id } }, { slug: { equals: postSlug } }] },
+        limit: 1, overrideAccess: true,
+      });
+      if (existing.docs.length > 0) {
+        await payloadInstance.delete({ collection: 'posts', id: existing.docs[0].id, overrideAccess: true });
+      }
+      await writePostsMirror(siteSlug);
+    } else {
+      let docs = [];
+      try { docs = JSON.parse(fs.readFileSync(getSitePostsFile(siteSlug), 'utf-8')).docs || []; } catch { docs = []; }
+      fs.writeFileSync(getSitePostsFile(siteSlug), JSON.stringify({ docs: docs.filter((p) => p.slug !== postSlug) }, null, 2), 'utf-8');
+    }
+    logAudit(req, 'article.suppression', siteSlug, postSlug);
+    res.json({ success: true });
+  } catch (e) {
+    sendError(res, "Impossible de supprimer l'article.", e);
+  }
 });
 
 // Thème (le paramètre ?site= est obligatoire, l'accès est vérifié par ownership)
@@ -1926,6 +2078,10 @@ async function startBuild(siteSlug) {
     // Métadonnées du site pour les balises Open Graph et les données structurées (JSON-LD)
     PUBLIC_SITE_NAME: (site && site.name) || siteSlug,
     PUBLIC_SITE_URL: site && site.domain ? `https://${site.domain}` : '',
+    // Mesure d'audience (validée à l'écriture) : chargée après consentement RGPD
+    PUBLIC_ANALYTICS_PROVIDER: (site && site.analyticsProvider) || '',
+    PUBLIC_ANALYTICS_ID: (site && site.analyticsId) || '',
+    PUBLIC_ANALYTICS_HOST: (site && site.analyticsHost) || '',
   };
 
   exec(cmd, { env: buildEnv }, (error, stdout, stderr) => {
@@ -1984,6 +2140,12 @@ async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
     try {
       const pagesData = await readSitePages(siteSlug);
       const slugs = (pagesData.docs || []).map((p) => p.slug).filter(Boolean);
+      // Ajoute l'index du blog + chaque article publié (URL /blog/<slug>/)
+      const postsData = await readSitePosts(siteSlug, { publishedOnly: true });
+      const postSlugs = (postsData.docs || []).map((p) => p.slug).filter(Boolean);
+      if (postSlugs.length > 0) {
+        slugs.push('blog', ...postSlugs.map((s) => `blog/${s}`));
+      }
       if (slugs.length > 0) {
         fs.writeFileSync(path.join(DIST_DIR, 'sitemap.xml'), seo.generateSitemap(site.domain, slugs), 'utf-8');
         fs.writeFileSync(path.join(DIST_DIR, 'robots.txt'), seo.generateRobots(site.domain), 'utf-8');
@@ -2149,6 +2311,19 @@ app.get('/internal/site-pages', async (req, res) => {
     res.json(media.rewriteMediaUrls(await readSitePages(siteSlug)));
   } catch (e) {
     sendError(res, "Impossible de lire les pages du site.", e);
+  }
+});
+
+// Canal interne pour le build Astro : articles PUBLIÉS uniquement (jeton BUILD_TOKEN).
+app.get('/internal/site-posts', async (req, res) => {
+  if (req.headers['x-build-token'] !== BUILD_TOKEN) {
+    return res.status(401).json({ error: "Jeton de build invalide." });
+  }
+  const siteSlug = req.query.site || activeBuildingSite || await getSiteFromRequest(req);
+  try {
+    res.json(media.rewriteMediaUrls(await readSitePosts(siteSlug, { publishedOnly: true })));
+  } catch (e) {
+    sendError(res, "Impossible de lire les articles du site.", e);
   }
 });
 

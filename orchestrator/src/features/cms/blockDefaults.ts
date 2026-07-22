@@ -36,8 +36,8 @@ export const BLOCK_DEFAULTS: Record<string, Block> = {
     blockType: 'testimonials',
     title: 'Ce que nos clients disent',
     testimonials: [
-      { quote: 'Un service exceptionnel, je recommande !', author: 'Marie Dupont', role: 'Cliente régulière', avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=150' },
-      { quote: 'Une équipe à l\'écoute et professionnelle.', author: 'Jean Martin', role: 'Client', avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=150' },
+      { quote: 'Un service exceptionnel, je recommande !', author: 'Marie Dupont', role: 'Cliente régulière', avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=150', rating: 5 },
+      { quote: 'Une équipe à l\'écoute et professionnelle.', author: 'Jean Martin', role: 'Client', avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=150', rating: 5 },
     ],
   },
   faq: {
@@ -79,6 +79,7 @@ export const BLOCK_DEFAULTS: Record<string, Block> = {
     phone: '01 23 45 67 89',
     email: 'contact@exemple.fr',
     hours: 'Lun–Ven : 9h–19h\nSam : 9h–13h\nDim : fermé',
+    googleBusinessUrl: '',
   },
   footer: {
     blockType: 'footer',

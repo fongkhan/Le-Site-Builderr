@@ -27,7 +27,11 @@ function toApiSite(doc) {
     // Domaine personnalisé (rattachement du vrai nom de domaine du client)
     customDomain: doc.customDomain || '',
     domainStatus: doc.domainStatus || 'none',
-    domainVerifyToken: doc.domainVerifyToken || ''
+    domainVerifyToken: doc.domainVerifyToken || '',
+    // Mesure d'audience (chargée après consentement RGPD sur le site publié)
+    analyticsProvider: doc.analyticsProvider || '',
+    analyticsId: doc.analyticsId || '',
+    analyticsHost: doc.analyticsHost || ''
   };
 }
 
@@ -95,7 +99,7 @@ async function createSite(data) {
 async function updateSite(slug, partial) {
   // Update partiel : seules les clés fournies (non-undefined) sont modifiées
   const changes = {};
-  for (const key of ['name', 'domain', 'documentRoot', 'repositoryPath', 'stack', 'sslStatus', 'status', 'createdWithTool', 'customDomain', 'domainStatus', 'domainVerifyToken']) {
+  for (const key of ['name', 'domain', 'documentRoot', 'repositoryPath', 'stack', 'sslStatus', 'status', 'createdWithTool', 'customDomain', 'domainStatus', 'domainVerifyToken', 'analyticsProvider', 'analyticsId', 'analyticsHost']) {
     if (partial[key] !== undefined) changes[key] = partial[key];
   }
 

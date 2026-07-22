@@ -7,7 +7,8 @@ import type { Site } from '../../types';
 const STEPS = [
   { path: 'design', num: 1, label: 'Design' },
   { path: 'cms', num: 2, label: 'Contenu' },
-  { path: 'deploy', num: 3, label: 'Déploiement' },
+  { path: 'blog', num: 3, label: 'Blog' },
+  { path: 'deploy', num: 4, label: 'Déploiement' },
 ];
 
 // Sous-navigation d'un site : stepper Design -> Contenu -> Déploiement.

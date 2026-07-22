@@ -52,6 +52,8 @@ async function login(email, password) {
   check('Anonyme : POST /api/sites/scan -> 401', (await req('/api/sites/scan', { method: 'POST', body: {} })).status === 401);
   check('Anonyme : POST /webhook/rebuild -> 401', (await req('/webhook/rebuild?site=boulangerie-artisanale', { method: 'POST' })).status === 401);
   check('Anonyme : GET /internal/site-pages sans jeton -> 401', (await req('/internal/site-pages?site=boulangerie-artisanale')).status === 401);
+  check('Anonyme : GET /internal/site-posts sans jeton -> 401', (await req('/internal/site-posts?site=boulangerie-artisanale')).status === 401);
+  check('Anonyme : GET /api/site-posts -> 401', (await req('/api/site-posts?site=boulangerie-artisanale')).status === 401);
   check('Anonyme : GET /api/config -> 401', (await req('/api/config')).status === 401);
   check('Anonyme : GET /api/sites/owners -> 401', (await req('/api/sites/owners')).status === 401);
   check('Anonyme : GET /api/hosting/status -> 401', (await req('/api/hosting/status')).status === 401);
@@ -70,6 +72,11 @@ if (client.token) {
   check('Client : site-pages sans ?site -> 400', (await req('/api/site-pages', { token: client.token })).status === 400);
   check("Client : site-pages d'un autre slug -> 403", (await req('/api/site-pages?site=site-dun-autre', { token: client.token })).status === 403);
   check('Client : theme de SON site -> 200', (await req('/api/theme?site=boulangerie-artisanale', { token: client.token })).status === 200);
+
+  // Blog / actualités : même modèle d'ownership que les pages
+  check('Client : site-posts de SON site -> 200', (await req('/api/site-posts?site=boulangerie-artisanale', { token: client.token })).status === 200);
+  check("Client : site-posts d'un autre slug -> 403", (await req('/api/site-posts?site=site-dun-autre', { token: client.token })).status === 403);
+  check('Client : POST article sans titre -> 400', (await req('/api/site-posts?site=boulangerie-artisanale', { method: 'POST', body: { title: '' }, token: client.token })).status === 400);
 
   check('Client : POST /api/sites -> 403', (await req('/api/sites', { method: 'POST', body: { name: 'hack' }, token: client.token })).status === 403);
   check('Client : POST /api/sites/scan -> 403', (await req('/api/sites/scan', { method: 'POST', body: {}, token: client.token })).status === 403);

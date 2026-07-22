@@ -1,0 +1,98 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { fetchNavPages, fetchPosts, buildNav, toParagraphs } from '../../lib/content';
+import type { Post } from '../../lib/content';
+
+export async function getStaticPaths() {
+  const [pages, posts] = await Promise.all([fetchNavPages(), fetchPosts()]);
+  const nav = buildNav(pages, posts);
+  return posts.map((post) => ({
+    params: { slug: post.slug },
+    props: { post, nav },
+  }));
+}
+
+interface Props { post: Post; nav: { title: string; slug: string }[]; }
+const { post, nav } = Astro.props;
+
+const paragraphs = toParagraphs(post.body);
+const fmtDate = (iso?: string | null) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? '' : d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+};
+
+// Données structurées Article (schema.org) : améliore l'affichage dans les moteurs.
+const siteName = process.env.PUBLIC_SITE_NAME || '';
+const articleLd = post.title
+  ? JSON.stringify({
+      '@context': 'https://schema.org',
+      '@type': 'Article',
+      headline: post.title,
+      ...(post.excerpt ? { description: post.excerpt } : {}),
+      ...(post.coverImage ? { image: [post.coverImage] } : {}),
+      ...(post.publishedAt ? { datePublished: post.publishedAt } : {}),
+      ...(siteName ? { publisher: { '@type': 'Organization', name: siteName } } : {}),
+    }).replace(/</g, '\\u003c')
+  : null;
+---
+
+<Layout title={post.title} description={post.excerpt} pages={nav} currentSlug="blog">
+  {articleLd && <script type="application/ld+json" set:html={articleLd} />}
+  <article class="post">
+    <div class="container">
+      <a class="post-back" href="/blog/">← Toutes les actualités</a>
+      <h1>{post.title}</h1>
+      {post.publishedAt && <time class="post-date">{fmtDate(post.publishedAt)}</time>}
+      {post.coverImage && <img class="post-cover" src={post.coverImage} alt={post.title} />}
+      <div class="post-body">
+        {paragraphs.map((p) => <p>{p}</p>)}
+      </div>
+    </div>
+  </article>
+</Layout>
+
+<style>
+  .post {
+    padding: 50px 20px 80px;
+    background-color: var(--color-bg);
+  }
+  .container {
+    max-width: 720px;
+    margin: 0 auto;
+  }
+  .post-back {
+    display: inline-block;
+    margin-bottom: 20px;
+    color: var(--color-primary);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+  .post h1 {
+    font-size: 2.4rem;
+    margin: 0 0 10px 0;
+  }
+  .post-date {
+    display: block;
+    color: var(--color-primary);
+    font-weight: 600;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 24px;
+  }
+  .post-cover {
+    width: 100%;
+    max-height: 420px;
+    object-fit: cover;
+    border-radius: var(--border-radius);
+    margin-bottom: 30px;
+  }
+  .post-body p {
+    font-size: 1.05rem;
+    line-height: 1.75;
+    color: #374151;
+    margin: 0 0 20px 0;
+  }
+</style>

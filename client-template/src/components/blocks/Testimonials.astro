@@ -4,6 +4,7 @@ interface TestimonialItem {
   author: string;
   role: string;
   avatar: string;
+  rating?: number;
 }
 
 interface Props {
@@ -14,7 +15,37 @@ interface Props {
 }
 
 const { data } = Astro.props;
+
+// Note bornée 0-5 (0 ou absente = pas d'étoiles affichées)
+const ratingOf = (t: TestimonialItem) => Math.max(0, Math.min(5, Math.round(Number(t.rating) || 0)));
+
+// Données structurées : note moyenne (AggregateRating) + avis (Review) rattachés au
+// commerce — le motif « étoiles dans les résultats Google » des avis clients.
+// N'est émis que si au moins un témoignage porte une note. Sérialisation sûre.
+const siteName = process.env.PUBLIC_SITE_NAME || '';
+const rated = (data.testimonials || []).filter((t) => t && t.quote && ratingOf(t) > 0);
+const reviewLd = (siteName && rated.length > 0)
+  ? JSON.stringify({
+      '@context': 'https://schema.org',
+      '@type': 'LocalBusiness',
+      name: siteName,
+      aggregateRating: {
+        '@type': 'AggregateRating',
+        ratingValue: Math.round((rated.reduce((s, t) => s + ratingOf(t), 0) / rated.length) * 10) / 10,
+        reviewCount: rated.length,
+        bestRating: 5,
+      },
+      review: rated.map((t) => ({
+        '@type': 'Review',
+        author: { '@type': 'Person', name: t.author || 'Client' },
+        reviewBody: t.quote,
+        reviewRating: { '@type': 'Rating', ratingValue: ratingOf(t), bestRating: 5 },
+      })),
+    }).replace(/</g, '\\u003c')
+  : null;
 ---
+
+{reviewLd && <script type="application/ld+json" set:html={reviewLd} />}
 
 <section class="testimonials-section">
   <div class="container">
@@ -23,6 +54,11 @@ const { data } = Astro.props;
       {data.testimonials && data.testimonials.map((testi) => (
         <div class="testimonial-card">
           <div class="quote-mark">“</div>
+          {ratingOf(testi) > 0 && (
+            <div class="stars" role="img" aria-label={`Note : ${ratingOf(testi)} sur 5`}>
+              {'★'.repeat(ratingOf(testi))}<span class="stars-empty">{'★'.repeat(5 - ratingOf(testi))}</span>
+            </div>
+          )}
           <p class="quote-text">{testi.quote}</p>
           <div class="author-info">
             {testi.avatar && (
@@ -94,6 +130,17 @@ const { data } = Astro.props;
     transform: translateY(-5px);
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
     border-color: var(--color-primary);
+  }
+
+  .stars {
+    color: #f59e0b;
+    font-size: 1.05rem;
+    letter-spacing: 2px;
+    margin-bottom: 10px;
+  }
+
+  .stars-empty {
+    color: rgba(0, 0, 0, 0.15);
   }
 
   .quote-mark {

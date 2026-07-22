@@ -6,10 +6,15 @@ interface Props {
     phone?: string;
     email?: string;
     hours?: string;
+    googleBusinessUrl?: string;
   };
 }
 
 const { data } = Astro.props;
+
+// Lien fiche Google : uniquement en https (une URL invalide est simplement ignorée)
+const gbUrl = (data.googleBusinessUrl || '').trim();
+const googleUrl = /^https:\/\/\S+$/i.test(gbUrl) ? gbUrl : '';
 
 // Données structurées LocalBusiness (schema.org) : renforce le référencement local
 // (nom, adresse, téléphone, horaires) — les infos que Google met en avant pour un
@@ -26,6 +31,7 @@ const businessLd = (siteName && (data.address || data.phone || data.email))
       ...(data.phone ? { telephone: data.phone } : {}),
       ...(data.email ? { email: data.email } : {}),
       ...(data.hours ? { openingHours: data.hours.split('\n').map((l) => l.trim()).filter(Boolean) } : {}),
+      ...(googleUrl ? { sameAs: [googleUrl] } : {}),
     }).replace(/</g, '\\u003c')
   : null;
 ---
@@ -40,6 +46,7 @@ const businessLd = (siteName && (data.address || data.phone || data.email))
       {data.phone && <div class="info-row"><span class="info-icon">📞</span><a href={`tel:${data.phone.replace(/\s/g, '')}`}>{data.phone}</a></div>}
       {data.email && <div class="info-row"><span class="info-icon">✉️</span><a href={`mailto:${data.email}`}>{data.email}</a></div>}
       {data.hours && <div class="info-row"><span class="info-icon">🕒</span><span class="info-hours">{data.hours}</span></div>}
+      {googleUrl && <div class="info-row"><span class="info-icon">⭐</span><a href={googleUrl} target="_blank" rel="noopener noreferrer">Voir notre fiche Google</a></div>}
     </div>
   </div>
 </section>

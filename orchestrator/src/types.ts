@@ -42,7 +42,7 @@ export interface Block {
   items?: { title?: string; description?: string; question?: string; answer?: string }[];
   products?: { name: string; price: string; image: string }[];
   images?: string[];
-  testimonials?: { quote: string; author: string; role: string; avatar: string }[];
+  testimonials?: { quote: string; author: string; role: string; avatar: string; rating?: number }[];
   plans?: {
     name: string;
     price: string;
@@ -58,6 +58,7 @@ export interface Block {
   phone?: string;
   email?: string;
   hours?: string;
+  googleBusinessUrl?: string;
   // Bloc footer
   text?: string;
   socials?: { facebook?: string; instagram?: string; linkedin?: string; x?: string };
@@ -89,6 +90,10 @@ export interface Site {
   customDomain?: string;
   domainStatus?: 'none' | 'pending' | 'active' | 'error' | string;
   domainVerifyToken?: string;
+  // Mesure d'audience (chargée après consentement RGPD sur le site publié)
+  analyticsProvider?: '' | 'ga4' | 'matomo' | string;
+  analyticsId?: string;
+  analyticsHost?: string;
 }
 
 export interface ScannedSite {

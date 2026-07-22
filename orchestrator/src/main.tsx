@@ -17,6 +17,7 @@ import { SitesListPage } from './features/sites/SitesListPage'
 import { OnboardingPage } from './features/onboarding/OnboardingPage'
 import { DesignPage } from './features/design/DesignPage'
 import { CmsPage } from './features/cms/CmsPage'
+import { BlogPage } from './features/blog/BlogPage'
 import { DeployPage } from './features/deploy/DeployPage'
 import { AdminPanel } from './features/admin/AdminPanel'
 import { NotFoundPage } from './features/NotFoundPage'
@@ -41,6 +42,7 @@ const router = createBrowserRouter([
               { index: true, element: <Navigate to="design" replace /> },
               { path: 'design', element: <DesignPage /> },
               { path: 'cms', element: <CmsPage /> },
+              { path: 'blog', element: <BlogPage /> },
               { path: 'deploy', element: <DeployPage /> },
             ],
           },
