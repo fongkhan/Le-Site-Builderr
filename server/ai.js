@@ -402,6 +402,18 @@ async function runAssist(provider, { action, input, context }) {
     return { text: await completeText(provider, system, user) };
   }
 
+  if (action === 'article') {
+    if (!safeInput.trim()) throw new Error("Aucun sujet d'article fourni.");
+    const system = "Tu es un rédacteur web professionnel francophone pour des sites vitrine de PME. Rédige un court article de blog (200 à 350 mots) à partir du sujet fourni. Ton chaleureux et informatif. Utilise une mise en forme markdown LÉGÈRE : sous-titres (## …), listes à puces (- …), **gras** ponctuel. Réponds STRICTEMENT en JSON : {\"title\": \"…\", \"excerpt\": \"… (1 phrase)\", \"body\": \"… (markdown)\"}.";
+    const user = `${safeContext ? `Nom du site : ${safeContext}\n` : ''}Sujet de l'article :\n${safeInput}`;
+    const out = await completeText(provider, system, user, true);
+    return {
+      title: String(out.title || '').slice(0, 160),
+      excerpt: String(out.excerpt || '').slice(0, 300),
+      body: String(out.body || '').slice(0, 8000),
+    };
+  }
+
   if (action === 'seo') {
     const system = "Tu es un expert SEO francophone. À partir du contenu d'une page, propose un titre d'onglet (metaTitle, ≤ 60 caractères) et une méta-description (metaDescription, ≤ 155 caractères) optimisés et naturels. Réponds STRICTEMENT en JSON : {\"metaTitle\": \"...\", \"metaDescription\": \"...\"}.";
     const user = `${safeContext ? `Nom du site : ${safeContext}\n` : ''}Contenu de la page :\n${safeInput}`;

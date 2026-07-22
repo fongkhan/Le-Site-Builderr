@@ -552,6 +552,7 @@ export default buildConfig({
         { name: 'excerpt', type: 'textarea' },
         { name: 'coverImage', type: 'text' },
         { name: 'body', type: 'textarea' },
+        { name: 'tags', type: 'text' },
         { name: 'publishedAt', type: 'date' },
         {
           name: 'status',
