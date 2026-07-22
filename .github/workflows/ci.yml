@@ -30,6 +30,23 @@ jobs:
           fi
           echo "OK : aucun appel natif."
 
+  server-unit:
+    name: Serveur — tests unitaires (sans DB)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      # Tests de logique pure (slug, confinement de chemins, quota) — rapides, sans Postgres
+      - run: npm test
+
   client-template:
     name: Template Astro — build
     runs-on: ubuntu-latest
@@ -71,6 +88,8 @@ jobs:
       PAYLOAD_SECRET: ci-secret-0123456789abcdef0123456789abcdef
       FRONTEND_ORIGIN: http://localhost:5173
       PORT: 4000
+      # Quota à 0 : permet de vérifier le 429 côté client sans aucune clé IA
+      AI_DAILY_QUOTA: '0'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

@@ -67,7 +67,7 @@ export function FileManagerModal({ site, onClose }: { site: Site; onClose: () =>
         </span>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '350px 1fr', height: '60vh', overflow: 'hidden' }}>
+      <div className="file-manager-grid">
         <div style={{ borderRight: '1px solid var(--border-color)', overflowY: 'auto', padding: 15, background: 'rgba(0,0,0,0.1)' }}>
           <h4 style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: 12, fontWeight: 700 }}>STRUCTURE DU DOSSIER</h4>
           {filesLoading ? (

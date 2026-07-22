@@ -359,6 +359,63 @@ ${inspirationUrl ? `- Site d'inspiration de référence : "${inspirationUrl}"` :
   return cleanAndParseJSON(responseText);
 }
 
+// Complétion texte simple, mutualisée entre les fournisseurs. jsonMode=true attend
+// une réponse JSON (parsée), sinon renvoie le texte brut nettoyé.
+async function completeText(provider, systemPrompt, userPrompt, jsonMode = false) {
+  const selectedProvider = provider || process.env.DEFAULT_PROVIDER || 'openai';
+  let responseText;
+  if (selectedProvider === 'openai') {
+    responseText = await callOpenAI(
+      [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      jsonMode ? { type: 'json_object' } : null
+    );
+  } else if (selectedProvider === 'anthropic') {
+    responseText = await callAnthropic([{ role: 'user', content: userPrompt }], systemPrompt);
+  } else if (selectedProvider === 'gemini') {
+    responseText = await callGemini([{ parts: [{ text: userPrompt }] }], systemPrompt, jsonMode);
+  } else {
+    throw new Error(`Fournisseur d'IA inconnu : ${selectedProvider}`);
+  }
+  return jsonMode ? cleanAndParseJSON(responseText) : responseText.trim();
+}
+
+// Assistant de rédaction pour le CMS. Réutilise les mêmes fournisseurs que l'onboarding.
+// action : 'rewrite' | 'generate-description' | 'seo'. Retourne { text } ou
+// { metaTitle, metaDescription } selon l'action.
+async function runAssist(provider, { action, input, context }) {
+  const safeInput = String(input || '').slice(0, 4000);
+  const safeContext = String(context || '').slice(0, 500);
+
+  if (action === 'rewrite') {
+    if (!safeInput.trim()) throw new Error('Aucun texte à améliorer.');
+    const system = "Tu es un rédacteur web professionnel francophone. Améliore le texte fourni pour un site vitrine : plus clair, plus engageant, sans fautes. Garde la même langue et une longueur similaire. Réponds UNIQUEMENT avec le texte amélioré, sans guillemets ni commentaire.";
+    const user = `${safeContext ? `Contexte du site : ${safeContext}\n\n` : ''}Texte à améliorer :\n${safeInput}`;
+    return { text: await completeText(provider, system, user) };
+  }
+
+  if (action === 'generate-description') {
+    const system = "Tu es un rédacteur web professionnel francophone. Rédige une courte description marketing (1 à 2 phrases) pour la section d'un site vitrine. Ton chaleureux et professionnel. Réponds UNIQUEMENT avec la description, sans guillemets ni commentaire.";
+    const user = `${safeContext ? `Sujet : ${safeContext}\n` : ''}${safeInput ? `Éléments à intégrer : ${safeInput}` : 'Génère une description générique attrayante.'}`;
+    return { text: await completeText(provider, system, user) };
+  }
+
+  if (action === 'seo') {
+    const system = "Tu es un expert SEO francophone. À partir du contenu d'une page, propose un titre d'onglet (metaTitle, ≤ 60 caractères) et une méta-description (metaDescription, ≤ 155 caractères) optimisés et naturels. Réponds STRICTEMENT en JSON : {\"metaTitle\": \"...\", \"metaDescription\": \"...\"}.";
+    const user = `${safeContext ? `Nom du site : ${safeContext}\n` : ''}Contenu de la page :\n${safeInput}`;
+    const out = await completeText(provider, system, user, true);
+    return {
+      metaTitle: String(out.metaTitle || '').slice(0, 70),
+      metaDescription: String(out.metaDescription || '').slice(0, 170),
+    };
+  }
+
+  throw new Error(`Action d'assistance inconnue : ${action}`);
+}
+
 module.exports = {
-  runOnboard
+  runOnboard,
+  runAssist,
 };

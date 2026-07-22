@@ -1,8 +1,99 @@
 import { apiFetch } from './client';
-import type { Site, ScannedSite, FileEntry, PagesData, Theme, BuildStatus, AppConfig, OnboardingResult, AiProvider, FeatureFlags } from '../types';
+import type { Site, ScannedSite, FileEntry, PagesData, Theme, BuildStatus, RebuildResponse, AppConfig, OnboardingResult, AiProvider, FeatureFlags } from '../types';
 
 export function fetchSites(): Promise<Site[]> {
   return apiFetch<Site[]>('/api/sites');
+}
+
+// Propriétaires par slug de site (admin only) : { slug: [emails] }
+export function fetchSiteOwners(): Promise<Record<string, string[]>> {
+  return apiFetch<Record<string, string[]>>('/api/sites/owners');
+}
+
+// Hébergement (admin only) : driver actif (simulation | cpanel) et test de connexion
+export interface HostingStatus {
+  driver: 'simulation' | 'cpanel';
+  description: string;
+  host?: string;
+  user?: string;
+  rootDomain?: string;
+}
+
+export function fetchHostingStatus(): Promise<HostingStatus> {
+  return apiFetch<HostingStatus>('/api/hosting/status');
+}
+
+export function testHostingConnection(): Promise<{ ok: boolean; message?: string; error?: string }> {
+  return apiFetch('/api/hosting/test', { method: 'POST' });
+}
+
+// Versions de déploiement (admin only) : liste + retour arrière
+export interface Release {
+  id: string;
+  date: string;
+}
+
+export function fetchReleases(slug: string): Promise<Release[]> {
+  return apiFetch<Release[]>(`/api/sites/${slug}/releases`);
+}
+
+export function rollbackRelease(slug: string, release: string): Promise<{ success: boolean; release: string }> {
+  return apiFetch(`/api/sites/${slug}/rollback`, { method: 'POST', body: JSON.stringify({ release }) });
+}
+
+// Historique des builds d'un site (admin ou propriétaire)
+export interface BuildHistoryEntry {
+  status: 'success' | 'error';
+  durationMs: number | null;
+  triggeredBy: string | null;
+  createdAt: string;
+}
+
+export function fetchBuildHistory(slug: string): Promise<BuildHistoryEntry[]> {
+  return apiFetch<BuildHistoryEntry[]>(`/api/sites/${slug}/builds`);
+}
+
+// Statistiques de visites (admin ou propriétaire) : total + série jour par jour
+export interface SiteStats {
+  total: number;
+  days: { date: string; count: number }[];
+}
+
+export function fetchSiteStats(slug: string, days = 30): Promise<SiteStats> {
+  return apiFetch<SiteStats>(`/api/sites/${slug}/stats?days=${days}`);
+}
+
+// Journal d'audit (admin only) : 50 dernières actions sensibles
+export interface AuditEntry {
+  action: string;
+  actor: string | null;
+  target: string | null;
+  details: string | null;
+  createdAt: string;
+}
+
+export function fetchAuditLog(): Promise<AuditEntry[]> {
+  return apiFetch<AuditEntry[]>('/api/audit');
+}
+
+// Duplication d'un site (admin) : crée un jumeau sous un nouveau slug
+export function duplicateSite(slug: string): Promise<{ success: boolean; site: Site }> {
+  return apiFetch(`/api/sites/${slug}/duplicate`, { method: 'POST' });
+}
+
+// Import d'une archive d'export de site (zip brut en corps de requête)
+export async function importSiteArchive(file: File): Promise<{ success: boolean; site: Site; extractedFiles: number }> {
+  const res = await fetch('/api/sites/import-archive', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/zip' },
+    body: file,
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) {
+    throw new Error((data && data.error) || `Erreur HTTP ${res.status}`);
+  }
+  return data;
 }
 
 export function createSite(input: { name: string; domain?: string; stack?: string; documentRoot?: string; repositoryPath?: string }): Promise<{ success: boolean; site: Site }> {
@@ -53,7 +144,7 @@ export function fetchBuildStatus(): Promise<BuildStatus> {
   return apiFetch('/api/build-status');
 }
 
-export function triggerRebuild(siteSlug: string): Promise<{ message: string }> {
+export function triggerRebuild(siteSlug: string): Promise<RebuildResponse> {
   return apiFetch(`/webhook/rebuild?site=${encodeURIComponent(siteSlug)}`, { method: 'POST' });
 }
 

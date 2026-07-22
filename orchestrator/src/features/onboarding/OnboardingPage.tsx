@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { fetchConfig, onboard } from '../../api/sites';
+import { ApiError } from '../../api/client';
 import { useSites } from '../../state/SitesContext';
 import { useToast } from '../../components/ui/ToastContext';
 import { EmptyState } from '../../components/ui/EmptyState';
@@ -51,10 +52,54 @@ export function OnboardingPage() {
   }, []);
 
   const noProviderAvailable = config && !Object.values(config.availableProviders).some(Boolean);
+  const quota = config?.aiQuota ?? null;
+  const quotaExhausted = quota !== null && quota.remaining <= 0;
+
+  // Borne l'upload d'image : type réel image/* (ferme le contournement du drag-drop que
+  // `accept` ne bloque pas), taille ≤ 4 Mo, et redimensionnement canvas (≤ 1200px, JPEG
+  // 0.85) pour ne pas envoyer un data-URL énorme à l'IA. Les petits logos PNG sont
+  // conservés tels quels (transparence préservée).
+  const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+  const MAX_DIMENSION = 1200;
 
   const readImage = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      toast.error('Veuillez fournir un fichier image (PNG, JPEG, WebP…).');
+      return;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      toast.error('Image trop volumineuse (4 Mo maximum). Choisissez un fichier plus léger.');
+      return;
+    }
     const reader = new FileReader();
-    reader.onloadend = () => setUploadedImage(reader.result as string);
+    reader.onerror = () => toast.error('Impossible de lire ce fichier image.');
+    reader.onloadend = () => {
+      const dataUrl = reader.result as string;
+      const img = new Image();
+      img.onerror = () => toast.error('Ce fichier image semble corrompu.');
+      img.onload = () => {
+        const needsResize = img.width > MAX_DIMENSION || img.height > MAX_DIMENSION;
+        const heavy = file.size > 1024 * 1024;
+        if (!needsResize && !heavy) {
+          setUploadedImage(dataUrl); // déjà légère : on garde le format d'origine
+          return;
+        }
+        const scale = Math.min(1, MAX_DIMENSION / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          setUploadedImage(dataUrl);
+          return;
+        }
+        ctx.fillStyle = '#ffffff'; // fond blanc : le JPEG n'a pas d'alpha (logos transparents)
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        setUploadedImage(canvas.toDataURL('image/jpeg', 0.85));
+      };
+      img.src = dataUrl;
+    };
     reader.readAsDataURL(file);
   };
 
@@ -83,9 +128,15 @@ export function OnboardingPage() {
       setResult(data.qualification);
       setCreatedSlug(data.site.slug);
       await refresh();
+      fetchConfig().then(setConfig).catch(() => {});
       toast.success(`Le site « ${data.site.name} » a été créé et rattaché à votre compte !`);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Erreur lors de la génération IA.");
+      if (err instanceof ApiError && err.status === 429) {
+        toast.error(err.message);
+        fetchConfig().then(setConfig).catch(() => {});
+      } else {
+        toast.error(err instanceof Error ? err.message : "Erreur lors de la génération IA.");
+      }
     } finally {
       setLoading(false);
     }
@@ -120,6 +171,23 @@ export function OnboardingPage() {
             }}
             style={{ display: 'flex', flexDirection: 'column', gap: 20 }}
           >
+            {quota !== null && (
+              <div
+                className="badge animate-slide"
+                style={{
+                  alignSelf: 'flex-start',
+                  padding: '6px 12px',
+                  fontSize: '0.85rem',
+                  color: quotaExhausted ? 'var(--red-300)' : 'var(--indigo-200)',
+                  borderColor: quotaExhausted ? 'rgba(244,63,94,0.4)' : 'var(--accent-blue-border)',
+                }}
+              >
+                {quotaExhausted
+                  ? `⛔ Quota IA journalier atteint (${quota.used}/${quota.limit}) — réinitialisation à minuit`
+                  : `✨ ${quota.remaining} génération(s) IA restante(s) aujourd'hui (${quota.used}/${quota.limit} utilisées)`}
+              </div>
+            )}
+
             {config && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-muted)' }}>Modèle d'IA :</span>
@@ -260,8 +328,10 @@ export function OnboardingPage() {
               />
             </div>
 
-            <button className="btn btn-primary" onClick={handleSubmit} disabled={loading} style={{ width: '100%', padding: '14px 20px', fontSize: '1.05rem' }}>
-              {loading ? '🧠 Analyse & génération par l\'IA…' : '✨ Générer l\'ébauche & l\'architecture du site'}
+            <button className="btn btn-primary" onClick={handleSubmit} disabled={loading || quotaExhausted} style={{ width: '100%', padding: '14px 20px', fontSize: '1.05rem' }}>
+              {loading ? '🧠 Analyse & génération par l\'IA…' :
+               quotaExhausted ? '⛔ Quota IA journalier atteint' :
+               '✨ Générer l\'ébauche & l\'architecture du site'}
             </button>
           </div>
         )}

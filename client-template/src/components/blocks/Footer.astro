@@ -1,0 +1,59 @@
+---
+interface Props {
+  data: {
+    text?: string;
+    socials?: { facebook?: string; instagram?: string; linkedin?: string; x?: string };
+  };
+}
+
+const { data } = Astro.props;
+const LABELS: Record<string, string> = { facebook: 'Facebook', instagram: 'Instagram', linkedin: 'LinkedIn', x: 'X' };
+const socials = Object.entries(data.socials || {}).filter(([, url]) => Boolean(url));
+---
+
+<footer class="site-footer">
+  <div class="container">
+    {data.text && <p class="footer-text">{data.text}</p>}
+    {socials.length > 0 && (
+      <nav class="footer-socials" aria-label="Réseaux sociaux">
+        {socials.map(([network, url]) => (
+          <a href={url} target="_blank" rel="noopener noreferrer">{LABELS[network] || network}</a>
+        ))}
+      </nav>
+    )}
+  </div>
+</footer>
+
+<style>
+  .site-footer {
+    padding: 30px 20px;
+    border-top: 1px solid color-mix(in srgb, var(--color-text) 12%, transparent);
+    background-color: var(--color-bg);
+  }
+
+  .container {
+    max-width: 800px;
+    margin: 0 auto;
+    text-align: center;
+  }
+
+  .footer-text {
+    opacity: 0.8;
+    font-size: 0.95rem;
+    margin-bottom: 10px;
+  }
+
+  .footer-socials {
+    display: flex;
+    gap: 18px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .footer-socials a {
+    color: var(--color-primary);
+    font-weight: 600;
+    text-decoration: none;
+    font-size: 0.95rem;
+  }
+</style>

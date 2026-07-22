@@ -56,6 +56,25 @@ export const BLOCK_DEFAULTS: Record<string, Block> = {
       { name: 'Premium', price: '19.90 €', description: 'Le plus complet.', features: [{ feature: 'Avantage 1' }, { feature: 'Avantage 2' }, { feature: 'Avantage 3' }], ctaText: 'Choisir', isPopular: true },
     ],
   },
+  contact: {
+    blockType: 'contact',
+    title: 'Contactez-nous',
+    subtitle: 'Une question, un projet ? Écrivez-nous, nous répondons rapidement.',
+    ctaText: 'Envoyer le message',
+  },
+  info: {
+    blockType: 'info',
+    title: 'Infos pratiques',
+    address: '12 rue de la République, 92140 Clamart',
+    phone: '01 23 45 67 89',
+    email: 'contact@exemple.fr',
+    hours: 'Lun–Ven : 9h–19h\nSam : 9h–13h\nDim : fermé',
+  },
+  footer: {
+    blockType: 'footer',
+    text: '© Mon entreprise — Tous droits réservés',
+    socials: { facebook: '', instagram: '', linkedin: '', x: '' },
+  },
 };
 
 export const BLOCK_LABELS: Record<string, string> = {
@@ -66,4 +85,7 @@ export const BLOCK_LABELS: Record<string, string> = {
   testimonials: 'Témoignages',
   faq: 'FAQ',
   pricing: 'Tarifs',
+  contact: 'Contact',
+  info: 'Infos pratiques',
+  footer: 'Pied de page',
 };

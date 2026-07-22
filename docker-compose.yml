@@ -1,0 +1,25 @@
+# Base de données PostgreSQL prête à l'emploi pour le développement local.
+# Usage : docker compose up -d
+# Les identifiants correspondent au DATABASE_URI d'exemple de server/.env.example :
+#   postgres://postgres:postgrespassword@127.0.0.1:5432/metabuilder_db
+# (Seule la base est conteneurisée — la stack Node se lance avec « npm start ».)
+
+services:
+  db:
+    image: postgres:16
+    container_name: metabuilder-db
+    environment:
+      POSTGRES_DB: metabuilder_db
+      POSTGRES_PASSWORD: postgrespassword
+    ports:
+      - '5432:5432'
+    volumes:
+      - metabuilder_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  metabuilder_pgdata:

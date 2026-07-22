@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { useSites } from '../../state/SitesContext';
 import { useAuth } from '../../auth/AuthContext';
@@ -8,6 +9,7 @@ import type { Site } from '../../types';
 export function SitesListPage() {
   const { sites, loading } = useSites();
   const { isAdmin } = useAuth();
+  const [query, setQuery] = useState('');
 
   if (loading) {
     return (
@@ -48,16 +50,37 @@ export function SitesListPage() {
             Sélectionnez un site pour personnaliser son design, son contenu, ou le publier.
           </p>
         </div>
-        <Link to="/onboarding" className="btn btn-primary" style={{ textDecoration: 'none' }}>
-          ✨ Nouveau site avec l'IA
-        </Link>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          {sites.length > 3 && (
+            <input
+              type="search"
+              className="input-text"
+              style={{ padding: '9px 12px', fontSize: '0.9rem', minWidth: 200 }}
+              placeholder="🔍 Rechercher…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          )}
+          <Link to="/onboarding" className="btn btn-primary" style={{ textDecoration: 'none' }}>
+            ✨ Nouveau site avec l'IA
+          </Link>
+        </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 20 }}>
-        {sites.map((site) => (
-          <SiteCard key={site.slug} site={site} />
-        ))}
-      </div>
+      {(() => {
+        const q = query.trim().toLowerCase();
+        const filtered = sites.filter((s) => !q || s.name.toLowerCase().includes(q) || s.slug.toLowerCase().includes(q) || (s.domain || '').toLowerCase().includes(q));
+        if (filtered.length === 0) {
+          return <p style={{ color: 'var(--text-muted)' }}>Aucun site ne correspond à « {query} ».</p>;
+        }
+        return (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 20 }}>
+            {filtered.map((site) => (
+              <SiteCard key={site.slug} site={site} />
+            ))}
+          </div>
+        );
+      })()}
     </div>
   );
 }

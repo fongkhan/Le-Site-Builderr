@@ -53,6 +53,8 @@ async function login(email, password) {
   check('Anonyme : POST /webhook/rebuild -> 401', (await req('/webhook/rebuild?site=boulangerie-artisanale', { method: 'POST' })).status === 401);
   check('Anonyme : GET /internal/site-pages sans jeton -> 401', (await req('/internal/site-pages?site=boulangerie-artisanale')).status === 401);
   check('Anonyme : GET /api/config -> 401', (await req('/api/config')).status === 401);
+  check('Anonyme : GET /api/sites/owners -> 401', (await req('/api/sites/owners')).status === 401);
+  check('Anonyme : GET /api/hosting/status -> 401', (await req('/api/hosting/status')).status === 401);
 }
 
 // ---- Client : uniquement ses sites ----
@@ -104,6 +106,321 @@ if (admin.token) {
   const users = await req('/api/users', { token: admin.token });
   const emails = (users.json?.docs ?? []).map((u) => u.email).sort();
   check('Admin : liste tous les comptes', emails.includes('admin@admin.com') && emails.includes('client@client.com'), JSON.stringify(emails));
+
+  const owners = await req('/api/sites/owners', { token: admin.token });
+  check('Admin : GET /api/sites/owners -> 200 (map slug->emails)', owners.status === 200 && owners.json && typeof owners.json === 'object', `HTTP ${owners.status}`);
+  check('Admin : owners rattache le client à son site', Array.isArray(owners.json?.['boulangerie-artisanale']) && owners.json['boulangerie-artisanale'].includes('client@client.com'), JSON.stringify(owners.json?.['boulangerie-artisanale']));
+}
+
+if (client.token) {
+  check('Client : GET /api/sites/owners -> 403', (await req('/api/sites/owners', { token: client.token })).status === 403);
+  check('Client : GET /api/hosting/status -> 403', (await req('/api/hosting/status', { token: client.token })).status === 403);
+}
+
+// ---- Médiathèque (ownership à la création) ----
+{
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+  const uploadAs = async (token, siteId) => {
+    const form = new FormData();
+    form.append('file', new Blob([png], { type: 'image/png' }), 'pixel.png');
+    form.append('_payload', JSON.stringify({ site: siteId }));
+    const res = await fetch(`${BASE}/api/media`, {
+      method: 'POST',
+      headers: { Origin: ORIGIN, ...(token ? { Cookie: `payload-token=${token}` } : {}) },
+      body: form,
+    });
+    let json = null;
+    try { json = await res.clone().json(); } catch { /* non-JSON */ }
+    return { status: res.status, json };
+  };
+
+  const anon = await uploadAs(null, 1);
+  check('Media : upload anonyme -> 401/403', anon.status === 401 || anon.status === 403, `HTTP ${anon.status}`);
+
+  if (client.token && admin.token) {
+    // id du site du client (boulangerie-artisanale) via l'API admin
+    const siteRes = await req('/api/payload_sites?where[slug][equals]=boulangerie-artisanale&limit=1&depth=0', { token: admin.token });
+    const ownSiteId = siteRes.json?.docs?.[0]?.id;
+    if (ownSiteId) {
+      const ok = await uploadAs(client.token, ownSiteId);
+      check('Media : client -> upload sur SON site accepté', ok.status === 201 && Boolean(ok.json?.doc?.url), `HTTP ${ok.status}`);
+      const denied = await uploadAs(client.token, 999999);
+      check('Media : client -> upload sur un autre site refusé', denied.status === 403 || denied.status === 400, `HTTP ${denied.status}`);
+      // Nettoyage du média de test
+      if (ok.json?.doc?.id) await req(`/api/media/${ok.json.doc.id}`, { method: 'DELETE', token: admin.token });
+    }
+  }
+}
+
+// ---- Historique des builds (admin ou propriétaire) ----
+{
+  check('Builds : anonyme -> 401', (await req('/api/sites/boulangerie-artisanale/builds')).status === 401);
+  if (client.token) {
+    check('Builds : client sur SON site -> 200 (tableau)', await (async () => {
+      const r = await req('/api/sites/boulangerie-artisanale/builds', { token: client.token });
+      return r.status === 200 && Array.isArray(r.json);
+    })());
+    check("Builds : client sur un autre site -> 403", (await req('/api/sites/site-dun-autre/builds', { token: client.token })).status === 403);
+  }
+}
+
+// ---- Duplication de site (admin only) ----
+{
+  check('Duplicate : anonyme -> 401', (await req('/api/sites/boulangerie-artisanale/duplicate', { method: 'POST' })).status === 401);
+  if (client.token) {
+    check('Duplicate : client -> 403', (await req('/api/sites/boulangerie-artisanale/duplicate', { method: 'POST', token: client.token })).status === 403);
+  }
+  if (admin.token) {
+    const dup = await req('/api/sites/boulangerie-artisanale/duplicate', { method: 'POST', token: admin.token });
+    check('Duplicate : admin -> crée un jumeau sous nouveau slug', dup.status === 200 && dup.json?.site?.slug?.startsWith('boulangerie-artisanale-copie'), JSON.stringify(dup.json?.site?.slug));
+    if (dup.json?.site?.slug) {
+      await req(`/api/sites/${dup.json.site.slug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+    }
+  }
+}
+
+// ---- Releases & rollback (admin only) ----
+{
+  check('Releases : anonyme -> 401', (await req('/api/sites/boulangerie-artisanale/releases')).status === 401);
+  if (client.token) {
+    check('Releases : client -> 403', (await req('/api/sites/boulangerie-artisanale/releases', { token: client.token })).status === 403);
+    check('Rollback : client -> 403', (await req('/api/sites/boulangerie-artisanale/rollback', { method: 'POST', body: { release: '1' }, token: client.token })).status === 403);
+  }
+  if (admin.token) {
+    const rel = await req('/api/sites/boulangerie-artisanale/releases', { token: admin.token });
+    check('Releases : admin -> 200 (tableau)', rel.status === 200 && Array.isArray(rel.json));
+    check('Rollback : identifiant hostile -> 400', (await req('/api/sites/boulangerie-artisanale/rollback', { method: 'POST', body: { release: '../../etc' }, token: admin.token })).status === 400);
+    check('Rollback : release inexistante -> 400', (await req('/api/sites/boulangerie-artisanale/rollback', { method: 'POST', body: { release: '1111111111111' }, token: admin.token })).status === 400);
+  }
+}
+
+// ---- Hébergement (admin only) ----
+if (admin.token) {
+  const hs = await req('/api/hosting/status', { token: admin.token });
+  check('Hébergement : status admin -> 200 avec driver', hs.status === 200 && typeof hs.json?.driver === 'string', JSON.stringify(hs.json?.driver));
+  check('Hébergement : status ne fuite jamais de jeton', !JSON.stringify(hs.json || {}).toLowerCase().includes('token'));
+  const ht = await req('/api/hosting/test', { method: 'POST', token: admin.token });
+  check('Hébergement : test admin -> ok en simulation', ht.status === 200 && ht.json?.ok === true, JSON.stringify(ht.json));
+}
+
+// ---- Robustesse : validation slug + confinement des chemins (Lot 1) ----
+if (admin.token) {
+  check('Slug : POST /api/sites name="!!!" -> 400 (anti-slug-vide)', (await req('/api/sites', { method: 'POST', body: { name: '!!!' }, token: admin.token })).status === 400);
+  check('Slug : POST /api/sites name="---" -> 400', (await req('/api/sites', { method: 'POST', body: { name: '---' }, token: admin.token })).status === 400);
+  check('Chemins : PUT documentRoot="/etc" -> 400 (confinement)', (await req('/api/sites/boulangerie-artisanale', { method: 'PUT', body: { documentRoot: '/etc' }, token: admin.token })).status === 400);
+  check('Chemins : POST /api/sites/import repositoryPath="/root" -> 400', (await req('/api/sites/import', { method: 'POST', body: { slug: 'x-import', repositoryPath: '/root' }, token: admin.token })).status === 400);
+}
+
+// ---- Robustesse : validation de thème avant écriture (Lot 2) ----
+if (admin.token) {
+  const baseTheme = { colors: { primary: '#8B5A2B', secondary: '#F5E6CC', background: '#FAFAFA', text: '#2D241E' }, fonts: { heading: 'Playfair Display', body: 'Inter' }, radius: '12px' };
+  const postTheme = (theme) => req('/api/theme?site=boulangerie-artisanale', { method: 'POST', body: { theme }, token: admin.token });
+  check('Thème : POST valide -> 200', (await postTheme(baseTheme)).status === 200);
+  check('Thème : radius injectant du CSS -> 400', (await postTheme({ ...baseTheme, radius: '12px;} body{display:none}' })).status === 400);
+  check('Thème : couleur non-hex -> 400', (await postTheme({ ...baseTheme, colors: { ...baseTheme.colors, primary: 'url(javascript:1)' } })).status === 400);
+  check('Thème : police hors allowlist -> 400', (await postTheme({ ...baseTheme, fonts: { heading: 'Comic Sans', body: 'Inter' } })).status === 400);
+}
+
+// ---- Persistance : Payload est la source de vérité des sites ----
+if (admin.token) {
+  const put = await req('/api/sites/boulangerie-artisanale', { method: 'PUT', body: { status: 'active' }, token: admin.token });
+  check('Sites : PUT status=active -> 200', put.status === 200 && put.json?.site?.status === 'active');
+  check('Sites : réponse normalisée (pas de clé id)', put.json?.site && !('id' in put.json.site), JSON.stringify(Object.keys(put.json?.site ?? {})));
+
+  const list = await req('/api/sites', { token: admin.token });
+  const listed = (list.json ?? []).find((s) => s.slug === 'boulangerie-artisanale');
+  check('Sites : GET /api/sites reflète le nouveau statut', listed?.status === 'active');
+
+  // Preuve en base : la collection Payload elle-même porte la valeur
+  const payloadDoc = await req('/api/payload_sites?where[slug][equals]=boulangerie-artisanale', { token: admin.token });
+  check('Sites : payload_sites (REST Payload) porte status=active', payloadDoc.json?.docs?.[0]?.status === 'active');
+
+  // Remise en état pour l'idempotence des runs
+  await req('/api/sites/boulangerie-artisanale', { method: 'PUT', body: { status: 'draft' }, token: admin.token });
+}
+
+// ---- File d'attente de builds : exposition du statut ----
+if (admin.token && client.token) {
+  const adminStatus = await req('/api/build-status', { token: admin.token });
+  check('Queue : build-status admin expose queue[] et queueLength', Array.isArray(adminStatus.json?.queue) && typeof adminStatus.json?.queueLength === 'number');
+
+  const clientStatus = await req('/api/build-status', { token: client.token });
+  check('Queue : build-status client expose queueLength + queuedSites (sans queue complète)',
+    typeof clientStatus.json?.queueLength === 'number' && Array.isArray(clientStatus.json?.queuedSites) && !('queue' in (clientStatus.json ?? {})));
+}
+
+// ---- Quota IA (activé quand AI_DAILY_QUOTA=0, comme dans le job CI) ----
+if (process.env.AI_DAILY_QUOTA === '0' && client.token && admin.token) {
+  const cfg = await req('/api/config', { token: client.token });
+  check('Quota : /api/config client -> aiQuota {limit:0, remaining:0}', cfg.json?.aiQuota?.limit === 0 && cfg.json?.aiQuota?.remaining === 0, JSON.stringify(cfg.json?.aiQuota));
+
+  const cfgAdmin = await req('/api/config', { token: admin.token });
+  check('Quota : /api/config admin -> aiQuota null (illimité)', cfgAdmin.json?.aiQuota === null);
+
+  // Le 429 doit tomber AVANT tout appel IA (aucune clé API requise pour ce test)
+  const onboardClient = await req('/api/onboard', { method: 'POST', body: { description: 'test quota' }, token: client.token });
+  check('Quota : onboard client -> 429 (quota épuisé)', onboardClient.status === 429);
+
+  const onboardAdmin = await req('/api/onboard', { method: 'POST', body: { description: 'test quota' }, token: admin.token });
+  check('Quota : onboard admin -> pas de 429 (illimité)', onboardAdmin.status !== 429, `HTTP ${onboardAdmin.status}`);
+
+  // Un client ne peut pas modifier son propre quota
+  const me = await req('/api/users/me', { token: client.token });
+  const myId = me.json?.user?.id;
+  if (myId) {
+    await req(`/api/users/${myId}`, { method: 'PATCH', body: { aiDailyQuota: 9999 }, token: client.token });
+    const after = await req('/api/users/me', { token: client.token });
+    check('Quota : tentative aiDailyQuota=9999 par le client neutralisée', after.json?.user?.aiDailyQuota == null, JSON.stringify(after.json?.user?.aiDailyQuota));
+  }
+
+  // Assistant IA du CMS : même quota que l'onboarding, ownership sur ?site
+  const assistOwn = await req('/api/ai/assist', { method: 'POST', body: { site: 'boulangerie-artisanale', action: 'rewrite', input: 'Bonjour' }, token: client.token });
+  check('AI assist : client sur SON site, quota épuisé -> 429', assistOwn.status === 429, `HTTP ${assistOwn.status}`);
+}
+
+// ---- Assistant IA du CMS : auth & ownership (indépendant du quota) ----
+{
+  check('AI assist : anonyme -> 401', (await req('/api/ai/assist', { method: 'POST', body: { site: 'boulangerie-artisanale', action: 'rewrite', input: 'x' } })).status === 401);
+  if (client.token) {
+    check("AI assist : client sur un autre site -> 403", (await req('/api/ai/assist', { method: 'POST', body: { site: 'site-dun-autre', action: 'rewrite', input: 'x' }, token: client.token })).status === 403);
+    check('AI assist : action invalide -> 400', (await req('/api/ai/assist', { method: 'POST', body: { site: 'boulangerie-artisanale', action: 'pirater', input: 'x' }, token: client.token })).status === 400);
+  }
+}
+
+// ---- Réinitialisation de mot de passe ----
+{
+  const known = await req('/api/users/forgot-password', { method: 'POST', body: { email: 'client@client.com' } });
+  const unknown = await req('/api/users/forgot-password', { method: 'POST', body: { email: 'inconnu@nulle-part.example' } });
+  check('Reset : forgot-password email connu -> 200', known.status === 200, `HTTP ${known.status}`);
+  check('Reset : email inconnu -> même statut (anti-énumération)', unknown.status === known.status, `HTTP ${unknown.status}`);
+
+  const badToken = await req('/api/users/reset-password', { method: 'POST', body: { token: 'jeton-invalide', password: 'nouveau-mdp-123' } });
+  check('Reset : token invalide -> 4xx (pas 500)', badToken.status >= 400 && badToken.status < 500, `HTTP ${badToken.status}`);
+}
+
+// ---- Création de compte client (admin only) ----
+if (admin.token && client.token) {
+  // Un client ne peut pas créer d'utilisateur (Payload access.create = isAdmin)
+  const clientCreate = await req('/api/users', { method: 'POST', body: { email: 'hack@nulle-part.example', password: 'password123', roles: ['admin'] }, token: client.token });
+  check('Users : POST /api/users par un client -> 403', clientCreate.status === 403, `HTTP ${clientCreate.status}`);
+
+  // Admin crée un client (idempotent : on purge d'abord le compte de test)
+  const testEmail = 'sec-check-client@nulle-part.example';
+  const existing = await req(`/api/users?where[email][equals]=${encodeURIComponent(testEmail)}`, { token: admin.token });
+  const existingId = existing.json?.docs?.[0]?.id;
+  if (existingId) await req(`/api/users/${existingId}`, { method: 'DELETE', token: admin.token });
+
+  const adminCreate = await req('/api/users', { method: 'POST', body: { email: testEmail, password: 'password123', roles: ['client'] }, token: admin.token });
+  check('Users : POST /api/users par un admin -> crée le compte', adminCreate.status === 200 || adminCreate.status === 201, `HTTP ${adminCreate.status}`);
+
+  const newLogin = await req('/api/users/login', { method: 'POST', body: { email: testEmail, password: 'password123' } });
+  check('Users : le client créé peut se connecter', newLogin.status === 200, `HTTP ${newLogin.status}`);
+
+  // Nettoyage
+  const createdId = adminCreate.json?.doc?.id;
+  if (createdId) await req(`/api/users/${createdId}`, { method: 'DELETE', token: admin.token });
+}
+
+// ---- Formulaire de contact public (rate-limité, honeypot) ----
+{
+  const valid = { name: 'Jean Test', email: 'jean@exemple.fr', message: 'Bonjour, ceci est un test.' };
+  const ok = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: valid });
+  check('Contact : message valide -> 200', ok.status === 200 && ok.json?.success === true, `HTTP ${ok.status}`);
+  check('Contact : site inconnu -> 404', (await req('/api/contact/site-inexistant', { method: 'POST', body: valid })).status === 404);
+  check('Contact : corps invalide -> 400', (await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { name: '', email: 'pas-un-email', message: '' } })).status === 400);
+  const hp = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { ...valid, company: 'robot inc' } });
+  check('Contact : honeypot rempli -> 200 silencieux', hp.status === 200 && hp.json?.success === true);
+}
+
+// ---- Statistiques de visites : beacon public borné, lecture par ownership ----
+{
+  // Le beacon est public (appelé par le site déployé, sans auth) et répond 204 même
+  // pour un slug inconnu — jamais d'erreur qui casserait la page.
+  const hit = await req('/api/stats/hit/boulangerie-artisanale', { method: 'POST' });
+  check('Stats : beacon public -> 204', hit.status === 204, `HTTP ${hit.status}`);
+  const hitUnknown = await req('/api/stats/hit/site-inexistant', { method: 'POST' });
+  check('Stats : beacon slug inconnu -> 204 silencieux', hitUnknown.status === 204, `HTTP ${hitUnknown.status}`);
+
+  // La lecture des stats est réservée au propriétaire / admin.
+  check('Stats : lecture anonyme -> 401', (await req('/api/sites/boulangerie-artisanale/stats')).status === 401);
+  if (client.token) {
+    const own = await req('/api/sites/boulangerie-artisanale/stats', { token: client.token });
+    check('Stats : propriétaire lit ses stats -> 200', own.status === 200 && typeof own.json?.total === 'number' && Array.isArray(own.json?.days), `HTTP ${own.status}`);
+    check("Stats : client sur un autre site -> 403", (await req('/api/sites/site-dun-autre/stats', { token: client.token })).status === 403);
+    // Le beacon vient d'incrémenter le compteur du jour : le total doit être positif.
+    check('Stats : le hit a été comptabilisé (total > 0)', (own.json?.total ?? 0) > 0, `total=${own.json?.total}`);
+  }
+}
+
+// ---- Audit & export/import (admin only) ----
+{
+  check('Audit : anonyme -> 401', (await req('/api/audit')).status === 401);
+  check('Export : anonyme -> 401', (await req('/api/sites/boulangerie-artisanale/export')).status === 401);
+  if (client.token) {
+    check('Audit : client -> 403', (await req('/api/audit', { token: client.token })).status === 403);
+    check('Export : client -> 403', (await req('/api/sites/boulangerie-artisanale/export', { token: client.token })).status === 403);
+  }
+  if (admin.token) {
+    const audit = await req('/api/audit', { token: admin.token });
+    check('Audit : admin -> 200 (tableau)', audit.status === 200 && Array.isArray(audit.json));
+
+    const exp = await fetch(`${BASE}/api/sites/boulangerie-artisanale/export`, { headers: { Origin: ORIGIN, Cookie: `payload-token=${admin.token}` } });
+    check('Export : admin -> 200 (zip)', exp.status === 200 && (exp.headers.get('content-type') || '').includes('zip'));
+    const zipBuf = Buffer.from(await exp.arrayBuffer());
+    check('Export : archive non vide', zipBuf.length > 200, `${zipBuf.length} octets`);
+
+    // Cycle complet : ré-import de l'archive exportée → nouveau site sous slug dédupliqué
+    const imp = await fetch(`${BASE}/api/sites/import-archive`, {
+      method: 'POST',
+      headers: { Origin: ORIGIN, Cookie: `payload-token=${admin.token}`, 'Content-Type': 'application/zip' },
+      body: zipBuf,
+    });
+    const impJson = await imp.json().catch(() => null);
+    check('Import : archive exportée ré-importée', imp.status === 200 && impJson?.success === true && impJson?.site?.slug?.startsWith('boulangerie-artisanale-'), JSON.stringify(impJson?.site?.slug));
+    if (impJson?.site?.slug) {
+      await req(`/api/sites/${impJson.site.slug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+    }
+
+    // Anti zip-slip : une archive aux entrées hostiles ne doit rien extraire hors périmètre
+    const { createRequire } = await import('node:module');
+    const AdmZip = createRequire(import.meta.url)('adm-zip');
+    const evil = new AdmZip();
+    evil.addFile('meta.json', Buffer.from(JSON.stringify({ slug: 'test-zip-slip', name: 'Zip Slip' })));
+    evil.addFile('dist/../../evil.txt', Buffer.from('owned'));
+    evil.addFile('dist/../evil2.txt', Buffer.from('owned'));
+    const slip = await fetch(`${BASE}/api/sites/import-archive`, {
+      method: 'POST',
+      headers: { Origin: ORIGIN, Cookie: `payload-token=${admin.token}`, 'Content-Type': 'application/zip' },
+      body: evil.toBuffer(),
+    });
+    const slipJson = await slip.json().catch(() => null);
+    check('Import : entrées zip-slip ignorées (0 fichier extrait)', slip.status === 200 && slipJson?.extractedFiles === 0, JSON.stringify(slipJson?.extractedFiles));
+    if (slipJson?.site?.slug) {
+      await req(`/api/sites/${slipJson.site.slug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+    }
+  }
+}
+
+// ---- Durcissement HTTP : en-têtes helmet ----
+{
+  const r = await req('/api/config');
+  check('Helmet : en-tête X-Content-Type-Options=nosniff présent', r.res.headers.get('x-content-type-options') === 'nosniff', r.res.headers.get('x-content-type-options') || 'absent');
+}
+
+// ---- Rate-limit login (EN DERNIER : consomme le budget d'échecs de l'IP) ----
+// Les connexions réussies ne comptent pas (skipSuccessfulRequests) : seules les
+// tentatives ratées ci-dessous épuisent le quota jusqu'au 429. On cible un email
+// INEXISTANT : le rate-limit par IP se déclenche quand même (échecs = 401), mais on
+// évite de verrouiller un compte réel (Payload lock maxLoginAttempts).
+{
+  let saw429 = false;
+  let attempts = 0;
+  for (let i = 0; i < 20 && !saw429; i++) {
+    attempts++;
+    const r = await req('/api/users/login', { method: 'POST', body: { email: 'rate-limit-probe@nulle-part.example', password: 'mauvais-mot-de-passe' } });
+    if (r.status === 429) saw429 = true;
+  }
+  check('Rate-limit : les tentatives de connexion échouées finissent par renvoyer 429', saw429, `429 après ${attempts} essais`);
 }
 
 console.log(failures === 0 ? '\n✔ Matrice de sécurité : tous les contrôles passent.' : `\n✖ ${failures} contrôle(s) en échec.`);

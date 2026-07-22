@@ -51,11 +51,21 @@ export interface Block {
     ctaText: string;
     isPopular: boolean;
   }[];
+  // Bloc info (infos pratiques)
+  address?: string;
+  phone?: string;
+  email?: string;
+  hours?: string;
+  // Bloc footer
+  text?: string;
+  socials?: { facebook?: string; instagram?: string; linkedin?: string; x?: string };
 }
 
 export interface PageDoc {
   title: string;
   slug: string;
+  metaTitle?: string;
+  metaDescription?: string;
   layout: Block[];
 }
 
@@ -92,6 +102,18 @@ export interface BuildStatus {
   lockExists: boolean;
   logs: string;
   buildingSite?: string | null;
+  /** Slugs en attente, dans l'ordre (admins uniquement) */
+  queue?: string[];
+  queueLength?: number;
+  /** Positions des sites de l'utilisateur courant dans la file (clients) */
+  queuedSites?: { slug: string; position: number }[];
+}
+
+export interface RebuildResponse {
+  message: string;
+  queued?: boolean;
+  position?: number;
+  alreadyBuilding?: boolean;
 }
 
 export interface FileEntry {
@@ -104,10 +126,18 @@ export interface FileEntry {
 
 export type AiProvider = 'openai' | 'anthropic' | 'gemini';
 
+export interface AiQuotaInfo {
+  limit: number;
+  used: number;
+  remaining: number;
+}
+
 export interface AppConfig {
   availableProviders: Record<AiProvider, boolean>;
   defaultProvider: AiProvider;
   devNoAuth?: boolean;
+  /** null = illimité (admin) */
+  aiQuota?: AiQuotaInfo | null;
 }
 
 export interface User {

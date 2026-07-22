@@ -255,6 +255,72 @@ body {
   }
 }
 
+/* CMS : colonne d'édition + aperçu ; empilé sous 900px */
+.cms-grid {
+  display: grid;
+  grid-template-columns: 400px 1fr;
+  gap: 30px;
+  align-items: start;
+}
+
+/* Autorise les pistes 1fr à rétrécir sous la largeur intrinsèque de leur contenu
+   (aperçu) — sinon la grille déborde horizontalement sur mobile. */
+.cms-grid > * {
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .cms-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Gestionnaire de fichiers : arborescence + contenu ; empilé sous 640px */
+.file-manager-grid {
+  display: grid;
+  grid-template-columns: 350px 1fr;
+  height: 60vh;
+  overflow: hidden;
+}
+
+@media (max-width: 640px) {
+  .file-manager-grid {
+    grid-template-columns: 1fr;
+    height: 70vh;
+    overflow: auto;
+  }
+}
+
+/* En-tête responsive : sous 640px, on empile et on enroule la navigation */
+@media (max-width: 640px) {
+  .header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 14px 16px;
+  }
+
+  .header > div:last-child {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .nav-tabs {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .nav-tab {
+    padding: 8px 12px;
+    font-size: 0.9rem;
+  }
+
+  .main-content {
+    padding: 20px 14px;
+  }
+}
+
 /* Terminal logs styles */
 .terminal {
   background: #05070c;

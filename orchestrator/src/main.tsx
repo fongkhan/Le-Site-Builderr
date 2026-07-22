@@ -6,10 +6,13 @@ import { AuthProvider } from './auth/AuthContext'
 import { RequireAuth } from './auth/RequireAuth'
 import { RequireAdmin } from './auth/RequireAdmin'
 import { SitesProvider } from './state/SitesContext'
+import { BuildStatusProvider } from './state/BuildStatusContext'
 import { ToastProvider } from './components/ui/ToastContext'
 import { AppLayout } from './components/layout/AppLayout'
 import { SiteLayout } from './components/layout/SiteLayout'
 import { LoginPage } from './features/auth/LoginPage'
+import { ForgotPasswordPage } from './features/auth/ForgotPasswordPage'
+import { ResetPasswordPage } from './features/auth/ResetPasswordPage'
 import { SitesListPage } from './features/sites/SitesListPage'
 import { OnboardingPage } from './features/onboarding/OnboardingPage'
 import { DesignPage } from './features/design/DesignPage'
@@ -20,6 +23,8 @@ import { NotFoundPage } from './features/NotFoundPage'
 
 const router = createBrowserRouter([
   { path: '/login', element: <LoginPage /> },
+  { path: '/forgot-password', element: <ForgotPasswordPage /> },
+  { path: '/reset-password', element: <ResetPasswordPage /> },
   {
     element: <RequireAuth />,
     children: [
@@ -57,7 +62,9 @@ createRoot(document.getElementById('root')!).render(
     <ToastProvider>
       <AuthProvider>
         <SitesProvider>
-          <RouterProvider router={router} />
+          <BuildStatusProvider>
+            <RouterProvider router={router} />
+          </BuildStatusProvider>
         </SitesProvider>
       </AuthProvider>
     </ToastProvider>
