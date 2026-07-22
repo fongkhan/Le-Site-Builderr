@@ -32,6 +32,13 @@ function createSimulationDriver() {
     async ensureSubdomain(slug) {
       return { domain: `${slug}.o2switch.site`, created: false };
     },
+    // Domaine personnalisé simulé : aucun appel réseau, on considère le rattachement OK.
+    async ensureCustomDomain(fqdn) {
+      return { domain: fqdn, created: true };
+    },
+    async removeCustomDomain() {
+      return { removed: true };
+    },
     // La copie atomique locale (index.js) est LA publication en simulation.
     async publish() {
       return { published: 'local' };
@@ -144,6 +151,29 @@ function createCpanelDriver(config) {
         dir: `public_html/${slug}`,
       });
       return { domain, created: true };
+    },
+
+    // Rattache un domaine EXTERNE (acheté par le client) comme domaine additionnel,
+    // pointant sur le document root existant du site (public_html/<slug>). Idempotent.
+    // AutoSSL émettra le certificat une fois le domaine résolu vers le serveur.
+    async ensureCustomDomain(fqdn, slug) {
+      const data = await uapi('DomainInfo', 'list_domains', {});
+      const existing = (data && data.addon_domains) || [];
+      if (existing.includes(fqdn)) {
+        return { domain: fqdn, created: false };
+      }
+      await uapi('AddonDomain', 'addaddondomain', {
+        newdomain: fqdn,
+        dir: `public_html/${slug}`,
+      });
+      return { domain: fqdn, created: true };
+    },
+
+    // Détache un domaine additionnel. Best-effort : l'appelant tolère l'échec
+    // (domaine déjà absent, variations d'API selon la version cPanel).
+    async removeCustomDomain(fqdn) {
+      await uapi('AddonDomain', 'deladdondomain', { domain: fqdn });
+      return { removed: true };
     },
 
     // Publie le dist : archive zip locale → upload → extraction distante → nettoyage.

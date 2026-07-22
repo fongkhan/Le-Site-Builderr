@@ -563,6 +563,12 @@ function SitesTable({ sites, owners, onEdit, onFiles, onDelete, onDuplicate }: {
                           {site.domain} <span className="badge" style={{ fontSize: '0.7rem', color: 'var(--amber-400)' }}>non déployé</span>
                         </span>
                       )}
+                      {site.domainStatus === 'active' && (
+                        <div><span className="badge" style={{ fontSize: '0.68rem', color: 'var(--accent-emerald)' }} title="Domaine personnalisé du client actif">🌐 domaine perso</span></div>
+                      )}
+                      {site.domainStatus === 'pending' && (
+                        <div><span className="badge" style={{ fontSize: '0.68rem', color: 'var(--amber-400)' }} title={`Vérification en attente : ${site.customDomain || ''}`}>🌐 domaine en attente</span></div>
+                      )}
                     </td>
                     <td style={{ fontSize: '0.8rem' }}>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>

@@ -83,6 +83,10 @@ export interface Site {
   createdWithTool: boolean;
   status: 'draft' | 'active' | 'error' | string;
   sslStatus: string;
+  // Domaine personnalisé (rattachement du vrai nom de domaine du client)
+  customDomain?: string;
+  domainStatus?: 'none' | 'pending' | 'active' | 'error' | string;
+  domainVerifyToken?: string;
 }
 
 export interface ScannedSite {

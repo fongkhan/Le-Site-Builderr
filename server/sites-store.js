@@ -23,7 +23,11 @@ function toApiSite(doc) {
     stack: doc.stack || 'Astro SSG',
     createdWithTool: Boolean(doc.createdWithTool),
     status: doc.status || 'draft',
-    sslStatus: doc.sslStatus || 'active'
+    sslStatus: doc.sslStatus || 'active',
+    // Domaine personnalisé (rattachement du vrai nom de domaine du client)
+    customDomain: doc.customDomain || '',
+    domainStatus: doc.domainStatus || 'none',
+    domainVerifyToken: doc.domainVerifyToken || ''
   };
 }
 
@@ -91,7 +95,7 @@ async function createSite(data) {
 async function updateSite(slug, partial) {
   // Update partiel : seules les clés fournies (non-undefined) sont modifiées
   const changes = {};
-  for (const key of ['name', 'domain', 'documentRoot', 'repositoryPath', 'stack', 'sslStatus', 'status', 'createdWithTool']) {
+  for (const key of ['name', 'domain', 'documentRoot', 'repositoryPath', 'stack', 'sslStatus', 'status', 'createdWithTool', 'customDomain', 'domainStatus', 'domainVerifyToken']) {
     if (partial[key] !== undefined) changes[key] = partial[key];
   }
 
@@ -200,14 +204,15 @@ async function migrateFromJson() {
       imported++;
     } else {
       const doc = existing.docs[0];
-      if (doc.status == null || doc.sslStatus == null) {
+      if (doc.status == null || doc.sslStatus == null || doc.domainStatus == null) {
         await payload.update({
           collection: 'payload_sites',
           id: doc.id,
           data: {
             status: doc.status ?? (jsonSite.status || 'draft'),
             sslStatus: doc.sslStatus ?? (jsonSite.sslStatus || 'active'),
-            createdWithTool: doc.createdWithTool ?? Boolean(jsonSite.createdWithTool)
+            createdWithTool: doc.createdWithTool ?? Boolean(jsonSite.createdWithTool),
+            domainStatus: doc.domainStatus ?? 'none'
           },
           overrideAccess: true
         });

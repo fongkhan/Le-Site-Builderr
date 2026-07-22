@@ -203,6 +203,38 @@ if (admin.token) {
   check('Hébergement : test admin -> ok en simulation', ht.status === 200 && ht.json?.ok === true, JSON.stringify(ht.json));
 }
 
+// ---- Domaine personnalisé (admin only) ----
+{
+  const path = '/api/sites/boulangerie-artisanale/custom-domain';
+  // Fermé aux anonymes et aux clients (admin only)
+  check('Domaine : POST anonyme -> 401', (await req(path, { method: 'POST', body: { domain: 'exemple.fr' } })).status === 401);
+  check('Domaine : verify anonyme -> 401', (await req(`${path}/verify`, { method: 'POST' })).status === 401);
+  check('Domaine : DELETE anonyme -> 401', (await req(path, { method: 'DELETE' })).status === 401);
+  if (client.token) {
+    check('Domaine : POST client -> 403', (await req(path, { method: 'POST', body: { domain: 'exemple.fr' }, token: client.token })).status === 403);
+    check('Domaine : DELETE client -> 403', (await req(path, { method: 'DELETE', token: client.token })).status === 403);
+  }
+  if (admin.token) {
+    // Domaine invalide -> 400
+    check('Domaine : admin domaine invalide -> 400', (await req(path, { method: 'POST', body: { domain: 'pas un domaine' }, token: admin.token })).status === 400);
+    // Sous-domaine du root interne -> 400 (si le root est connu)
+    // Saisie valide -> 200 + enregistrement TXT renvoyé
+    const attach = await req(path, { method: 'POST', body: { domain: 'HTTPS://WWW.Exemple-Domaine-Test.FR/' }, token: admin.token });
+    check('Domaine : admin saisie valide -> 200 + TXT', attach.status === 200 && attach.json?.customDomain === 'exemple-domaine-test.fr' && attach.json?.record?.type === 'TXT' && typeof attach.json?.record?.value === 'string', JSON.stringify(attach.json?.record));
+    check('Domaine : statut passe à pending', attach.json?.domainStatus === 'pending', attach.json?.domainStatus);
+    // Vérification sans TXT publié -> verified:false (jamais 500)
+    const verify = await req(`${path}/verify`, { method: 'POST', token: admin.token });
+    check('Domaine : verify sans TXT -> verified:false (pas 500)', verify.status === 200 && verify.json?.verified === false, `HTTP ${verify.status} ${JSON.stringify(verify.json?.verified)}`);
+    // Le site reflète le domaine personnalisé en attente
+    const sites = await req('/api/sites', { token: admin.token });
+    const site = Array.isArray(sites.json) ? sites.json.find((s) => s.slug === 'boulangerie-artisanale') : null;
+    check('Domaine : le site expose customDomain + domainStatus', site?.customDomain === 'exemple-domaine-test.fr' && site?.domainStatus === 'pending', JSON.stringify({ c: site?.customDomain, s: site?.domainStatus }));
+    // Détachement -> retour au sous-domaine
+    const detach = await req(path, { method: 'DELETE', token: admin.token });
+    check('Domaine : détachement -> none + sous-domaine', detach.status === 200 && detach.json?.domainStatus === 'none' && typeof detach.json?.domain === 'string', JSON.stringify(detach.json));
+  }
+}
+
 // ---- Robustesse : validation slug + confinement des chemins (Lot 1) ----
 if (admin.token) {
   check('Slug : POST /api/sites name="!!!" -> 400 (anti-slug-vide)', (await req('/api/sites', { method: 'POST', body: { name: '!!!' }, token: admin.token })).status === 400);

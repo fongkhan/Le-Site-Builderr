@@ -81,6 +81,38 @@ export function duplicateSite(slug: string): Promise<{ success: boolean; site: S
   return apiFetch(`/api/sites/${slug}/duplicate`, { method: 'POST' });
 }
 
+// --- Domaine personnalisé (admin) : rattacher le vrai nom de domaine d'un client ---
+export interface CustomDomainRecord {
+  type: 'TXT';
+  host: string;
+  value: string;
+}
+export interface AttachDomainResponse {
+  customDomain: string;
+  domainStatus: string;
+  record: CustomDomainRecord;
+  pointingHint: string;
+}
+export interface VerifyDomainResponse {
+  verified: boolean;
+  domainStatus: string;
+  domain?: string;
+  sslStatus?: string;
+  message?: string;
+}
+
+export function attachCustomDomain(slug: string, domain: string): Promise<AttachDomainResponse> {
+  return apiFetch(`/api/sites/${slug}/custom-domain`, { method: 'POST', body: JSON.stringify({ domain }) });
+}
+
+export function verifyCustomDomain(slug: string): Promise<VerifyDomainResponse> {
+  return apiFetch(`/api/sites/${slug}/custom-domain/verify`, { method: 'POST' });
+}
+
+export function detachCustomDomain(slug: string): Promise<{ success: boolean; domain: string; domainStatus: string }> {
+  return apiFetch(`/api/sites/${slug}/custom-domain`, { method: 'DELETE' });
+}
+
 // Import d'une archive d'export de site (zip brut en corps de requête)
 export async function importSiteArchive(file: File): Promise<{ success: boolean; site: Site; extractedFiles: number }> {
   const res = await fetch('/api/sites/import-archive', {
