@@ -21,8 +21,19 @@ export interface Post {
   excerpt?: string;
   coverImage?: string;
   body?: string;
+  tags?: string;
   publishedAt?: string | null;
   status?: string;
+}
+
+// Étiquettes « a, b, c » → ['a','b','c'] (nettoyées, dédupliquées, bornées).
+export function parseTags(tags: string | undefined): string[] {
+  const seen = new Set<string>();
+  return (tags || '')
+    .split(',')
+    .map((t) => t.trim())
+    .filter((t) => t && !seen.has(t.toLowerCase()) && seen.add(t.toLowerCase()))
+    .slice(0, 8);
 }
 
 // Liste des pages (pour le menu). Vide en cas d'erreur.

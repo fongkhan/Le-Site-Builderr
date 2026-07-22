@@ -1,6 +1,6 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import { fetchNavPages, fetchPosts, buildNav } from '../../lib/content';
+import { fetchNavPages, fetchPosts, buildNav, parseTags } from '../../lib/content';
 
 const pages = await fetchNavPages();
 const posts = await fetchPosts();
@@ -27,6 +27,11 @@ const fmtDate = (iso?: string | null) => {
               <div class="blog-card-body">
                 {post.publishedAt && <time class="blog-date">{fmtDate(post.publishedAt)}</time>}
                 <h2>{post.title}</h2>
+                {parseTags(post.tags).length > 0 && (
+                  <div class="blog-tags">
+                    {parseTags(post.tags).map((t) => <span class="blog-tag">{t}</span>)}
+                  </div>
+                )}
                 {post.excerpt && <p class="blog-excerpt">{post.excerpt}</p>}
                 <span class="blog-more">Lire l'article →</span>
               </div>
@@ -110,5 +115,18 @@ const fmtDate = (iso?: string | null) => {
     font-weight: 600;
     color: var(--color-primary);
     font-size: 0.88rem;
+  }
+  .blog-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .blog-tag {
+    font-size: 0.72rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+    color: var(--color-primary);
+    font-weight: 600;
   }
 </style>
