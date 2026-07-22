@@ -31,6 +31,8 @@ export function CmsPage() {
   const [blockToRemove, setBlockToRemove] = useState<number | null>(null);
   const [creatingPage, setCreatingPage] = useState(false);
   const [seoLoading, setSeoLoading] = useState(false);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   // Autosave débouncé : le timer diffère la sauvegarde ; les refs évitent les tirs concurrents
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -152,6 +154,16 @@ export function CmsPage() {
       const target = direction === 'up' ? index - 1 : index + 1;
       if (target < 0 || target >= layout.length) return;
       [layout[index], layout[target]] = [layout[target], layout[index]];
+    }, true);
+  };
+
+  // Réordonne par glisser-déposer : retire le bloc à `from` et l'insère à `to`.
+  const reorderBlock = (from: number, to: number) => {
+    if (from === to) return;
+    mutateLayout((layout) => {
+      if (from < 0 || from >= layout.length || to < 0 || to >= layout.length) return;
+      const [moved] = layout.splice(from, 1);
+      layout.splice(to, 0, moved);
     }, true);
   };
 
@@ -323,15 +335,28 @@ export function CmsPage() {
             {activePage.layout.map((block, idx) => (
               <div
                 key={idx}
+                onDragOver={(e) => { if (dragIndex !== null) { e.preventDefault(); if (dragOverIndex !== idx) setDragOverIndex(idx); } }}
+                onDrop={(e) => { e.preventDefault(); if (dragIndex !== null) reorderBlock(dragIndex, idx); setDragIndex(null); setDragOverIndex(null); }}
                 style={{
                   background: editingBlockIdx === idx ? 'var(--accent-blue-soft)' : 'rgba(255,255,255,0.02)',
-                  border: editingBlockIdx === idx ? '1px solid var(--accent-blue)' : '1px solid var(--border-color)',
+                  border: dragOverIndex === idx && dragIndex !== null && dragIndex !== idx
+                    ? '1px dashed var(--accent-blue)'
+                    : editingBlockIdx === idx ? '1px solid var(--accent-blue)' : '1px solid var(--border-color)',
                   borderRadius: 8,
                   padding: 12,
+                  opacity: dragIndex === idx ? 0.5 : 1,
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                  <strong style={{ textTransform: 'capitalize', fontSize: '0.95rem' }}>
+                  <strong style={{ textTransform: 'capitalize', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span
+                      draggable
+                      onDragStart={(e) => { setDragIndex(idx); e.dataTransfer.effectAllowed = 'move'; }}
+                      onDragEnd={() => { setDragIndex(null); setDragOverIndex(null); }}
+                      title="Glisser pour réordonner"
+                      aria-label={`Déplacer le bloc ${idx + 1}`}
+                      style={{ cursor: 'grab', color: 'var(--text-muted)', userSelect: 'none' }}
+                    >⠿</span>
                     {idx + 1}. {block.blockType}
                   </strong>
                   <div style={{ display: 'flex', gap: 4 }}>

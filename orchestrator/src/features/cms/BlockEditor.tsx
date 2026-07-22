@@ -129,7 +129,7 @@ const NEW_ITEM: Record<string, unknown> = {
   features: { title: 'Nouveau service', description: 'Description.' },
   faq: { question: 'Nouvelle question ?', answer: 'Réponse.' },
   'product-grid': { name: 'Nouveau produit', price: '0.00 €', image: '' },
-  testimonials: { quote: 'Un retour client.', author: 'Prénom Nom', role: 'Client', avatar: '' },
+  testimonials: { quote: 'Un retour client.', author: 'Prénom Nom', role: 'Client', avatar: '', rating: 5 },
   pricing: { name: 'Nouvelle formule', price: '0.00 €', description: '', features: [], ctaText: 'Choisir', isPopular: false },
   appointment: { name: 'Nouvelle prestation' },
 };
@@ -268,6 +268,13 @@ export function BlockEditor({ block, siteSlug, onChange, onNestedChange, onArray
               <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Auteur" value={testi.author} onChange={(e) => onNestedChange('testimonials', i, 'author', e.target.value)} />
               <input type="text" className="input-text" style={{ padding: 4, fontSize: '0.825rem', marginBottom: 4 }} placeholder="Rôle" value={testi.role} onChange={(e) => onNestedChange('testimonials', i, 'role', e.target.value)} />
               <ImageField siteSlug={siteSlug} value={testi.avatar} placeholder="Avatar" onChange={(v) => onNestedChange('testimonials', i, 'avatar', v)} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+                <label className="field-label" style={{ margin: 0 }}>Note</label>
+                <select className="select-dark" style={{ padding: 4, fontSize: '0.8rem', width: 'auto' }} value={testi.rating ?? 0} onChange={(e) => onNestedChange('testimonials', i, 'rating', Number(e.target.value))}>
+                  <option value={0}>Sans note</option>
+                  {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{'★'.repeat(n)} ({n}/5)</option>)}
+                </select>
+              </div>
             </div>
           ))}
           {addButton('Ajouter un témoignage', 'testimonials')}
@@ -369,6 +376,8 @@ export function BlockEditor({ block, siteSlug, onChange, onNestedChange, onArray
           {input(block.email, (v) => onChange('email', v))}
           <label className="field-label">Horaires (une ligne par jour)</label>
           <textarea className="input-text" style={{ padding: 6, fontSize: '0.875rem' }} rows={3} value={block.hours || ''} onChange={(e) => onChange('hours', e.target.value)} />
+          <label className="field-label">Fiche Google Business (lien https)</label>
+          {input(block.googleBusinessUrl, (v) => onChange('googleBusinessUrl', v), 'https://g.page/…')}
         </>
       )}
 

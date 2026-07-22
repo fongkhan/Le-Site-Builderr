@@ -22,6 +22,11 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
   const [stack, setStack] = useState(site.stack);
   const [saving, setSaving] = useState(false);
 
+  // --- Mesure d'audience (analytics, chargée après consentement RGPD) ---
+  const [analyticsProvider, setAnalyticsProvider] = useState(site.analyticsProvider || '');
+  const [analyticsId, setAnalyticsId] = useState(site.analyticsId || '');
+  const [analyticsHost, setAnalyticsHost] = useState(site.analyticsHost || '');
+
   // --- Domaine personnalisé ---
   const [customInput, setCustomInput] = useState(site.customDomain || '');
   const [domainStatus, setDomainStatus] = useState<string>(site.domainStatus || 'none');
@@ -37,7 +42,7 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
     }
     setSaving(true);
     try {
-      await updateSite(site.slug, { name, domain, documentRoot, repositoryPath, stack });
+      await updateSite(site.slug, { name, domain, documentRoot, repositoryPath, stack, analyticsProvider, analyticsId, analyticsHost });
       toast.success('Configuration du site mise à jour.');
       onSaved();
       onClose();
@@ -151,6 +156,36 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
           <option value="Astro Hybride + Payload + Medusa">Astro Hybride + CMS</option>
           <option value="Static HTML">HTML/CSS Statique</option>
         </select>
+      </div>
+
+      {/* --- Mesure d'audience (RGPD) --- */}
+      <div style={{ borderTop: '1px solid var(--border-color)', marginTop: 16, paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <label className="field-label" style={{ margin: 0 }}>📊 Mesure d'audience (analytics)</label>
+        <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', margin: 0 }}>
+          Le script n'est chargé sur le site publié qu'après consentement du visiteur (bannière RGPD automatique).
+        </p>
+        <div style={{ display: 'grid', gridTemplateColumns: analyticsProvider === 'matomo' ? '1fr 1fr 1fr' : '1fr 1fr', gap: 8 }}>
+          <div>
+            <label className="field-label">Fournisseur</label>
+            <select className="select-dark" value={analyticsProvider} onChange={(e) => setAnalyticsProvider(e.target.value)} style={{ padding: 8, fontSize: '0.85rem' }}>
+              <option value="">Aucun</option>
+              <option value="ga4">Google Analytics 4</option>
+              <option value="matomo">Matomo</option>
+            </select>
+          </div>
+          {analyticsProvider && (
+            <div>
+              <label className="field-label">{analyticsProvider === 'ga4' ? 'ID de mesure (G-…)' : 'idSite (numérique)'}</label>
+              <input type="text" className="input-text" placeholder={analyticsProvider === 'ga4' ? 'G-XXXXXXXXXX' : '1'} value={analyticsId} onChange={(e) => setAnalyticsId(e.target.value)} />
+            </div>
+          )}
+          {analyticsProvider === 'matomo' && (
+            <div>
+              <label className="field-label">Hôte Matomo</label>
+              <input type="text" className="input-text" placeholder="stats.mondomaine.fr" value={analyticsHost} onChange={(e) => setAnalyticsHost(e.target.value)} />
+            </div>
+          )}
+        </div>
       </div>
 
       {/* --- Domaine personnalisé --- */}
