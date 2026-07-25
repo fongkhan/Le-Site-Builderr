@@ -1,6 +1,7 @@
 ---
 import '../styles/base.css';
 import '../styles/theme.css';
+import { localePath, normalizeLocale, LOCALE_LABELS, DEFAULT_LOCALE } from '../lib/i18n.mjs';
 
 
 interface NavPage {
@@ -13,15 +14,24 @@ interface Props {
 	description?: string;
 	pages?: NavPage[];
 	currentSlug?: string;
+	locale?: string;
+	locales?: string[];
 }
 
-const { title = "Mon Site Composable", description, pages = [], currentSlug } = Astro.props;
-// La page « home » vit à la racine ; les autres sous /<slug>/
-const pageHref = (slug: string) => (slug === 'home' ? '/' : `/${slug}/`);
+const { title = "Mon Site Composable", description, pages = [], currentSlug, locale = DEFAULT_LOCALE, locales = [] } = Astro.props;
+const pageLocale = normalizeLocale(locale);
+// Chemin d'une page dans la langue courante (règle partagée avec le serveur).
+const pageHref = (slug: string) => localePath(pageLocale, slug);
+// Sélecteur de langue : affiché seulement si le site a plusieurs langues.
+// Chaque langue pointe vers SA page d'accueil (pas de correspondance 1:1 garantie).
+const otherLocales = (locales || []).filter((l) => l !== pageLocale);
 
 // Beacon de statistiques (anonyme) : injecté au build. Vide si le site est construit
 // hors contexte (template autonome) → aucun script émis.
-const statsSlug = process.env.ACTIVE_SITE_SLUG || '';
+// En prévisualisation brouillon, aucune visite n'est comptabilisée : les statistiques
+// du site ne doivent refléter que de vrais visiteurs.
+const isDraft = process.env.PUBLIC_IS_DRAFT === '1';
+const statsSlug = isDraft ? '' : (process.env.ACTIVE_SITE_SLUG || '');
 const statsApiBase = process.env.PUBLIC_API_BASE || '';
 const beaconUrl = statsSlug ? `${statsApiBase}/api/stats/hit/${statsSlug}` : '';
 
@@ -46,7 +56,7 @@ const canonicalUrl = siteUrl ? siteUrl.replace(/\/$/, '') + relPath : '';
 ---
 
 <!doctype html>
-<html lang="fr">
+<html lang={pageLocale}>
 	<head>
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width" />
@@ -72,11 +82,19 @@ const canonicalUrl = siteUrl ? siteUrl.replace(/\/$/, '') + relPath : '';
 		<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Inter:wght@300;400;600;700&family=Lora:ital,wght@0,400;0,700;1,400&family=Outfit:wght@400;600;800&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Space+Grotesk:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;600;700&family=Karla:wght@400;700&display=swap" rel="stylesheet">
 	</head>
 	<body>
-		{pages.length > 1 && (
+		{(pages.length > 1 || otherLocales.length > 0) && (
 			<nav class="site-nav">
 				{pages.map((p) => (
 					<a href={pageHref(p.slug)} class={p.slug === currentSlug ? 'active' : ''}>{p.title}</a>
 				))}
+				{otherLocales.length > 0 && (
+					<span class="lang-switch">
+						<span class="lang-current" aria-current="true">{LOCALE_LABELS[pageLocale] || pageLocale}</span>
+						{otherLocales.map((l) => (
+							<a href={localePath(l, 'home')} hreflang={l} lang={l}>{LOCALE_LABELS[l] || l}</a>
+						))}
+					</span>
+				)}
 			</nav>
 		)}
 		<slot />
@@ -231,6 +249,27 @@ const canonicalUrl = siteUrl ? siteUrl.replace(/\/$/, '') + relPath : '';
 	.site-nav a.active {
 		background-color: var(--color-primary);
 		color: #ffffff;
+	}
+
+	/* Sélecteur de langue (affiché seulement si le site est multilingue) */
+	.lang-switch {
+		margin-left: auto;
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		font-family: var(--font-body), sans-serif;
+		font-size: 0.85rem;
+	}
+
+	.lang-current {
+		opacity: 0.6;
+		padding: 6px 10px;
+		font-weight: 600;
+	}
+
+	.lang-switch a {
+		padding: 6px 10px;
+		font-weight: 600;
 	}
 
 	/* Bannière de consentement (mesure d'audience) — refus aussi visible que l'acceptation */

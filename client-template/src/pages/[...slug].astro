@@ -1,5 +1,6 @@
 ---
 import Layout from '../layouts/Layout.astro';
+import { normalizeLocale, localeRouteParam, localesInPages, DEFAULT_LOCALE } from '../lib/i18n.mjs';
 import Hero from '../components/blocks/Hero.astro';
 import Features from '../components/blocks/Features.astro';
 import ProductGrid from '../components/blocks/ProductGrid.astro';
@@ -26,25 +27,37 @@ export async function getStaticPaths() {
     }
     const data = await response.json();
 
-    // Liste (titre, slug) de toutes les pages : alimente le menu de navigation
-    const allPages = data.docs.map((p: any) => ({ title: p.title, slug: p.slug }));
+    // Langues réellement présentes : la langue par défaut est servie à la racine,
+    // les autres sous /<locale>/ (voir lib/i18n.mjs, règle partagée avec le serveur).
+    const locales = localesInPages(data.docs);
+
+    // Menu de navigation PAR LANGUE : une page n'apparaît que dans sa propre langue.
+    const navByLocale: Record<string, { title: string; slug: string }[]> = {};
+    for (const p of data.docs as any[]) {
+      const loc = normalizeLocale(p.locale);
+      (navByLocale[loc] ||= []).push({ title: p.title, slug: p.slug });
+    }
 
     // Ajoute une entrée « Actualités » au menu si le blog contient des articles publiés
+    // (le blog n'est pas localisé : il reste rattaché à la langue par défaut).
     try {
       const postsRes = await fetch(`${baseUrl}/internal/site-posts?site=${encodeURIComponent(siteSlug)}`, {
         headers: { 'x-build-token': process.env.BUILD_TOKEN || '' }
       });
       if (postsRes.ok) {
         const postsData = await postsRes.json();
-        if ((postsData.docs || []).length > 0) allPages.push({ title: 'Actualités', slug: 'blog' });
+        if ((postsData.docs || []).length > 0) {
+          (navByLocale[DEFAULT_LOCALE] ||= []).push({ title: 'Actualités', slug: 'blog' });
+        }
       }
     } catch { /* blog optionnel : ignorer en cas d'erreur */ }
 
     return data.docs.map((page: any) => {
-      const slug = page.slug === 'home' ? undefined : page.slug;
+      const locale = normalizeLocale(page.locale);
+      const param = localeRouteParam(locale, page.slug);
       return {
-        params: { slug },
-        props: { page, allPages },
+        params: { slug: param === '' ? undefined : param },
+        props: { page, allPages: navByLocale[locale] || [], locale, locales },
       };
     });
   } catch (error: any) {
@@ -72,7 +85,7 @@ export async function getStaticPaths() {
   }
 }
 
-const { page, allPages = [] } = Astro.props;
+const { page, allPages = [], locale = DEFAULT_LOCALE, locales = [] } = Astro.props;
 
 // Mapping des types de blocs vers les composants Astro correspondants
 const blockMap: Record<string, any> = {
@@ -95,6 +108,8 @@ const blockMap: Record<string, any> = {
   description={page.metaDescription}
   pages={allPages}
   currentSlug={page.slug}
+  locale={locale}
+  locales={locales}
 >
   <main>
     {page.layout && page.layout.map((block: any) => {

@@ -37,6 +37,11 @@ export function fetchReleases(slug: string): Promise<Release[]> {
   return apiFetch<Release[]>(`/api/sites/${slug}/releases`);
 }
 
+// Prévisualisation brouillon : compile le contenu courant sans rien publier
+export function buildPreview(slug: string): Promise<{ success: boolean; url: string }> {
+  return apiFetch(`/api/sites/${encodeURIComponent(slug)}/preview-build`, { method: 'POST' });
+}
+
 export function rollbackRelease(slug: string, release: string): Promise<{ success: boolean; release: string }> {
   return apiFetch(`/api/sites/${slug}/rollback`, { method: 'POST', body: JSON.stringify({ release }) });
 }

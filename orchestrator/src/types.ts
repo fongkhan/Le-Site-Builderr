@@ -67,6 +67,8 @@ export interface Block {
 export interface PageDoc {
   title: string;
   slug: string;
+  /** Langue de la page : 'fr' (racine) ou 'en' (servie sous /en/). */
+  locale?: string;
   metaTitle?: string;
   metaDescription?: string;
   layout: Block[];
@@ -149,6 +151,16 @@ export interface AppConfig {
   devNoAuth?: boolean;
   /** null = illimité (admin) */
   aiQuota?: AiQuotaInfo | null;
+  /** Offre du compte : null = sans limite (admin). */
+  plan?: PlanInfo | null;
+}
+
+export interface PlanInfo {
+  plan: string;
+  label: string;
+  maxSites: number;
+  aiDailyQuota: number;
+  sitesUsed: number;
 }
 
 export interface User {

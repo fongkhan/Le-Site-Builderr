@@ -166,6 +166,7 @@ export default buildConfig({
               if (data.roles !== undefined) data.roles = originalDoc?.roles
               if (data.sites !== undefined) data.sites = originalDoc?.sites
               if (data.aiDailyQuota !== undefined) data.aiDailyQuota = originalDoc?.aiDailyQuota
+              if (data.plan !== undefined) data.plan = originalDoc?.plan
             }
             return data
           },
@@ -218,7 +219,22 @@ export default buildConfig({
           type: 'number',
           min: 0,
           admin: {
-            description: "Quota IA journalier personnalisé pour ce compte. Vide = valeur AI_DAILY_QUOTA du serveur (défaut 10). 0 = générations bloquées."
+            description: "Quota IA journalier personnalisé pour ce compte. Vide = quota de l'offre du compte. 0 = générations bloquées."
+          }
+        },
+        {
+          // Offre souscrite : détermine le nombre de sites autorisés et le quota IA
+          // par défaut. Aucune donnée de paiement n'est stockée ici.
+          name: 'plan',
+          type: 'select',
+          options: [
+            { label: 'Découverte (1 site)', value: 'free' },
+            { label: 'Professionnel (5 sites)', value: 'pro' },
+            { label: 'Agence (25 sites)', value: 'agency' },
+          ],
+          defaultValue: 'free',
+          admin: {
+            description: "Offre du compte. Modifiable par un administrateur uniquement."
           }
         }
       ],
@@ -349,6 +365,17 @@ export default buildConfig({
           name: 'slug',
           type: 'text',
           required: true,
+        },
+        {
+          // Langue de la page : la langue par défaut est servie à la racine,
+          // les autres sous /<locale>/ (ex. /en/about/).
+          name: 'locale',
+          type: 'select',
+          options: [
+            { label: 'Français', value: 'fr' },
+            { label: 'English', value: 'en' },
+          ],
+          defaultValue: 'fr',
         },
         {
           // SEO : balise <title> de la page (repli sur title si vide)

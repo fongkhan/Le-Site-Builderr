@@ -23,6 +23,8 @@ const stats = require('./lib/stats');
 const domains = require('./lib/domains');
 const analytics = require('./lib/analytics');
 const backup = require('./lib/backup');
+const i18n = require('./lib/i18n');
+const plans = require('./lib/plans');
 const dns = require('dns').promises;
 
 // Driver d'hébergement (simulation par défaut ; cpanel = publication réelle o2switch).
@@ -212,6 +214,8 @@ async function seedUsers(payload) {
           email: 'client@client.com',
           roles: ['client'],
           sites: [demoSite.id],
+          // Offre de démonstration : permet de créer d'autres sites depuis ce compte
+          plan: 'pro',
           password: process.env.SEED_CLIENT_PASSWORD || 'password123'
         }
       });
@@ -261,6 +265,8 @@ const RELEASES_DIR = path.resolve(path.dirname(PUBLIC_HTML_DIR), 'releases');
 // Fichiers de la médiathèque (collection Payload « media », staticDir)
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const DEPLOY_KEEP_RELEASES = Number.parseInt(process.env.DEPLOY_KEEP_RELEASES ?? '', 10) || 3;
+// Prévisualisations brouillon (build isolé, jamais servi comme site de production)
+const DRAFTS_DIR = path.resolve(path.dirname(PUBLIC_HTML_DIR), 'drafts');
 // Sauvegardes automatiques (contenu des sites : pages/thème/articles)
 const BACKUPS_DIR = path.resolve(path.dirname(PUBLIC_HTML_DIR), 'backups');
 const BACKUP_KEEP = Number.parseInt(process.env.BACKUP_KEEP ?? '', 10) || 14;
@@ -313,6 +319,12 @@ if (!fs.existsSync(PUBLIC_HTML_DIR)) {
 // Serve generated websites statically under /preview/<slug>/
 // (le préfixe /sites est réservé aux routes du dashboard React)
 app.use('/preview', express.static(PUBLIC_HTML_DIR));
+// Prévisualisations brouillon : contenu non publié, jamais indexé par les moteurs.
+if (!fs.existsSync(DRAFTS_DIR)) fs.mkdirSync(DRAFTS_DIR, { recursive: true });
+app.use('/draft', (req, res, next) => {
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  next();
+}, express.static(DRAFTS_DIR));
 
 // Helper functions for dynamic multi-site path handling
 function getSitePagesFile(slug) {
@@ -523,6 +535,7 @@ async function readSitePages(siteSlug) {
             docs: pagesRes.docs.map(page => ({
               title: page.title,
               slug: page.slug,
+              locale: page.locale || 'fr',
               metaTitle: page.metaTitle || undefined,
               metaDescription: page.metaDescription || undefined,
               layout: page.layout ? page.layout.map(block => {
@@ -1135,6 +1148,33 @@ app.get('/api/sites/:slug/builds', auth.authenticate, auth.requireAuth, auth.req
   }
 });
 
+// Prévisualisation brouillon : compile le contenu courant vers /draft/<slug>/ sans
+// rien publier. Accessible au propriétaire du site (comme le CMS qu'il édite).
+app.post('/api/sites/:slug/preview-build', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.params.slug), async (req, res) => {
+  const slug = req.params.slug;
+  try {
+    // Astro écrit dans un dossier dist unique : pas de build concurrent.
+    if (buildLockHeld || buildStatus.inProgress || fs.existsSync(LOCK_FILE)) {
+      return res.status(409).json({ error: "Un build est en cours : réessayez dans un instant." });
+    }
+    const site = await sitesStore.getSiteBySlug(slug);
+    if (!site) return res.status(404).json({ error: "Site non trouvé." });
+
+    buildLockHeld = true;
+    let url;
+    try {
+      url = await startDraftBuild(slug);
+    } finally {
+      buildLockHeld = false;
+      drainQueue(); // un build en attente peut repartir
+    }
+    logAudit(req, 'site.previsualisation', slug);
+    res.json({ success: true, url });
+  } catch (e) {
+    sendError(res, "Impossible de générer la prévisualisation.", e);
+  }
+});
+
 // Rollback : republie une version conservée dans le documentRoot (bascule atomique).
 app.post('/api/sites/:slug/rollback', auth.authenticate, auth.requireAdmin, async (req, res) => {
   const slug = req.params.slug;
@@ -1387,12 +1427,16 @@ app.post('/api/site-pages', auth.authenticate, auth.requireAuth, auth.requireSit
 
       if (req.body.docs && Array.isArray(req.body.docs)) {
         for (const pageInput of req.body.docs) {
+          // Une page est identifiée par (site, slug, langue) : deux langues peuvent
+          // partager le même slug (« home » en fr et en en).
+          const pageLocale = pageInput.locale === 'en' ? 'en' : 'fr';
           const pageRes = await payloadInstance.find({
             collection: 'pages',
             where: {
               and: [
                 { site: { equals: siteDoc.id } },
-                { slug: { equals: pageInput.slug } }
+                { slug: { equals: pageInput.slug } },
+                { locale: { equals: pageLocale } }
               ]
             },
             limit: 1
@@ -1401,6 +1445,7 @@ app.post('/api/site-pages', auth.authenticate, auth.requireAuth, auth.requireSit
           const pageData = {
             title: pageInput.title,
             slug: pageInput.slug,
+            locale: pageLocale,
             metaTitle: pageInput.metaTitle || null,
             metaDescription: pageInput.metaDescription || null,
             site: siteDoc.id,
@@ -1870,7 +1915,13 @@ app.get('/api/config', auth.authenticate, auth.requireAuth, (req, res) => {
     defaultProvider: process.env.DEFAULT_PROVIDER || 'openai',
     devNoAuth: auth.DEV_NO_AUTH,
     // null = illimité (admin) ; sinon { limit, used, remaining }
-    aiQuota: aiQuota.getQuota(req.user)
+    aiQuota: aiQuota.getQuota(req.user),
+    // Offre du compte : null = sans limite (admin). Sinon { plan, label, maxSites, aiDailyQuota }
+    // + le nombre de sites déjà utilisés, pour l'affichage.
+    plan: (() => {
+      const limits = plans.limitsFor(req.user, { isAdmin: auth.isAdmin(req.user) });
+      return limits ? { ...limits, sitesUsed: (req.userSiteSlugs || new Set()).size } : null;
+    })()
   });
 });
 
@@ -1908,6 +1959,13 @@ app.post('/api/onboard', auth.authenticate, auth.requireAuth, async (req, res) =
   const { name, description, features, ambiance, image, inspirationUrl, provider } = req.body;
   if (!description) {
     return res.status(400).json({ error: "La description est requise." });
+  }
+
+  // Offre du compte : nombre de sites borné (les admins ne sont jamais limités).
+  // Vérifié AVANT de consommer un créneau IA, pour ne pas facturer un refus.
+  const siteQuota = plans.canCreateSite(req.user, (req.userSiteSlugs || new Set()).size, { isAdmin: auth.isAdmin(req.user) });
+  if (!siteQuota.allowed) {
+    return res.status(403).json({ error: siteQuota.reason });
   }
 
   // Quota IA : on RÉSERVE un créneau AVANT l'appel (incrément atomique sérialisé) pour
@@ -2154,6 +2212,68 @@ async function notifyBuildResult(siteSlug, siteName, status, durationMs) {
   await sendMail(emails, subject, text);
 }
 
+// --- Prévisualisation brouillon ---------------------------------------------
+// Compile le contenu COURANT du CMS vers un dossier isolé, servi sous /draft/<slug>/.
+// Ne touche NI la production (documentRoot), NI les releases, NI le statut du site.
+// Partage le verrou de build : Astro écrit dans le même dossier dist.
+async function startDraftBuild(siteSlug) {
+  const site = await sitesStore.getSiteBySlug(siteSlug);
+  if (!site) throw new Error('Site introuvable.');
+
+  fs.writeFileSync(LOCK_FILE, 'locked');
+  try {
+    // Thème courant appliqué au template avant compilation (comme un vrai build)
+    const siteThemeFile = getSiteThemeFile(siteSlug);
+    if (fs.existsSync(siteThemeFile)) {
+      try { writeThemeCss(JSON.parse(fs.readFileSync(siteThemeFile, 'utf-8'))); } catch { /* thème par défaut */ }
+    }
+    activeBuildingSite = siteSlug;
+
+    const isWindows = process.platform === 'win32';
+    const cmd = isWindows
+      ? `cd /d "${ASTRO_PROJECT_DIR}" && npm run build`
+      : `cd "${ASTRO_PROJECT_DIR}" && npm run build`;
+    const buildEnv = {
+      ...process.env,
+      ACTIVE_SITE_SLUG: siteSlug,
+      BUILD_TOKEN,
+      ORCHESTRATOR_URL: `http://127.0.0.1:${process.env.PORT || 4000}`,
+      PUBLIC_SITE_NAME: site.name || siteSlug,
+      // Brouillon : pas d'URL publique (évite des canoniques pointant vers la prod)
+      PUBLIC_SITE_URL: '',
+      // Ni mesure d'audience ni beacon de statistiques sur une prévisualisation
+      PUBLIC_ANALYTICS_PROVIDER: '',
+      PUBLIC_ANALYTICS_ID: '',
+      PUBLIC_ANALYTICS_HOST: '',
+      PUBLIC_IS_DRAFT: '1',
+    };
+
+    await new Promise((resolve, reject) => {
+      exec(cmd, { env: buildEnv }, (error, stdout, stderr) => {
+        if (error) return reject(new Error(`Build brouillon échoué : ${String(stderr || stdout).slice(-500)}`));
+        resolve();
+      });
+    });
+
+    if (!fs.existsSync(path.join(DIST_DIR, 'index.html'))) {
+      throw new Error('Build brouillon sans sortie exploitable.');
+    }
+
+    // Publication atomique dans le dossier de brouillons (jamais dans PUBLIC_HTML_DIR)
+    const destDir = path.join(DRAFTS_DIR, siteSlug);
+    assertSafePath(destDir, DRAFTS_DIR);
+    const tmpDir = `${destDir}.tmp-${Date.now()}`;
+    fs.cpSync(DIST_DIR, tmpDir, { recursive: true });
+    if (fs.existsSync(destDir)) fs.rmSync(destDir, { recursive: true, force: true });
+    fs.renameSync(tmpDir, destDir);
+
+    return `/draft/${siteSlug}/index.html`;
+  } finally {
+    activeBuildingSite = null;
+    try { if (fs.existsSync(LOCK_FILE)) fs.unlinkSync(LOCK_FILE); } catch { /* ignore */ }
+  }
+}
+
 async function startBuild(siteSlug) {
   buildLockHeld = true; // défensif (idempotent) : garantit le verrou même si l'appelant l'a oublié
   const site = await sitesStore.getSiteBySlug(siteSlug);
@@ -2271,7 +2391,11 @@ async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
     // (non bloquant : un échec ici ne doit pas empêcher le déploiement)
     try {
       const pagesData = await readSitePages(siteSlug);
-      const slugs = (pagesData.docs || []).map((p) => p.slug).filter(Boolean);
+      // Chemins localisés : la langue par défaut est à la racine, les autres préfixées
+      // (/en/…). '' (accueil de la langue par défaut) est représenté par « home ».
+      const slugs = (pagesData.docs || [])
+        .filter((p) => p.slug)
+        .map((p) => i18n.localeRouteParam(p.locale, p.slug) || 'home');
       // Ajoute l'index du blog + chaque article publié (URL /blog/<slug>/)
       const postsData = await readSitePosts(siteSlug, { publishedOnly: true });
       const postSlugs = (postsData.docs || []).map((p) => p.slug).filter(Boolean);

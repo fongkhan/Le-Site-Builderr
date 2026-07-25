@@ -28,6 +28,7 @@ server/data/ai-usage.json
 server/uploads/
 repositories/
 backups/
+drafts/
 releases/
 
 # Local environment variables
