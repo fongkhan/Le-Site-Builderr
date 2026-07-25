@@ -1,15 +1,22 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { useSites } from '../../state/SitesContext';
 import { useAuth } from '../../auth/AuthContext';
+import { fetchConfig } from '../../api/sites';
 import { Spinner } from '../../components/ui/Spinner';
 import { EmptyState } from '../../components/ui/EmptyState';
-import type { Site } from '../../types';
+import type { Site, PlanInfo } from '../../types';
 
 export function SitesListPage() {
   const { sites, loading } = useSites();
   const { isAdmin } = useAuth();
   const [query, setQuery] = useState('');
+  const [plan, setPlan] = useState<PlanInfo | null>(null);
+
+  // Offre du compte (null pour un admin : aucune limite)
+  useEffect(() => {
+    fetchConfig().then((c) => setPlan(c.plan ?? null)).catch(() => setPlan(null));
+  }, []);
 
   if (loading) {
     return (
@@ -66,6 +73,23 @@ export function SitesListPage() {
           </Link>
         </div>
       </div>
+
+      {plan && (
+        <div
+          className="glass-panel"
+          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '12px 18px' }}
+        >
+          <span style={{ fontSize: '0.9rem' }}>
+            Offre <strong>{plan.label}</strong> — {plan.sitesUsed}/{plan.maxSites} site{plan.maxSites > 1 ? 's' : ''} utilisé{plan.sitesUsed > 1 ? 's' : ''},
+            {' '}{plan.aiDailyQuota} générations IA par jour.
+          </span>
+          {plan.sitesUsed >= plan.maxSites && (
+            <span className="badge" style={{ color: 'var(--amber-400)', fontSize: '0.75rem' }}>
+              Limite atteinte — contactez-nous pour changer d'offre
+            </span>
+          )}
+        </div>
+      )}
 
       {(() => {
         const q = query.trim().toLowerCase();

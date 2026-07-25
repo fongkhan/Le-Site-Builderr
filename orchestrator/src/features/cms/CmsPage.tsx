@@ -200,25 +200,34 @@ export function CmsPage() {
     }
   };
 
-  // Crée une page (slug dérivé du titre, dédupliqué) et la sélectionne
-  const createPage = (title: string) => {
-    const base = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'page';
+  // Crée une page (slug dérivé du titre, dédupliqué DANS SA LANGUE) et la sélectionne.
+  // Les accents sont translittérés, comme côté serveur (é→e, œ→oe…).
+  const createPage = (title: string, locale: string) => {
+    const base = title
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .replace(/œ/gi, 'oe').replace(/æ/gi, 'ae')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '') || 'page';
     let slug = base;
     let suffix = 2;
-    while (pagesData.docs.some((d) => d.slug === slug)) {
+    while (pagesData.docs.some((d) => d.slug === slug && (d.locale || 'fr') === locale)) {
       slug = `${base}-${suffix++}`;
     }
     const updated = structuredClone(pagesData);
     updated.docs.push({
       title,
       slug,
+      locale,
       layout: [structuredClone(BLOCK_DEFAULTS.hero)],
     });
     setPagesData(updated);
     saveNow(updated);
     setSelectedPageIdx(updated.docs.length - 1);
     setEditingBlockIdx(null);
-    toast.success(`Page « ${title} » créée (adresse : /${slug}/).`);
+    const prefix = locale === 'fr' ? '' : `/${locale}`;
+    toast.success(`Page « ${title} » créée (adresse : ${prefix}/${slug === 'home' ? '' : slug + '/'}).`);
   };
 
   if (loading) {
@@ -246,8 +255,8 @@ export function CmsPage() {
       {creatingPage && (
         <NewPageModal
           onCancel={() => setCreatingPage(false)}
-          onCreate={(title) => {
-            createPage(title);
+          onCreate={(title, locale) => {
+            createPage(title, locale);
             setCreatingPage(false);
           }}
         />
@@ -278,7 +287,9 @@ export function CmsPage() {
                 onChange={(e) => { setSelectedPageIdx(Number(e.target.value)); setEditingBlockIdx(null); }}
               >
                 {pagesData.docs.map((p, i) => (
-                  <option key={p.slug || i} value={i}>{p.title || p.slug || `Page ${i + 1}`}</option>
+                  <option key={`${p.locale || 'fr'}-${p.slug || i}`} value={i}>
+                    {(p.locale || 'fr') === 'fr' ? '🇫🇷' : '🇬🇧'} {p.title || p.slug || `Page ${i + 1}`}
+                  </option>
                 ))}
               </select>
             </div>
@@ -423,8 +434,9 @@ export function CmsPage() {
 }
 
 // Saisie du titre d'une nouvelle page (le slug/l'adresse est dérivé automatiquement)
-function NewPageModal({ onCancel, onCreate }: { onCancel: () => void; onCreate: (title: string) => void }) {
+function NewPageModal({ onCancel, onCreate }: { onCancel: () => void; onCreate: (title: string, locale: string) => void }) {
   const [title, setTitle] = useState('');
+  const [locale, setLocale] = useState('fr');
   const valid = title.trim().length >= 2;
 
   return (
@@ -436,7 +448,7 @@ function NewPageModal({ onCancel, onCreate }: { onCancel: () => void; onCreate: 
       footer={
         <>
           <button className="btn btn-secondary" onClick={onCancel}>Annuler</button>
-          <button className="btn btn-primary" disabled={!valid} onClick={() => valid && onCreate(title.trim())}>
+          <button className="btn btn-primary" disabled={!valid} onClick={() => valid && onCreate(title.trim(), locale)}>
             Créer la page
           </button>
         </>
@@ -451,8 +463,15 @@ function NewPageModal({ onCancel, onCreate }: { onCancel: () => void; onCreate: 
           placeholder="ex : Contact, À propos, Nos horaires…"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && valid) onCreate(title.trim()); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' && valid) onCreate(title.trim(), locale); }}
         />
+      </div>
+      <div style={{ marginTop: 12 }}>
+        <label className="field-label" htmlFor="new-page-locale">Langue</label>
+        <select id="new-page-locale" className="select-dark" value={locale} onChange={(e) => setLocale(e.target.value)}>
+          <option value="fr">Français (servi à la racine du site)</option>
+          <option value="en">English (servi sous /en/)</option>
+        </select>
       </div>
     </Modal>
   );

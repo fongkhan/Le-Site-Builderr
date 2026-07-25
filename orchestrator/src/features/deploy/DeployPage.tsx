@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
-import { triggerRebuild, fetchReleases, rollbackRelease, fetchBuildHistory, fetchSiteStats } from '../../api/sites';
+import { triggerRebuild, fetchReleases, rollbackRelease, fetchBuildHistory, fetchSiteStats, buildPreview } from '../../api/sites';
 import type { Release, BuildHistoryEntry, SiteStats } from '../../api/sites';
 import { useAuth } from '../../auth/AuthContext';
 import { useBuildStatus } from '../../hooks/useBuildStatus';
@@ -15,6 +15,8 @@ export function DeployPage() {
   const buildStatus = useBuildStatus();
   const toast = useToast();
   const [deployLoading, setDeployLoading] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const prevBuildingThisSite = useRef(false);
 
@@ -52,6 +54,20 @@ export function DeployPage() {
       toast.error(err instanceof Error ? err.message : 'Impossible de contacter le webhook de build.');
     } finally {
       setDeployLoading(false);
+    }
+  };
+
+  const handlePreview = async () => {
+    setPreviewLoading(true);
+    try {
+      const res = await buildPreview(site.slug);
+      setPreviewUrl(res.url);
+      toast.success('Prévisualisation prête : ouvrez-la pour vérifier avant de déployer.');
+      window.open(res.url, '_blank', 'noopener');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Impossible de générer la prévisualisation.');
+    } finally {
+      setPreviewLoading(false);
     }
   };
 
@@ -100,6 +116,21 @@ export function DeployPage() {
             </div>
           )}
         </div>
+
+        <button
+          className="btn btn-secondary"
+          onClick={handlePreview}
+          disabled={previewLoading || buildingThisSite || buildStatus.inProgress}
+          style={{ width: '100%' }}
+          title="Compile le contenu actuel dans un espace de test, sans modifier le site en ligne"
+        >
+          {previewLoading ? '👁️ Génération de l’aperçu…' : '👁️ Prévisualiser le brouillon'}
+        </button>
+        {previewUrl && (
+          <a href={previewUrl} target="_blank" rel="noreferrer" style={{ fontSize: '0.82rem', color: 'var(--accent-blue)', textAlign: 'center' }}>
+            Ouvrir la dernière prévisualisation ↗
+          </a>
+        )}
 
         <button
           className="btn btn-primary"
