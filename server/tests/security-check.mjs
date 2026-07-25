@@ -326,6 +326,39 @@ if (process.env.AI_DAILY_QUOTA === '0' && client.token && admin.token) {
   }
 }
 
+// ---- Offres d'abonnement : limite du nombre de sites ----
+if (admin.token) {
+  // Compte jetable sur l'offre par défaut (Découverte = 1 site) déjà rattaché à un site :
+  // toute création supplémentaire doit être refusée AVANT toute consommation de quota IA.
+  const email = 'sec-check-plan@nulle-part.example';
+  const existing = await req(`/api/users?where[email][equals]=${encodeURIComponent(email)}`, { token: admin.token });
+  const existingId = existing.json?.docs?.[0]?.id;
+  if (existingId) await req(`/api/users/${existingId}`, { method: 'DELETE', token: admin.token });
+
+  const sitesList = await req('/api/sites', { token: admin.token });
+  const demoSiteId = Array.isArray(sitesList.json) ? undefined : undefined; // les slugs suffisent via Payload
+  const payloadSites = await req('/api/payload_sites?where[slug][equals]=boulangerie-artisanale', { token: admin.token });
+  const siteId = payloadSites.json?.docs?.[0]?.id ?? demoSiteId;
+
+  const created = await req('/api/users', {
+    method: 'POST',
+    body: { email, password: 'password123', roles: ['client'], plan: 'free', sites: siteId ? [siteId] : [] },
+    token: admin.token,
+  });
+  const freeId = created.json?.doc?.id;
+  const freeLogin = await login(email, 'password123');
+  if (freeLogin.token && siteId) {
+    const refused = await req('/api/onboard', { method: 'POST', body: { description: 'un site de test' }, token: freeLogin.token });
+    check("Offre : client Découverte au maximum -> 403 (avant tout appel IA)", refused.status === 403 && /offre/i.test(refused.json?.error || ''), `HTTP ${refused.status} ${JSON.stringify(refused.json?.error)}`);
+  }
+  const cfg = freeLogin.token ? await req('/api/config', { token: freeLogin.token }) : { json: null };
+  check("Offre : /api/config expose l'offre du compte", Boolean(cfg.json?.plan && cfg.json.plan.maxSites === 1), JSON.stringify(cfg.json?.plan));
+  const adminCfg = await req('/api/config', { token: admin.token });
+  check('Offre : admin sans limite (plan null)', adminCfg.json?.plan === null, JSON.stringify(adminCfg.json?.plan));
+
+  if (freeId) await req(`/api/users/${freeId}`, { method: 'DELETE', token: admin.token });
+}
+
 // ---- Réinitialisation de mot de passe ----
 {
   const known = await req('/api/users/forgot-password', { method: 'POST', body: { email: 'client@client.com' } });
@@ -395,11 +428,13 @@ if (admin.token && client.token) {
 {
   check('Audit : anonyme -> 401', (await req('/api/audit')).status === 401);
   check('Export : anonyme -> 401', (await req('/api/sites/boulangerie-artisanale/export')).status === 401);
+  check('Prévisualisation : anonyme -> 401', (await req('/api/sites/boulangerie-artisanale/preview-build', { method: 'POST' })).status === 401);
   check('Overview : anonyme -> 401', (await req('/api/admin/overview')).status === 401);
   check('Backups : anonyme -> 401', (await req('/api/admin/backups')).status === 401);
   if (client.token) {
     check('Audit : client -> 403', (await req('/api/audit', { token: client.token })).status === 403);
     check('Export : client -> 403', (await req('/api/sites/boulangerie-artisanale/export', { token: client.token })).status === 403);
+    check("Prévisualisation : client sur un autre site -> 403", (await req('/api/sites/site-dun-autre/preview-build', { method: 'POST', token: client.token })).status === 403);
     check('Overview : client -> 403', (await req('/api/admin/overview', { token: client.token })).status === 403);
     check('Backups : client -> 403', (await req('/api/admin/backups', { token: client.token })).status === 403);
     check('Backups : POST client -> 403', (await req('/api/admin/backups', { method: 'POST', token: client.token })).status === 403);

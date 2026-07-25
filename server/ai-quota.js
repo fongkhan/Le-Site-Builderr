@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const auth = require('./auth');
+const plans = require('./lib/plans');
 
 const USAGE_FILE = path.join(__dirname, 'data', 'ai-usage.json');
 
@@ -32,11 +33,17 @@ function usedToday(usage, userId) {
 
 // Pur et testable : limite effective d'un utilisateur. null = illimité (admin / dev).
 // `??` (et non `||`) : une limite de 0 est légitime (compte suspendu).
+// Priorité : quota personnel (fixé par un admin) → quota de l'offre du compte →
+// valeur d'environnement → 10. Une variable d'environnement explicite reste
+// prioritaire sur l'offre en développement/CI (ex. AI_DAILY_QUOTA=0).
 function computeLimit(user, envValue, isAdmin = auth.isAdmin) {
   if (!user || isAdmin(user) || user.devMode) return null;
   const personal = Number.isFinite(user.aiDailyQuota) ? user.aiDailyQuota : null;
+  if (personal !== null) return personal;
   const envDefault = Number.parseInt(envValue ?? '', 10);
-  return personal ?? (Number.isFinite(envDefault) ? envDefault : 10);
+  if (Number.isFinite(envDefault)) return envDefault;
+  const limits = plans.limitsFor(user);
+  return limits ? limits.aiDailyQuota : 10;
 }
 
 // Lecture seule (affichage). null = illimité. Sinon { limit, used, remaining }.
