@@ -2,13 +2,15 @@ import { useEffect, useState } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { fetchPosts, savePost, deletePost } from '../../api/posts';
 import type { Post } from '../../api/posts';
+import { aiAssist } from '../../api/ai';
+import { ImageField } from '../cms/BlockEditor';
 import { useToast } from '../../components/ui/ToastContext';
 import { Spinner } from '../../components/ui/Spinner';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { EmptyState } from '../../components/ui/EmptyState';
 import type { Site } from '../../types';
 
-const EMPTY: Post = { title: '', slug: '', excerpt: '', coverImage: '', body: '', status: 'draft', publishedAt: null };
+const EMPTY: Post = { title: '', slug: '', excerpt: '', coverImage: '', body: '', tags: '', status: 'draft', publishedAt: null };
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
 
@@ -21,6 +23,8 @@ export function BlogPage() {
   const [saving, setSaving] = useState(false);
   const [toDelete, setToDelete] = useState<Post | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [aiSubject, setAiSubject] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
 
   const load = () => {
     setLoading(true);
@@ -72,6 +76,32 @@ export function BlogPage() {
 
   const set = (field: keyof Post, value: string) => setEditing((e) => (e ? { ...e, [field]: value } : e));
 
+  const handleGenerate = async () => {
+    if (!aiSubject.trim()) {
+      toast.error("Indiquez un sujet d'article.");
+      return;
+    }
+    setAiLoading(true);
+    try {
+      const res = await aiAssist(site.slug, 'article', aiSubject.trim(), site.name);
+      setEditing((e) => ({
+        ...(e || EMPTY),
+        title: res.title || e?.title || '',
+        excerpt: res.excerpt || e?.excerpt || '',
+        body: res.body || e?.body || '',
+        publishedAt: e?.publishedAt || todayIso(),
+        status: e?.status || 'draft',
+      }));
+      toast.success('Brouillon généré par l’IA — relisez et ajustez avant de publier.');
+      setAiSubject('');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Échec de la génération.";
+      toast.error(msg.includes('429') ? 'Quota IA journalier atteint.' : msg);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   if (loading) {
     return <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}><Spinner label="Chargement des articles…" /></div>;
   }
@@ -118,13 +148,24 @@ export function BlogPage() {
         {editing ? (
           <>
             <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: 10 }}>✍️ {editing.slug ? "Modifier l'article" : 'Nouvel article'}</h3>
+
+            <div style={{ background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.25)', borderRadius: 8, padding: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label className="field-label" style={{ margin: 0 }}>✨ Générer un brouillon avec l'IA</label>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input type="text" className="input-text" placeholder="Sujet (ex. « nos pains bio de l'été »)" value={aiSubject} onChange={(e) => setAiSubject(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleGenerate(); } }} />
+                <button className="btn btn-secondary" onClick={handleGenerate} disabled={aiLoading}>{aiLoading ? '…' : 'Générer'}</button>
+              </div>
+            </div>
+
             <label className="field-label">Titre *</label>
             <input type="text" className="input-text" value={editing.title} onChange={(e) => set('title', e.target.value)} />
             <label className="field-label">Extrait (résumé affiché dans la liste)</label>
             <textarea className="input-text" style={{ padding: 8 }} rows={2} value={editing.excerpt || ''} onChange={(e) => set('excerpt', e.target.value)} />
-            <label className="field-label">Image de couverture (URL)</label>
-            <input type="text" className="input-text" placeholder="https://…" value={editing.coverImage || ''} onChange={(e) => set('coverImage', e.target.value)} />
-            <label className="field-label">Contenu (une ligne vide = nouveau paragraphe)</label>
+            <label className="field-label">Image de couverture</label>
+            <ImageField siteSlug={site.slug} value={editing.coverImage || ''} placeholder="URL ou téléversement…" onChange={(v) => set('coverImage', v)} />
+            <label className="field-label">Étiquettes (séparées par des virgules)</label>
+            <input type="text" className="input-text" placeholder="pain, bio, saison" value={editing.tags || ''} onChange={(e) => set('tags', e.target.value)} />
+            <label className="field-label">Contenu — mise en forme légère : **gras**, *italique*, # Titre, - liste, [lien](https://…)</label>
             <textarea className="input-text" style={{ padding: 8, minHeight: 180, fontFamily: 'inherit' }} value={editing.body || ''} onChange={(e) => set('body', e.target.value)} />
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
               <div>

@@ -1,7 +1,8 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import { fetchNavPages, fetchPosts, buildNav, toParagraphs } from '../../lib/content';
+import { fetchNavPages, fetchPosts, buildNav, parseTags } from '../../lib/content';
 import type { Post } from '../../lib/content';
+import { markdownToHtml } from '../../lib/markdown.mjs';
 
 export async function getStaticPaths() {
   const [pages, posts] = await Promise.all([fetchNavPages(), fetchPosts()]);
@@ -15,7 +16,9 @@ export async function getStaticPaths() {
 interface Props { post: Post; nav: { title: string; slug: string }[]; }
 const { post, nav } = Astro.props;
 
-const paragraphs = toParagraphs(post.body);
+// Rendu du corps en mini-markdown (gras, listes, liens, titres), échappé et sûr.
+const bodyHtml = markdownToHtml(post.body);
+const tags = parseTags(post.tags);
 const fmtDate = (iso?: string | null) => {
   if (!iso) return '';
   const d = new Date(iso);
@@ -32,6 +35,7 @@ const articleLd = post.title
       ...(post.excerpt ? { description: post.excerpt } : {}),
       ...(post.coverImage ? { image: [post.coverImage] } : {}),
       ...(post.publishedAt ? { datePublished: post.publishedAt } : {}),
+      ...(tags.length ? { keywords: tags.join(', ') } : {}),
       ...(siteName ? { publisher: { '@type': 'Organization', name: siteName } } : {}),
     }).replace(/</g, '\\u003c')
   : null;
@@ -44,10 +48,13 @@ const articleLd = post.title
       <a class="post-back" href="/blog/">← Toutes les actualités</a>
       <h1>{post.title}</h1>
       {post.publishedAt && <time class="post-date">{fmtDate(post.publishedAt)}</time>}
+      {tags.length > 0 && (
+        <div class="post-tags">
+          {tags.map((t) => <span class="post-tag">{t}</span>)}
+        </div>
+      )}
       {post.coverImage && <img class="post-cover" src={post.coverImage} alt={post.title} />}
-      <div class="post-body">
-        {paragraphs.map((p) => <p>{p}</p>)}
-      </div>
+      <div class="post-body" set:html={bodyHtml} />
     </div>
   </article>
 </Layout>
@@ -80,7 +87,21 @@ const articleLd = post.title
     font-size: 0.85rem;
     text-transform: uppercase;
     letter-spacing: 0.5px;
+    margin-bottom: 14px;
+  }
+  .post-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
     margin-bottom: 24px;
+  }
+  .post-tag {
+    font-size: 0.74rem;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+    color: var(--color-primary);
+    font-weight: 600;
   }
   .post-cover {
     width: 100%;
@@ -89,10 +110,32 @@ const articleLd = post.title
     border-radius: var(--border-radius);
     margin-bottom: 30px;
   }
-  .post-body p {
+  .post-body :global(p) {
     font-size: 1.05rem;
     line-height: 1.75;
     color: #374151;
     margin: 0 0 20px 0;
+  }
+  .post-body :global(h2),
+  .post-body :global(h3),
+  .post-body :global(h4) {
+    margin: 32px 0 12px 0;
+    line-height: 1.3;
+  }
+  .post-body :global(ul) {
+    margin: 0 0 20px 0;
+    padding-left: 24px;
+    color: #374151;
+    line-height: 1.7;
+  }
+  .post-body :global(li) {
+    margin-bottom: 6px;
+  }
+  .post-body :global(a) {
+    color: var(--color-primary);
+    text-decoration: underline;
+  }
+  .post-body :global(strong) {
+    color: var(--color-text);
   }
 </style>

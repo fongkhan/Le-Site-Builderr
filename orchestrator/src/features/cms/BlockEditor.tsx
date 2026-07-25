@@ -66,7 +66,7 @@ interface BlockEditorProps {
 const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 
 // Champ image : URL libre OU téléversement dans la médiathèque du site (bouton 📤).
-function ImageField({ siteSlug, value, placeholder, onChange }: {
+export function ImageField({ siteSlug, value, placeholder, onChange }: {
   siteSlug: string;
   value: string | undefined;
   placeholder?: string;

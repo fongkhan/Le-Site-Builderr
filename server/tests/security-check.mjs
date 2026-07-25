@@ -395,9 +395,21 @@ if (admin.token && client.token) {
 {
   check('Audit : anonyme -> 401', (await req('/api/audit')).status === 401);
   check('Export : anonyme -> 401', (await req('/api/sites/boulangerie-artisanale/export')).status === 401);
+  check('Overview : anonyme -> 401', (await req('/api/admin/overview')).status === 401);
+  check('Backups : anonyme -> 401', (await req('/api/admin/backups')).status === 401);
   if (client.token) {
     check('Audit : client -> 403', (await req('/api/audit', { token: client.token })).status === 403);
     check('Export : client -> 403', (await req('/api/sites/boulangerie-artisanale/export', { token: client.token })).status === 403);
+    check('Overview : client -> 403', (await req('/api/admin/overview', { token: client.token })).status === 403);
+    check('Backups : client -> 403', (await req('/api/admin/backups', { token: client.token })).status === 403);
+    check('Backups : POST client -> 403', (await req('/api/admin/backups', { method: 'POST', token: client.token })).status === 403);
+  }
+  if (admin.token) {
+    const ov = await req('/api/admin/overview', { token: admin.token });
+    check('Overview : admin -> 200 (totaux + sites)', ov.status === 200 && ov.json?.totals && Array.isArray(ov.json?.sites), `HTTP ${ov.status}`);
+    const bk = await req('/api/admin/backups', { token: admin.token });
+    check('Backups : admin -> 200 (config + liste)', bk.status === 200 && bk.json?.config && Array.isArray(bk.json?.backups), `HTTP ${bk.status}`);
+    check('Backups : download nom hostile -> 400', (await req('/api/admin/backups/download?name=' + encodeURIComponent('../etc/passwd'), { token: admin.token })).status === 400);
   }
   if (admin.token) {
     const audit = await req('/api/audit', { token: admin.token });

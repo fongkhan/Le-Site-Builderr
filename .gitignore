@@ -27,6 +27,7 @@ server/data/sites.json
 server/data/ai-usage.json
 server/uploads/
 repositories/
+backups/
 releases/
 
 # Local environment variables

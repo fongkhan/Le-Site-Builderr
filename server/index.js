@@ -22,6 +22,7 @@ const media = require('./lib/media');
 const stats = require('./lib/stats');
 const domains = require('./lib/domains');
 const analytics = require('./lib/analytics');
+const backup = require('./lib/backup');
 const dns = require('dns').promises;
 
 // Driver d'hébergement (simulation par défaut ; cpanel = publication réelle o2switch).
@@ -127,7 +128,7 @@ app.use('/api/stats', statsLimiter);
 // Le parsing JSON ne s'applique QU'AUX routes Express custom : les routes déléguées à
 // Next/Payload (login, REST Payload, /admin) doivent recevoir leur flux de requête intact.
 const jsonParser = express.json({ limit: '10mb' });
-const EXPRESS_ROUTE_PREFIXES = ['/api/sites', '/api/site-pages', '/api/site-posts', '/api/theme', '/api/config', '/api/onboard', '/api/build-status', '/api/hosting', '/api/contact', '/api/ai', '/api/stats', '/webhook', '/internal'];
+const EXPRESS_ROUTE_PREFIXES = ['/api/sites', '/api/site-pages', '/api/site-posts', '/api/theme', '/api/config', '/api/onboard', '/api/build-status', '/api/hosting', '/api/contact', '/api/ai', '/api/stats', '/api/admin', '/webhook', '/internal'];
 app.use((req, res, next) => {
   const handledByExpress = EXPRESS_ROUTE_PREFIXES.some(p => req.path === p || req.path.startsWith(p + '/'));
   if (!handledByExpress) return next();
@@ -260,6 +261,11 @@ const RELEASES_DIR = path.resolve(path.dirname(PUBLIC_HTML_DIR), 'releases');
 // Fichiers de la médiathèque (collection Payload « media », staticDir)
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const DEPLOY_KEEP_RELEASES = Number.parseInt(process.env.DEPLOY_KEEP_RELEASES ?? '', 10) || 3;
+// Sauvegardes automatiques (contenu des sites : pages/thème/articles)
+const BACKUPS_DIR = path.resolve(path.dirname(PUBLIC_HTML_DIR), 'backups');
+const BACKUP_KEEP = Number.parseInt(process.env.BACKUP_KEEP ?? '', 10) || 14;
+const BACKUP_INTERVAL_HOURS = Number.parseInt(process.env.BACKUP_INTERVAL_HOURS ?? '', 10) || 24;
+const BACKUP_ENABLED = process.env.BACKUP_ENABLED === 'true';
 const LOCK_FILE = path.join(ASTRO_PROJECT_DIR, 'build.lock');
 
 // Domaine attribué à un site à sa création.
@@ -562,6 +568,7 @@ function normalizePost(p) {
     excerpt: p.excerpt || '',
     coverImage: p.coverImage || '',
     body: p.body || '',
+    tags: p.tags || '',
     publishedAt: p.publishedAt || null,
     status: p.status === 'published' ? 'published' : 'draft',
   };
@@ -659,6 +666,131 @@ app.get('/api/sites/owners', auth.authenticate, auth.requireAdmin, async (req, r
   } catch (e) {
     sendError(res, "Impossible de lire les propriétaires des sites.", e);
   }
+});
+
+// Vue d'ensemble multi-sites (admin) : statut, domaine/SSL et visites agrégées par site.
+app.get('/api/admin/overview', auth.authenticate, auth.requireAdmin, async (req, res) => {
+  try {
+    const sites = await sitesStore.listSites();
+    const rows = sites.map((s) => {
+      let statsData = {};
+      try { statsData = JSON.parse(fs.readFileSync(getSiteStatsFile(s.slug), 'utf-8')); } catch { statsData = {}; }
+      const series = stats.lastNDays(statsData, 30);
+      return {
+        slug: s.slug,
+        name: s.name,
+        domain: s.domain,
+        status: s.status,
+        sslStatus: s.sslStatus,
+        domainStatus: s.domainStatus || 'none',
+        customDomain: s.customDomain || '',
+        visitsTotal: stats.total(statsData),
+        visits30: series.reduce((sum, d) => sum + d.count, 0),
+        series: series.map((d) => d.count),
+      };
+    });
+    const totals = {
+      sites: rows.length,
+      active: rows.filter((r) => r.status === 'active').length,
+      visits30: rows.reduce((sum, r) => sum + r.visits30, 0),
+      customDomains: rows.filter((r) => r.domainStatus === 'active').length,
+    };
+    res.json({ totals, sites: rows });
+  } catch (e) {
+    sendError(res, "Impossible de charger la vue d'ensemble.", e);
+  }
+});
+
+// --- Sauvegardes automatiques du contenu (pages/thème/articles de tous les sites) ---
+
+let backupInProgress = false;
+
+// Crée une archive zip de tout le contenu et applique la rétention. Renvoie le nom de fichier.
+async function createBackupArchive() {
+  if (backupInProgress) return null;
+  backupInProgress = true;
+  try {
+    if (!fs.existsSync(BACKUPS_DIR)) fs.mkdirSync(BACKUPS_DIR, { recursive: true });
+    const archiver = require('archiver');
+    const filename = backup.backupFilename(new Date());
+    const dest = path.join(BACKUPS_DIR, filename);
+    const sites = await sitesStore.listSites();
+
+    await new Promise((resolve, reject) => {
+      const output = fs.createWriteStream(dest);
+      const archive = archiver('zip', { zlib: { level: 6 } });
+      output.on('close', resolve);
+      archive.on('error', reject);
+      archive.pipe(output);
+      archive.append(JSON.stringify({ createdAt: new Date().toISOString(), sites: sites.map((s) => s.slug) }, null, 2), { name: 'manifest.json' });
+      // Un dossier par site : pages, thème, articles.
+      (async () => {
+        for (const s of sites) {
+          const base = `sites/${s.slug}`;
+          try { archive.append(JSON.stringify(await readSitePages(s.slug), null, 2), { name: `${base}/pages.json` }); } catch { /* ignore */ }
+          try { archive.append(JSON.stringify(await readSitePosts(s.slug), null, 2), { name: `${base}/posts.json` }); } catch { /* ignore */ }
+          const themeFile = getSiteThemeFile(s.slug);
+          if (fs.existsSync(themeFile)) archive.file(themeFile, { name: `${base}/theme.json` });
+        }
+        archive.finalize();
+      })().catch(reject);
+    });
+
+    // Rétention : ne garder que les BACKUP_KEEP plus récentes.
+    let names = [];
+    try { names = fs.readdirSync(BACKUPS_DIR); } catch { names = []; }
+    for (const old of backup.selectBackupsToDelete(names, BACKUP_KEEP)) {
+      try { fs.rmSync(path.join(BACKUPS_DIR, old), { force: true }); } catch { /* ignore */ }
+    }
+    return filename;
+  } finally {
+    backupInProgress = false;
+  }
+}
+
+// Liste des sauvegardes (admin) + configuration courante.
+app.get('/api/admin/backups', auth.authenticate, auth.requireAdmin, (req, res) => {
+  try {
+    let items = [];
+    if (fs.existsSync(BACKUPS_DIR)) {
+      items = fs.readdirSync(BACKUPS_DIR)
+        .filter(backup.isValidBackupName)
+        .map((name) => {
+          const st = fs.statSync(path.join(BACKUPS_DIR, name));
+          return { name, size: st.size, createdAt: st.mtime.toISOString() };
+        })
+        .sort((a, b) => b.name.localeCompare(a.name));
+    }
+    res.json({
+      config: { enabled: BACKUP_ENABLED, intervalHours: BACKUP_INTERVAL_HOURS, keep: BACKUP_KEEP },
+      backups: items,
+    });
+  } catch (e) {
+    sendError(res, "Impossible de lister les sauvegardes.", e);
+  }
+});
+
+// Déclenche une sauvegarde immédiate (admin).
+app.post('/api/admin/backups', auth.authenticate, auth.requireAdmin, async (req, res) => {
+  try {
+    const filename = await createBackupArchive();
+    if (!filename) return res.status(409).json({ error: "Une sauvegarde est déjà en cours." });
+    logAudit(req, 'sauvegarde.creation', 'global', filename);
+    res.json({ success: true, filename });
+  } catch (e) {
+    sendError(res, "Échec de la sauvegarde.", e);
+  }
+});
+
+// Téléchargement d'une sauvegarde (admin) — nom strictement validé (anti-traversée).
+app.get('/api/admin/backups/download', auth.authenticate, auth.requireAdmin, (req, res) => {
+  const name = req.query.name;
+  if (!backup.isValidBackupName(name)) return res.status(400).json({ error: "Nom de sauvegarde invalide." });
+  const file = path.join(BACKUPS_DIR, name);
+  if (!fs.existsSync(file)) return res.status(404).json({ error: "Sauvegarde introuvable." });
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+  fs.createReadStream(file).pipe(res);
 });
 
 // Create manual site (admin uniquement)
@@ -1748,7 +1880,7 @@ app.get('/api/config', auth.authenticate, auth.requireAuth, (req, res) => {
 // proposer des meta SEO). Auth + ownership du site + quota IA (comme l'onboarding).
 app.post('/api/ai/assist', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.body && req.body.site), async (req, res) => {
   const { action, input, context, provider } = req.body || {};
-  if (!['rewrite', 'generate-description', 'seo'].includes(action)) {
+  if (!['rewrite', 'generate-description', 'seo', 'article'].includes(action)) {
     return res.status(400).json({ error: "Action d'assistance invalide." });
   }
 
@@ -2338,4 +2470,17 @@ nextApp.prepare().then(async () => {
   app.listen(PORT, () => {
     console.log(`Serveur Meta-Builder démarré sur http://localhost:${PORT}`);
   });
+
+  // Sauvegardes automatiques planifiées (désactivées par défaut : BACKUP_ENABLED=true).
+  // Best-effort : un échec est loggé mais ne perturbe jamais le service.
+  if (BACKUP_ENABLED) {
+    const intervalMs = Math.max(1, BACKUP_INTERVAL_HOURS) * 60 * 60 * 1000;
+    console.log(`💾 [Sauvegardes] Planifiées toutes les ${BACKUP_INTERVAL_HOURS} h (rétention ${BACKUP_KEEP}).`);
+    const timer = setInterval(() => {
+      createBackupArchive()
+        .then((name) => name && console.log(`💾 [Sauvegardes] Créée : ${name}`))
+        .catch((e) => console.error('💾 [Sauvegardes] Échec :', e.message));
+    }, intervalMs);
+    if (timer.unref) timer.unref(); // ne bloque pas l'arrêt du process
+  }
 });

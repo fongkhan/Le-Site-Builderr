@@ -9,6 +9,12 @@ const path = require('path');
 function generateSlug(name) {
   if (typeof name !== 'string') return null;
   const slug = name
+    // Translittère les caractères accentués (é→e, à→a, ç→c, ñ→n…) au lieu de les
+    // remplacer par des tirets : des slugs plus lisibles et meilleurs pour le SEO.
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    // Ligatures fréquentes non décomposées par NFD
+    .replace(/œ/gi, 'oe').replace(/æ/gi, 'ae').replace(/ß/g, 'ss')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/(^-|-$)/g, '');

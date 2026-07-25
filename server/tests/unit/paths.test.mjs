@@ -9,8 +9,15 @@ const { generateSlug, assertSafePath } = require('../../lib/paths.js');
 test('generateSlug — noms valides', () => {
   assert.equal(generateSlug('Boulangerie Artisanale'), 'boulangerie-artisanale');
   assert.equal(generateSlug('Coiffeur Lyon 3'), 'coiffeur-lyon-3');
-  assert.equal(generateSlug('déjà-vu'), 'd-j-vu'); // accents non alphanumériques ASCII
   assert.equal(generateSlug('Site123'), 'site123');
+});
+
+test('generateSlug — translittération des accents et ligatures', () => {
+  assert.equal(generateSlug('déjà-vu'), 'deja-vu');
+  assert.equal(generateSlug('Notre nouvelle fournée d’été'), 'notre-nouvelle-fournee-d-ete');
+  assert.equal(generateSlug('Cœur & Forêt'), 'coeur-foret');
+  assert.equal(generateSlug('Château Bœuf'), 'chateau-boeuf');
+  assert.equal(generateSlug('Niño Señor'), 'nino-senor');
 });
 
 test('generateSlug — noms invalides renvoient null (anti-slug-vide)', () => {
