@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { aiAssist, preferredProvider } from '../../api/ai';
 import { ApiError, errorMessage } from '../../api/client';
 import type { Post } from '../../api/posts';
-import { ImageField } from '../cms/BlockEditor';
+import { ImageField } from '../cms/blocks/fields/ImageField';
 import { useToast } from '../../components/ui/ToastContext';
 import { useConfig } from '../../state/ConfigContext';
 import { todayIso } from '../../lib/format';
