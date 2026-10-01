@@ -1,17 +1,20 @@
-import { useEffect, useState } from 'react';
-import type { ChangeEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { fetchConfig, onboard } from '../../api/sites';
-import { ApiError } from '../../api/client';
+import { useRef, useState } from 'react';
+import { onboard } from '../../api/onboarding';
+import { preferredProvider } from '../../api/ai';
+import { ApiError, errorMessage } from '../../api/client';
 import { useSites } from '../../state/SitesContext';
+import { useConfig } from '../../state/ConfigContext';
 import { useToast } from '../../components/ui/ToastContext';
 import { EmptyState } from '../../components/ui/EmptyState';
-import type { AiProvider, AppConfig, FeatureFlags, OnboardingResult } from '../../types';
+import { InspirationImage } from './InspirationImage';
+import { OnboardingResult } from './OnboardingResult';
+import type { AiProvider, FeatureFlags, OnboardingResult as Qualification } from '../../types';
 
+// Le modèle exact est réglé côté serveur (OPENAI_MODEL, ANTHROPIC_MODEL, GEMINI_MODEL).
 const PROVIDER_LABELS: Record<AiProvider, string> = {
-  openai: 'OpenAI (GPT-4o mini)',
-  anthropic: 'Claude 3.5 Sonnet',
-  gemini: 'Gemini 2.5 Flash',
+  openai: 'OpenAI (GPT)',
+  anthropic: 'Anthropic (Claude)',
+  gemini: 'Google (Gemini)',
 };
 
 const AMBIANCES = [
@@ -21,123 +24,71 @@ const AMBIANCES = [
   { value: 'minimal', label: '⚫ Studio / Minimaliste / Chic' },
 ];
 
+const NO_FEATURES: FeatureFlags = { blog_or_news: false, e_commerce: false, multi_store: false };
+
 export function OnboardingPage() {
-  const navigate = useNavigate();
   const { refresh } = useSites();
+  const { config, refresh: refreshConfig } = useConfig();
   const toast = useToast();
 
-  const [config, setConfig] = useState<AppConfig | null>(null);
-  const [provider, setProvider] = useState<AiProvider>('openai');
+  // Choix explicite de l'utilisateur ; sinon le fournisseur préféré de la configuration
+  const [chosenProvider, setChosenProvider] = useState<AiProvider | null>(null);
+  const provider = chosenProvider ?? preferredProvider(config) ?? 'openai';
   const [siteName, setSiteName] = useState('');
   const [description, setDescription] = useState('');
-  const [features, setFeatures] = useState<FeatureFlags>({ blog_or_news: false, e_commerce: false, multi_store: false });
+  const [features, setFeatures] = useState<FeatureFlags>(NO_FEATURES);
   const [ambiance, setAmbiance] = useState('chaleureux');
   const [inspirationType, setInspirationType] = useState<'preset' | 'image'>('preset');
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
   const [inspirationUrl, setInspirationUrl] = useState('');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<OnboardingResult | null>(null);
+  const [result, setResult] = useState<Qualification | null>(null);
   const [createdSlug, setCreatedSlug] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetchConfig().then((c) => {
-      setConfig(c);
-      if (c.availableProviders[c.defaultProvider]) {
-        setProvider(c.defaultProvider);
-      } else {
-        const first = (Object.keys(c.availableProviders) as AiProvider[]).find((k) => c.availableProviders[k]);
-        if (first) setProvider(first);
-      }
-    }).catch(() => {});
-  }, []);
+  // Anti double soumission (bouton ET raccourci Ctrl+Entrée) : un seul site par demande
+  const submitting = useRef(false);
 
   const noProviderAvailable = config && !Object.values(config.availableProviders).some(Boolean);
   const quota = config?.aiQuota ?? null;
   const quotaExhausted = quota !== null && quota.remaining <= 0;
 
-  // Borne l'upload d'image : type réel image/* (ferme le contournement du drag-drop que
-  // `accept` ne bloque pas), taille ≤ 4 Mo, et redimensionnement canvas (≤ 1200px, JPEG
-  // 0.85) pour ne pas envoyer un data-URL énorme à l'IA. Les petits logos PNG sont
-  // conservés tels quels (transparence préservée).
-  const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
-  const MAX_DIMENSION = 1200;
-
-  const readImage = (file: File) => {
-    if (!file.type.startsWith('image/')) {
-      toast.error('Veuillez fournir un fichier image (PNG, JPEG, WebP…).');
-      return;
-    }
-    if (file.size > MAX_UPLOAD_BYTES) {
-      toast.error('Image trop volumineuse (4 Mo maximum). Choisissez un fichier plus léger.');
-      return;
-    }
-    const reader = new FileReader();
-    reader.onerror = () => toast.error('Impossible de lire ce fichier image.');
-    reader.onloadend = () => {
-      const dataUrl = reader.result as string;
-      const img = new Image();
-      img.onerror = () => toast.error('Ce fichier image semble corrompu.');
-      img.onload = () => {
-        const needsResize = img.width > MAX_DIMENSION || img.height > MAX_DIMENSION;
-        const heavy = file.size > 1024 * 1024;
-        if (!needsResize && !heavy) {
-          setUploadedImage(dataUrl); // déjà légère : on garde le format d'origine
-          return;
-        }
-        const scale = Math.min(1, MAX_DIMENSION / Math.max(img.width, img.height));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, Math.round(img.width * scale));
-        canvas.height = Math.max(1, Math.round(img.height * scale));
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          setUploadedImage(dataUrl);
-          return;
-        }
-        ctx.fillStyle = '#ffffff'; // fond blanc : le JPEG n'a pas d'alpha (logos transparents)
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        setUploadedImage(canvas.toDataURL('image/jpeg', 0.85));
-      };
-      img.src = dataUrl;
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleImageUpload = (e: ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) readImage(file);
-  };
-
   const handleSubmit = async () => {
+    if (submitting.current || loading || quotaExhausted) return;
     if (!description.trim()) {
       toast.error("Décrivez votre activité : c'est la base de la génération.");
       return;
     }
+    if (inspirationType === 'image' && !uploadedImage) {
+      toast.error('Ajoutez une image ou un logo, ou choisissez une ambiance prédéfinie.');
+      return;
+    }
+    submitting.current = true;
     setLoading(true);
     setResult(null);
     try {
       const data = await onboard({
-        name: siteName,
-        description,
+        name: siteName.trim(),
+        description: description.trim(),
         features,
         ambiance: inspirationType === 'preset' ? ambiance : undefined,
         image: inspirationType === 'image' ? (uploadedImage ?? undefined) : undefined,
-        inspirationUrl: inspirationUrl || undefined,
+        inspirationUrl: inspirationUrl.trim() || undefined,
         provider,
       });
       setResult(data.qualification);
       setCreatedSlug(data.site.slug);
+      // Formulaire remis à zéro : un nouveau clic ne recrée pas le même site
+      setSiteName('');
+      setDescription('');
+      setFeatures(NO_FEATURES);
+      setUploadedImage(null);
+      setInspirationUrl('');
       await refresh();
-      fetchConfig().then(setConfig).catch(() => {});
       toast.success(`Le site « ${data.site.name} » a été créé et rattaché à votre compte !`);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 429) {
-        toast.error(err.message);
-        fetchConfig().then(setConfig).catch(() => {});
-      } else {
-        toast.error(err instanceof Error ? err.message : "Erreur lors de la génération IA.");
-      }
+      toast.error(err instanceof ApiError && err.status === 429 ? err.message : errorMessage(err, "Erreur lors de la génération IA."));
     } finally {
+      refreshConfig(); // quota et offre à jour
+      submitting.current = false;
       setLoading(false);
     }
   };
@@ -196,7 +147,7 @@ export function OnboardingPage() {
                     <button
                       key={p}
                       type="button"
-                      onClick={() => setProvider(p)}
+                      onClick={() => setChosenProvider(p)}
                       className={`btn ${provider === p ? 'btn-primary' : 'btn-secondary'}`}
                       style={{ padding: '8px 16px', fontSize: '0.85rem' }}
                     >
@@ -267,52 +218,7 @@ export function OnboardingPage() {
                   ))}
                 </div>
               ) : (
-                <div
-                  style={{
-                    border: '2px dashed var(--border-color)',
-                    borderRadius: 8,
-                    padding: '20px 10px',
-                    textAlign: 'center',
-                    cursor: 'pointer',
-                    background: 'rgba(255,255,255,0.01)',
-                    position: 'relative',
-                    borderColor: uploadedImage ? 'var(--accent-blue)' : 'var(--border-color)',
-                  }}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    const file = e.dataTransfer.files?.[0];
-                    if (file) readImage(file);
-                  }}
-                >
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleImageUpload}
-                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}
-                  />
-                  {uploadedImage ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-                      <img src={uploadedImage} alt="Inspiration" style={{ maxHeight: 70, borderRadius: 4, objectFit: 'contain' }} />
-                      <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Image d'inspiration chargée.</span>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setUploadedImage(null);
-                        }}
-                        className="btn btn-secondary"
-                        style={{ padding: '4px 8px', fontSize: '0.75rem', zIndex: 10, borderColor: 'rgba(244, 63, 94, 0.4)', color: 'var(--red-300)' }}
-                      >
-                        Supprimer
-                      </button>
-                    </div>
-                  ) : (
-                    <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                      Glissez-déposez une image / un logo ici, ou cliquez pour choisir
-                    </span>
-                  )}
-                </div>
+                <InspirationImage value={uploadedImage} onChange={setUploadedImage} />
               )}
             </div>
 
@@ -337,59 +243,7 @@ export function OnboardingPage() {
         )}
       </div>
 
-      {result && createdSlug && (
-        <div className="grid-2col animate-slide">
-          <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: 10 }}>🛠️ Spécifications techniques déduites</h3>
-            <div>
-              <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Nom du site :</span>
-              <h2 style={{ color: 'white', marginTop: 4 }}>{result.site_name}</h2>
-            </div>
-            <div>
-              <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Fonctionnalités :</span>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
-                {[
-                  { on: result.features.blog_or_news, label: 'Contenu dynamique / Blog' },
-                  { on: result.features.e_commerce, label: 'Vente e-commerce' },
-                  { on: result.features.multi_store, label: 'Multi-boutique' },
-                ].map((f) => (
-                  <div key={f.label} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <span style={{ color: f.on ? 'var(--accent-emerald)' : 'var(--text-muted)' }}>{f.on ? '● Actif' : '○ Inactif'}</span>
-                    <span>{f.label}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div>
-              <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Architecture :</span>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
-                <span className="badge" style={{ background: 'var(--accent-blue-soft)', borderColor: 'var(--accent-blue-border)' }}>
-                  Astro : mode {result.stack_requirements.astro_mode.toUpperCase()}
-                </span>
-                {result.stack_requirements.need_payload && <span className="badge" style={{ background: 'rgba(168, 85, 247, 0.15)', borderColor: 'rgba(168, 85, 247, 0.3)' }}>Payload CMS</span>}
-                {result.stack_requirements.need_medusajs && <span className="badge" style={{ background: 'rgba(16, 185, 129, 0.15)', borderColor: 'rgba(16, 185, 129, 0.3)' }}>MedusaJS API</span>}
-                {result.stack_requirements.need_stripe && <span className="badge" style={{ background: 'rgba(244, 63, 94, 0.15)', borderColor: 'rgba(244, 63, 94, 0.3)' }}>Stripe Checkout</span>}
-              </div>
-            </div>
-          </div>
-
-          <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            <h3 style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: 10 }}>🚀 Votre site est prêt à être personnalisé</h3>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem' }}>
-              L'ébauche (page d'accueil, thème graphique) a été générée et le site est rattaché à votre compte.
-              Prochaines étapes :
-            </p>
-            <ol style={{ paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 8, color: 'var(--text-main)', fontSize: '0.95rem' }}>
-              <li><strong>Design</strong> — ajustez couleurs, polices et arrondis.</li>
-              <li><strong>Contenu</strong> — éditez les sections de la page (textes, produits, FAQ…).</li>
-              <li><strong>Déploiement</strong> — publiez le site en un clic.</li>
-            </ol>
-            <button className="btn btn-primary" style={{ marginTop: 'auto' }} onClick={() => navigate(`/sites/${createdSlug}/design`)}>
-              Étape suivante : personnaliser le design →
-            </button>
-          </div>
-        </div>
-      )}
+      {result && createdSlug && <OnboardingResult result={result} createdSlug={createdSlug} />}
     </div>
   );
 }

@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { importSite } from '../../api/sites';
+import { errorMessage } from '../../api/client';
 import { Modal } from '../../components/ui/Modal';
 import { useToast } from '../../components/ui/ToastContext';
+import { StackSelect } from './StackSelect';
 import type { ScannedSite } from '../../types';
 
 // Remplace l'ancien enchaînement de prompt() : un vrai formulaire de confirmation d'import
@@ -20,7 +22,7 @@ export function ImportSiteModal({ scanned, onClose, onImported }: { scanned: Sca
       onImported(scanned.slug);
       onClose();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Erreur lors de l'importation.");
+      toast.error(errorMessage(err, "Erreur lors de l'importation."));
     } finally {
       setImporting(false);
     }
@@ -42,16 +44,10 @@ export function ImportSiteModal({ scanned, onClose, onImported }: { scanned: Sca
     >
       <div>
         <label className="field-label">Stack technique</label>
-        <select className="select-dark" value={stack} onChange={(e) => setStack(e.target.value)} style={{ padding: 10, fontSize: '0.9rem' }}>
-          <option value="Static HTML">HTML/CSS Statique</option>
-          <option value="Astro SSG">Astro SSG</option>
-          <option value="Astro Site (Source + Build)">Astro Site (Source + Build)</option>
-          <option value="Node.js / CMS Repository">Node.js / CMS Repository</option>
-          <option value="Astro Hybride + Payload + Medusa">Astro Hybride + CMS</option>
-        </select>
+        <StackSelect value={stack} onChange={setStack} />
       </div>
       <div>
-        <label className="field-label">Document Root (dossier web public)</label>
+        <label className="field-label">Document Root (dossier web public — vide : dossier par défaut)</label>
         <input type="text" className="input-text" value={documentRoot} onChange={(e) => setDocumentRoot(e.target.value)} />
       </div>
       <div>

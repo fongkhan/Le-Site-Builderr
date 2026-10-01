@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { validateTheme } = require('../lib/theme');
+const { readJsonStrict, writeJsonAtomic } = require('../lib/json-file');
 const sitesStore = require('../sites-store');
 const { getPayloadInstance } = require('../core/payload');
 const {
@@ -177,6 +178,23 @@ async function fallbackPages(siteSlug) {
   return starterPages(site ? site.name : siteSlug);
 }
 
+// Schémas d'URL exécutables : jamais acceptés dans un champ de bloc (liens des réseaux
+// sociaux, boutons, images…), qui finissent en href/src sur le site publié.
+const DANGEROUS_URL = /^[\s\u0000-\u001f]*(javascript|vbscript|data\s*:\s*text\/html)/i;
+
+function findDangerousUrl(value) {
+  if (typeof value === 'string') return DANGEROUS_URL.test(value.replace(/[\u0000-\u001f]/g, '')) ? value : null;
+  if (Array.isArray(value)) {
+    for (const v of value) {
+      const found = findDangerousUrl(v);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (value && typeof value === 'object') return findDangerousUrl(Object.values(value));
+  return null;
+}
+
 // Valide le corps envoyé par le CMS : { docs: [{ title, slug, locale?, layout? }] }.
 // Renvoie un message d'erreur, ou null si le corps est exploitable.
 function validatePagesBody(body) {
@@ -193,6 +211,7 @@ function validatePagesBody(body) {
     const key = `${page.locale === 'en' ? 'en' : 'fr'}:${page.slug}`;
     if (keys.has(key)) return `Page en double : ${page.slug}.`;
     keys.add(key);
+    if (findDangerousUrl(page.layout)) return "Lien non autorisé dans le contenu (javascript:, vbscript: ou data:text/html).";
   }
   return null;
 }
@@ -276,14 +295,15 @@ function normalizePost(p) {
   };
 }
 
-// Articles du fichier JSON (repli hors base de données), non normalisés.
+// Articles du fichier JSON (repli hors base de données), non normalisés. Un fichier
+// illisible lève une erreur : il n'est jamais réécrit comme s'il était vide.
 function readPostsFile(siteSlug) {
-  const data = readJsonFile(getSitePostsFile(siteSlug), null);
+  const data = readJsonStrict(getSitePostsFile(siteSlug), null);
   return data && Array.isArray(data.docs) ? data.docs : [];
 }
 
 function writePostsFile(siteSlug, docs) {
-  writeJsonFile(getSitePostsFile(siteSlug), { docs });
+  writeJsonAtomic(getSitePostsFile(siteSlug), { docs });
 }
 
 // Plus récents d'abord ; articles sans date en dernier (même ordre qu'en base).
@@ -343,7 +363,13 @@ async function adoptJsonPosts(payloadInstance, siteDoc, siteSlug) {
     collection: 'posts', where: { site: { equals: siteDoc.id } }, limit: 1, depth: 0, overrideAccess: true,
   });
   if (existing.docs.length > 0) return;
-  for (const post of readPostsFile(siteSlug).map(normalizePost).filter((p) => p.slug && p.title)) {
+  let jsonPosts = [];
+  try {
+    jsonPosts = readPostsFile(siteSlug);
+  } catch (e) {
+    console.error(`Articles JSON de ${siteSlug} illisibles, non repris en base :`, e.message);
+  }
+  for (const post of jsonPosts.map(normalizePost).filter((p) => p.slug && p.title)) {
     await payloadInstance.create({ collection: 'posts', data: { ...post, site: siteDoc.id }, overrideAccess: true });
   }
 }
@@ -497,6 +523,7 @@ module.exports = {
   findPayloadSiteId,
   readSitePages,
   validatePagesBody,
+  findDangerousUrl,
   saveSitePages,
   normalizePost,
   readPostsFile,

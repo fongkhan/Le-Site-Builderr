@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { forgotPassword } from '../../api/auth';
+import { ApiError } from '../../api/client';
 
 export function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
@@ -17,8 +18,10 @@ export function ForgotPasswordPage() {
       await forgotPassword(email);
       // Message identique que l'email existe ou non : pas d'énumération de comptes
       setSent(true);
-    } catch {
-      setError('Impossible de contacter le serveur. Réessayez dans un instant.');
+    } catch (err) {
+      setError(err instanceof ApiError && err.status === 429
+        ? 'Trop de demandes de réinitialisation. Patientez quelques minutes avant de réessayer.'
+        : 'Impossible de contacter le serveur. Réessayez dans un instant.');
     } finally {
       setSubmitting(false);
     }

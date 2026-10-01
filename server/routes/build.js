@@ -117,7 +117,7 @@ async function resolveInternalSite(req) {
 router.get('/internal/site-pages', requireBuildToken, async (req, res) => {
   const siteSlug = await resolveInternalSite(req);
   try {
-    res.json(media.rewriteMediaUrls(await readSitePages(siteSlug)));
+    res.json(media.rewriteMediaUrls(await readSitePages(siteSlug), media.mediaPrefixFor(build.getActiveBasePath())));
   } catch (e) {
     sendError(res, "Impossible de lire les pages du site.", e);
   }
@@ -127,7 +127,7 @@ router.get('/internal/site-pages', requireBuildToken, async (req, res) => {
 router.get('/internal/site-posts', requireBuildToken, async (req, res) => {
   const siteSlug = await resolveInternalSite(req);
   try {
-    res.json(media.rewriteMediaUrls(await readSitePosts(siteSlug, { publishedOnly: true })));
+    res.json(media.rewriteMediaUrls(await readSitePosts(siteSlug, { publishedOnly: true }), media.mediaPrefixFor(build.getActiveBasePath())));
   } catch (e) {
     sendError(res, "Impossible de lire les articles du site.", e);
   }

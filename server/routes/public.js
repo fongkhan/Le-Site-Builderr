@@ -1,7 +1,6 @@
 // Endpoints appelés par les sites PUBLIÉS (autre origine en production) : formulaire de
 // contact et beacon de statistiques. Publics, rate-limités, CORS ouvert route par route
 // (aucun cookie/credential impliqué). Lecture des stats : propriétaire ou admin.
-const fs = require('fs');
 const cors = require('cors');
 const auth = require('../auth');
 const sitesStore = require('../sites-store');
@@ -11,6 +10,7 @@ const { logAudit } = require('../core/audit');
 const { sendMail } = require('../core/mail');
 const { getSiteStatsFile } = require('../core/config');
 const { readJsonFile } = require('../services/content');
+const { readJsonStrict, writeJsonAtomic } = require('../lib/json-file');
 const { getSiteOwners } = require('../services/sites');
 
 const router = createRouter();
@@ -54,7 +54,8 @@ router.post('/api/contact/:slug', cors(), async (req, res) => {
       // Aucun compte rattaché : ne pas perdre le message pour autant
       console.log(`📬 [Contact] Message pour « ${site.slug} » (aucun propriétaire rattaché) :\n${text}`);
     }
-    logAudit(req, 'contact.recu', site.slug, `de=${email.trim()}`);
+    // Sans l'email du visiteur : le journal d'audit ne stocke pas de données personnelles
+    logAudit(req, 'contact.recu', site.slug, 'formulaire de contact');
     res.json({ success: true });
   } catch (e) {
     sendError(res, "Impossible d'envoyer le message pour le moment.", e);
@@ -75,9 +76,10 @@ router.post('/api/stats/hit/:slug', cors(), async (req, res) => {
     // On construit le chemin depuis le slug canonique stocké, jamais depuis l'entrée brute.
     const file = getSiteStatsFile(site.slug);
     // Lecture + écriture synchrones, sans await entre les deux : atomique vis-à-vis des
-    // autres requêtes (boucle d'évènements mono-thread) → pas de compteur perdu.
-    const data = readJsonFile(file, {}) || {};
-    fs.writeFileSync(file, JSON.stringify(stats.recordHit(data)), 'utf-8');
+    // autres requêtes (boucle d'évènements mono-thread) → pas de compteur perdu. Un
+    // fichier illisible lève une erreur : l'historique n'est jamais écrasé.
+    const data = readJsonStrict(file, {}) || {};
+    writeJsonAtomic(file, stats.recordHit(data), { pretty: false });
   } catch (e) {
     // Jamais d'exception remontée : le status a déjà été envoyé.
     console.error('⚠️ [Stats] hit ignoré —', (e && e.message) || e);

@@ -7,6 +7,7 @@ import { RequireAuth } from './auth/RequireAuth'
 import { RequireAdmin } from './auth/RequireAdmin'
 import { SitesProvider } from './state/SitesContext'
 import { BuildStatusProvider } from './state/BuildStatusContext'
+import { ConfigProvider } from './state/ConfigContext'
 import { ToastProvider } from './components/ui/ToastContext'
 import { AppLayout } from './components/layout/AppLayout'
 import { SiteLayout } from './components/layout/SiteLayout'
@@ -14,45 +15,48 @@ import { LoginPage } from './features/auth/LoginPage'
 import { ForgotPasswordPage } from './features/auth/ForgotPasswordPage'
 import { ResetPasswordPage } from './features/auth/ResetPasswordPage'
 import { SitesListPage } from './features/sites/SitesListPage'
-import { OnboardingPage } from './features/onboarding/OnboardingPage'
-import { DesignPage } from './features/design/DesignPage'
-import { CmsPage } from './features/cms/CmsPage'
-import { BlogPage } from './features/blog/BlogPage'
-import { DeployPage } from './features/deploy/DeployPage'
-import { AdminPanel } from './features/admin/AdminPanel'
 import { NotFoundPage } from './features/NotFoundPage'
+import { RouteError } from './features/RouteError'
 
+// Pages lourdes chargées à la demande : la page de connexion et la liste des sites
+// n'embarquent ni le CMS, ni l'onboarding, ni le panel d'administration.
 const router = createBrowserRouter([
-  { path: '/login', element: <LoginPage /> },
-  { path: '/forgot-password', element: <ForgotPasswordPage /> },
-  { path: '/reset-password', element: <ResetPasswordPage /> },
+  { path: '/login', element: <LoginPage />, errorElement: <RouteError /> },
+  { path: '/forgot-password', element: <ForgotPasswordPage />, errorElement: <RouteError /> },
+  { path: '/reset-password', element: <ResetPasswordPage />, errorElement: <RouteError /> },
   {
     element: <RequireAuth />,
+    errorElement: <RouteError />,
     children: [
       {
         element: <AppLayout />,
         children: [
-          { path: '/', element: <Navigate to="/sites" replace /> },
-          { path: '/sites', element: <SitesListPage /> },
-          { path: '/onboarding', element: <OnboardingPage /> },
           {
-            path: '/sites/:slug',
-            element: <SiteLayout />,
+            errorElement: <RouteError />,
             children: [
-              { index: true, element: <Navigate to="design" replace /> },
-              { path: 'design', element: <DesignPage /> },
-              { path: 'cms', element: <CmsPage /> },
-              { path: 'blog', element: <BlogPage /> },
-              { path: 'deploy', element: <DeployPage /> },
+              { path: '/', element: <Navigate to="/sites" replace /> },
+              { path: '/sites', element: <SitesListPage /> },
+              { path: '/onboarding', lazy: async () => ({ Component: (await import('./features/onboarding/OnboardingPage')).OnboardingPage }) },
+              {
+                path: '/sites/:slug',
+                element: <SiteLayout />,
+                children: [
+                  { index: true, element: <Navigate to="design" replace /> },
+                  { path: 'design', lazy: async () => ({ Component: (await import('./features/design/DesignPage')).DesignPage }) },
+                  { path: 'cms', lazy: async () => ({ Component: (await import('./features/cms/CmsPage')).CmsPage }) },
+                  { path: 'blog', lazy: async () => ({ Component: (await import('./features/blog/BlogPage')).BlogPage }) },
+                  { path: 'deploy', lazy: async () => ({ Component: (await import('./features/deploy/DeployPage')).DeployPage }) },
+                ],
+              },
+              {
+                element: <RequireAdmin />,
+                children: [
+                  { path: '/admin-panel', lazy: async () => ({ Component: (await import('./features/admin/AdminPanel')).AdminPanel }) },
+                ],
+              },
+              { path: '*', element: <NotFoundPage /> },
             ],
           },
-          {
-            element: <RequireAdmin />,
-            children: [
-              { path: '/admin-panel', element: <AdminPanel /> },
-            ],
-          },
-          { path: '*', element: <NotFoundPage /> },
         ],
       },
     ],
@@ -63,11 +67,13 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ToastProvider>
       <AuthProvider>
-        <SitesProvider>
-          <BuildStatusProvider>
-            <RouterProvider router={router} />
-          </BuildStatusProvider>
-        </SitesProvider>
+        <ConfigProvider>
+          <SitesProvider>
+            <BuildStatusProvider>
+              <RouterProvider router={router} />
+            </BuildStatusProvider>
+          </SitesProvider>
+        </ConfigProvider>
       </AuthProvider>
     </ToastProvider>
   </StrictMode>,

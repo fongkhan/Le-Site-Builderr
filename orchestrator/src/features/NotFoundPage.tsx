@@ -1,5 +1,5 @@
-import { Link } from 'react-router-dom';
 import { EmptyState } from '../components/ui/EmptyState';
+import { BackToSitesLink } from '../components/ui/BackToSitesLink';
 
 export function NotFoundPage() {
   return (
@@ -8,11 +8,7 @@ export function NotFoundPage() {
         icon="🧭"
         title="Page introuvable"
         description="L'adresse demandée n'existe pas ou a été déplacée."
-        action={
-          <Link to="/sites" className="btn btn-primary" style={{ textDecoration: 'none' }}>
-            ← Retour à mes sites
-          </Link>
-        }
+        action={<BackToSitesLink />}
       />
     </div>
   );

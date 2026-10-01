@@ -2,6 +2,32 @@
 
 Toutes les modifications notables apportées à ce projet sont documentées dans ce fichier.
 
+## [2.2.0] - 2026-10-01
+
+### Refactorisation
+
+- **Serveur** : le monolithe `server/index.js` (2 610 lignes) est découpé en `core/` (configuration, Payload, HTTP, audit, email, journal de build), `services/` (contenu, sites, pipeline de build, sauvegardes) et `routes/` (un routeur par domaine), assemblés par `express-app.js` dans l'ordre de montage d'origine. Bascule atomique de dossier mutualisée (`lib/fs-swap.js`) entre déploiement, rollback et brouillon.
+- **Orchestrateur** : API découpée par domaine (`api/sites|admin|deploy|domains|content|onboarding`), configuration partagée (`ConfigContext`), panel d'administration découpé en panneaux, pages Déploiement, Blog et Onboarding découpées, éditeur CMS organisé autour d'un registre de blocs, routes chargées à la demande et écrans d'erreur de route.
+- **Template** : chemin de base selon le mode de publication, helpers d'URL et de JSON-LD partagés, formulaires mutualisés, mode fixture pour tester tous les blocs.
+
+### Sécurité
+
+- Un client ne peut plus modifier, via l'API REST Payload, les paramètres de déploiement de son site (`documentRoot`, domaine, statut…) ni déplacer un contenu vers le site d'un autre client.
+- La racine partagée de production ne peut plus devenir le dossier d'un site ; le scan est limité aux racines du projet ; les identifiants de site sont validés (anti-traversée).
+- Garde-fous de production (DEV_NO_AUTH refusé, pas de mot de passe par défaut), limiteur sur la réinitialisation de mot de passe, secrets retirés de l'environnement du build, corps limité sur les endpoints publics, URLs des réseaux sociaux filtrées sur les sites publiés.
+
+### Corrections
+
+- Sites publiés sans styles (CSS référencé sous un chemin inexistant) ; formulaire de contact bloqué par le préflight CORS depuis le domaine du site ; page de secours publiée par-dessus le vrai site si l'API était injoignable pendant le build.
+- Pages : plus de troncature au-delà de 10 pages, faux succès sur erreur de base, pages supprimables depuis le CMS. Blog : un titre déjà utilisé n'écrase plus l'article existant ; articles inclus dans l'export, l'import et la duplication ; images de couverture copiées au déploiement.
+- Build : verrou jamais orphelin, délai maximal, « déjà en cours » reprogramme une publication, fin de build détectée de façon fiable, logs d'un client invisibles pour les autres, thème jamais hérité du site précédent.
+- Nouveau site : pages de départ au nom du site (plus de contenu « boulangerie »). IA : modèle Anthropic à jour, délai maximal, sortie validée. Statistiques : plus de jour sauté au changement d'heure.
+- Orchestrateur : sauvegarde automatique sans boucle de réessais, modifications concurrentes préservées, domaine personnalisé conservé après activation, double soumission de l'onboarding impossible, modales imbriquées correctes, sondage du build unique.
+
+### Vérification
+
+- Matrice de sécurité : 140 contrôles (13 nouveaux, dont 9 échouaient sur l'ancien code). Tests unitaires serveur étendus ; tests Vitest côté orchestrateur (exécutés en CI).
+
 ## [2.1.0] - 2026-07-17
 
 ### Ajouts

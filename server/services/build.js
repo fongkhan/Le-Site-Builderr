@@ -64,8 +64,10 @@ let logSite = null;
 // (deux webhooks concurrents ne peuvent plus démarrer deux builds simultanés).
 let buildLockHeld = false;
 
-// Site en cours de compilation (repli du canal interne quand ?site= est absent).
+// Site en cours de compilation (repli du canal interne quand ?site= est absent) et
+// chemin de base sous lequel il sera servi (préfixe des URLs de médias).
 let activeBuildingSite = null;
+let activeBasePath = '/';
 
 // Vider les logs + nettoyer un verrou orphelin laissé par un crash
 function resetOnBoot() {
@@ -77,12 +79,26 @@ function resetOnBoot() {
   }
 }
 
+// Comparaison à temps constant (pas d'indice sur le jeton via le temps de réponse).
 function isValidBuildToken(value) {
-  return value === BUILD_TOKEN;
+  if (typeof value !== 'string' || value.length !== BUILD_TOKEN.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(value), Buffer.from(BUILD_TOKEN));
 }
 
 function getActiveBuildingSite() {
   return activeBuildingSite;
+}
+
+function getActiveBasePath() {
+  return activeBasePath;
+}
+
+// Chemin sous lequel le site compilé sera servi : à la racine de son domaine en mode
+// cPanel ; sous /preview/<slug>/ (publication simulée) ou /draft/<slug>/ (brouillon)
+// sur l'orchestrateur. Astro préfixe CSS, JS et liens internes avec ce chemin.
+function basePathFor(siteSlug, { draft = false } = {}) {
+  if (draft) return `/draft/${siteSlug}`;
+  return hosting.isRemote ? '/' : `/preview/${siteSlug}`;
 }
 
 function getBuildStatus() {
@@ -172,6 +188,10 @@ function buildEnvFor(site, siteSlug, { draft = false } = {}) {
     ACTIVE_SITE_SLUG: siteSlug,
     BUILD_TOKEN,
     ORCHESTRATOR_URL: `http://127.0.0.1:${PORT}`,
+    SITE_BASE_PATH: basePathFor(siteSlug, { draft }),
+    // Origine publique de l'API (formulaire de contact, prise de RDV, statistiques).
+    // Vide : même origine que le site (aperçu servi par l'orchestrateur).
+    PUBLIC_API_BASE: String(process.env.PUBLIC_API_URL || '').replace(/\/+$/, ''),
     PUBLIC_SITE_NAME: (site && site.name) || siteSlug,
     PUBLIC_SITE_URL: !draft && site && site.domain ? `https://${site.domain}` : '',
     // Mesure d'audience (validée à l'écriture) : chargée après consentement RGPD
@@ -255,6 +275,7 @@ async function startDraftBuild(siteSlug) {
     // Thème courant appliqué au template avant compilation (comme un vrai build)
     await applySiteThemeCss(siteSlug);
     activeBuildingSite = siteSlug;
+    activeBasePath = basePathFor(siteSlug, { draft: true });
 
     await new Promise((resolve, reject) => {
       runAstroBuild(buildCommand(), buildEnvFor(site, siteSlug, { draft: true }), (error, stdout, stderr) => {
@@ -275,6 +296,7 @@ async function startDraftBuild(siteSlug) {
     return `/draft/${siteSlug}/index.html`;
   } finally {
     activeBuildingSite = null;
+    activeBasePath = '/';
     try { if (fs.existsSync(LOCK_FILE)) fs.unlinkSync(LOCK_FILE); } catch { /* ignore */ }
   }
 }
@@ -320,6 +342,7 @@ async function startBuild(siteSlug) {
 
   // Site actif pour le routage dynamique d'Astro
   activeBuildingSite = siteSlug;
+  activeBasePath = basePathFor(siteSlug);
 
   const cmd = buildCommand();
   appendBuildLog(`Commande exécutée : ${cmd} (dans ${ASTRO_PROJECT_DIR})`);
@@ -390,6 +413,7 @@ function copyReferencedMedia(pagesData, postsData) {
 
 async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
   activeBuildingSite = null;
+  activeBasePath = '/';
 
   if (error) {
     console.error(`Erreur de build : ${error.message}`);
@@ -486,6 +510,8 @@ module.exports = {
   resetOnBoot,
   isValidBuildToken,
   getActiveBuildingSite,
+  getActiveBasePath,
+  basePathFor,
   getBuildStatus,
   getQueue,
   getLogSite,

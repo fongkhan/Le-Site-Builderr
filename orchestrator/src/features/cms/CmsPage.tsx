@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import { fetchPages, fetchTheme, savePages } from '../../api/sites';
+import { fetchPages, fetchTheme, savePages } from '../../api/content';
 import { aiAssist } from '../../api/ai';
 import { useToast } from '../../components/ui/ToastContext';
 import { Spinner } from '../../components/ui/Spinner';

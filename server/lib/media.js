@@ -9,20 +9,28 @@ const MEDIA_API_PREFIX = '/api/media/file/';
 const MEDIA_STATIC_PREFIX = '/media/';
 
 // Réécrit récursivement toutes les URLs API de médias vers leur forme statique.
+// staticPrefix : préfixe de publication (« /media/ » à la racine d'un domaine,
+// « /preview/<slug>/media/ » pour un aperçu servi sous un sous-chemin).
 // Renvoie une copie : l'entrée n'est jamais mutée.
-function rewriteMediaUrls(value) {
+function rewriteMediaUrls(value, staticPrefix = MEDIA_STATIC_PREFIX) {
   if (typeof value === 'string') {
-    return value.split(MEDIA_API_PREFIX).join(MEDIA_STATIC_PREFIX);
+    return value.split(MEDIA_API_PREFIX).join(staticPrefix);
   }
   if (Array.isArray(value)) {
-    return value.map(rewriteMediaUrls);
+    return value.map((v) => rewriteMediaUrls(v, staticPrefix));
   }
   if (value && typeof value === 'object') {
     const out = {};
-    for (const [k, v] of Object.entries(value)) out[k] = rewriteMediaUrls(v);
+    for (const [k, v] of Object.entries(value)) out[k] = rewriteMediaUrls(v, staticPrefix);
     return out;
   }
   return value;
+}
+
+// Préfixe des médias statiques pour un chemin de base de site (« / », « /preview/x »).
+function mediaPrefixFor(basePath) {
+  const base = String(basePath || '/').replace(/\/+$/, '');
+  return `${base}${MEDIA_STATIC_PREFIX}`;
 }
 
 // Collecte les noms de fichiers médias référencés (formes API et statique confondues).
@@ -48,4 +56,4 @@ function collectMediaFilenames(value, found = new Set()) {
   return [...found];
 }
 
-module.exports = { rewriteMediaUrls, collectMediaFilenames, MEDIA_API_PREFIX, MEDIA_STATIC_PREFIX };
+module.exports = { rewriteMediaUrls, mediaPrefixFor, collectMediaFilenames, MEDIA_API_PREFIX, MEDIA_STATIC_PREFIX };

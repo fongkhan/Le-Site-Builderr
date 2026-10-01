@@ -145,8 +145,12 @@ export interface AiQuotaInfo {
   remaining: number;
 }
 
+export type HostingMode = 'simulation' | 'cpanel';
+
 export interface AppConfig {
   availableProviders: Record<AiProvider, boolean>;
+  /** cpanel : sites publiés sur leur vrai domaine ; simulation : copie locale (/preview) */
+  hostingMode?: HostingMode;
   defaultProvider: AiProvider;
   devNoAuth?: boolean;
   /** null = illimité (admin) */

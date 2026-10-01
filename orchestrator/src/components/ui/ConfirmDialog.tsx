@@ -28,6 +28,7 @@ export function ConfirmDialog({
     <Modal
       title={title}
       onClose={onCancel}
+      dismissible={!loading}
       maxWidth={480}
       footer={
         <>

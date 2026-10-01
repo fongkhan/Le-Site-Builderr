@@ -4,6 +4,7 @@ const path = require('path');
 const auth = require('../auth');
 const sitesStore = require('../sites-store');
 const aiQuota = require('../ai-quota');
+const hosting = require('../core/hosting');
 const plans = require('../lib/plans');
 const { runOnboard, runAssist } = require('../ai');
 const { generateSlug } = require('../lib/paths');
@@ -49,6 +50,8 @@ router.get('/api/config', auth.authenticate, auth.requireAuth, (req, res) => {
     },
     defaultProvider: process.env.DEFAULT_PROVIDER || 'openai',
     devNoAuth: auth.DEV_NO_AUTH,
+    // Où consulter un site publié : vrai domaine (cpanel) ou copie locale (simulation)
+    hostingMode: hosting.isRemote ? 'cpanel' : 'simulation',
     // null = illimité (admin) ; sinon { limit, used, remaining }
     aiQuota: aiQuota.getQuota(req.user),
     // Offre du compte : null = sans limite (admin). Sinon { plan, label, maxSites, aiDailyQuota }

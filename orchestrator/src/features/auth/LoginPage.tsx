@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { Spinner } from '../../components/ui/Spinner';
+import { ApiError } from '../../api/client';
 
 export function LoginPage() {
   const { user, loading, login } = useAuth();
@@ -36,11 +37,15 @@ export function LoginPage() {
       navigate(from || '/sites', { replace: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : '';
-      setError(
-        message.includes('401') || /invalid|incorrect|email or password/i.test(message)
-          ? 'Email ou mot de passe incorrect.'
-          : message || 'Connexion impossible. Vérifiez que le serveur est démarré.'
-      );
+      if (err instanceof ApiError && err.status === 429) {
+        setError(message || 'Trop de tentatives de connexion. Réessayez dans quelques minutes.');
+      } else if (/locked|verrouill/i.test(message)) {
+        setError('Compte temporairement verrouillé après trop de tentatives. Réessayez plus tard ou réinitialisez votre mot de passe.');
+      } else if ((err instanceof ApiError && err.status === 401) || /invalid|incorrect|email or password/i.test(message)) {
+        setError('Email ou mot de passe incorrect.');
+      } else {
+        setError(message || 'Connexion impossible. Vérifiez que le serveur est démarré.');
+      }
     } finally {
       setSubmitting(false);
     }

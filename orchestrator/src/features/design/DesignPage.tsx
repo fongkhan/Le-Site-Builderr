@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
-import { fetchTheme, saveTheme } from '../../api/sites';
+import { fetchTheme, saveTheme } from '../../api/content';
 import { useToast } from '../../components/ui/ToastContext';
 import { Spinner } from '../../components/ui/Spinner';
 import { UnsavedChangesPrompt } from '../../components/ui/UnsavedChangesPrompt';

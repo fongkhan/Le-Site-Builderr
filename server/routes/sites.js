@@ -13,7 +13,6 @@ const { validateTheme } = require('../lib/theme');
 const { replaceDirAtomically } = require('../lib/fs-swap');
 const { sendError, createRouter } = require('../core/http');
 const { logAudit } = require('../core/audit');
-const { appendBuildLog } = require('../core/build-log');
 const { getPayloadInstance } = require('../core/payload');
 const {
   PROJECT_DIR,
@@ -24,7 +23,7 @@ const {
   getSiteThemeFile,
 } = require('../core/config');
 const { DEFAULT_THEME, starterPages } = require('../services/defaults');
-const { readSitePages, readSitePosts, normalizePost, writePostsFile, writeJsonFile } = require('../services/content');
+const { readSitePages, readSitePosts, normalizePost, writePostsFile, writeJsonFile, findPayloadSiteId } = require('../services/content');
 const {
   toPosixPath,
   defaultDocumentRoot,
@@ -71,6 +70,8 @@ router.get('/api/sites/owners', auth.authenticate, auth.requireAdmin, async (req
 router.post('/api/sites', auth.authenticate, auth.requireAdmin, async (req, res) => {
   const { name, domain, stack, documentRoot, repositoryPath } = req.body;
   if (!name) return res.status(400).json({ error: "Le nom du site est requis." });
+  const invalid = invalidSiteFields({ name, domain, stack });
+  if (invalid) return res.status(400).json({ error: invalid });
 
   const slug = generateSlug(name);
   if (!slug) return res.status(400).json({ error: "Nom de site invalide : au moins un caractère alphanumérique est requis." });
@@ -106,11 +107,25 @@ router.post('/api/sites', auth.authenticate, auth.requireAdmin, async (req, res)
   }
 });
 
+const SITE_STATUSES = ['draft', 'active', 'error'];
+const SSL_STATUSES = ['active', 'pending', 'none'];
+
+// Champs texte d'un site : chaîne bornée, sinon message d'erreur (valeur absente = OK).
+function invalidSiteFields({ name, domain, stack, status, sslStatus }) {
+  const badString = (v, max) => v !== undefined && v !== null && (typeof v !== 'string' || v.length > max);
+  if (badString(name, 200) || badString(domain, 253) || badString(stack, 100)) return "Champ texte invalide ou trop long.";
+  if (status !== undefined && status !== '' && !SITE_STATUSES.includes(status)) return "Statut de site inconnu.";
+  if (sslStatus !== undefined && sslStatus !== '' && !SSL_STATUSES.includes(sslStatus)) return "Statut SSL inconnu.";
+  return null;
+}
+
 // Update manual site metadata (admin uniquement)
 router.put('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (req, res) => {
   const { slug } = req.params;
   const { name, domain, documentRoot, repositoryPath, stack, sslStatus, status, analyticsProvider, analyticsId, analyticsHost } = req.body;
 
+  const invalid = invalidSiteFields(req.body);
+  if (invalid) return res.status(400).json({ error: invalid });
   if (!ensureConfinedPaths(res, { documentRoot, repositoryPath })) return;
 
   // Mesure d'audience : validation stricte (ces valeurs finissent dans les pages publiées)
@@ -139,6 +154,8 @@ router.put('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (req,
       ...analyticsChanges
     });
     if (!site) return res.status(404).json({ error: "Site non trouvé." });
+    const changed = Object.keys(req.body || {}).filter((k) => req.body[k] !== undefined).join(',');
+    logAudit(req, 'site.modification', slug, changed ? `champs=${changed}` : '');
     res.json({ success: true, site });
   } catch (e) {
     sendError(res, "Impossible de mettre à jour le site.", e);
@@ -409,10 +426,12 @@ router.get('/api/sites/:slug/builds', auth.authenticate, auth.requireAuth, auth.
     if (!site) return res.status(404).json({ error: "Site non trouvé." });
     const payloadInstance = getPayloadInstance();
     if (!payloadInstance) return res.json([]);
-    const siteDoc = await sitesStore.getOrCreatePayloadDoc(req.params.slug);
+    // Lecture seule : un GET ne crée jamais de référence de site en base
+    const siteId = await findPayloadSiteId(payloadInstance, req.params.slug);
+    if (!siteId) return res.json([]);
     const out = await payloadInstance.find({
       collection: 'builds',
-      where: { site: { equals: siteDoc.id } },
+      where: { site: { equals: siteId } },
       sort: '-createdAt',
       limit: 10,
       depth: 0,
@@ -479,11 +498,17 @@ router.post('/api/sites/:slug/rollback', auth.authenticate, auth.requireAdmin, a
 
     // En mode cpanel : republier aussi la version restaurée sur l'hébergement réel
     if (hosting.isRemote) {
-      await hosting.publish(slug, siteDestDir);
+      try {
+        await hosting.publish(slug, siteDestDir);
+      } catch (publishErr) {
+        // La copie locale est déjà restaurée : on le dit, et le site passe en erreur
+        updateSiteStatus(slug, 'error');
+        logAudit(req, 'site.rollback', slug, `release=${req.body.release} (publication distante échouée)`);
+        return sendError(res, "Version restaurée localement, mais sa publication sur l'hébergement a échoué.", publishErr, 502);
+      }
     }
 
     updateSiteStatus(slug, 'active');
-    appendBuildLog(`ROLLBACK : site "${slug}" restauré sur la release ${req.body.release}.`);
     logAudit(req, 'site.rollback', slug, `release=${req.body.release}`);
     res.json({ success: true, release: req.body.release });
   } catch (e) {

@@ -19,8 +19,13 @@ function resetBuildLog(text) {
   fs.writeFileSync(LOGS_FILE, text, 'utf-8');
 }
 
+// Fin du journal (sondé toutes les 2 s par chaque orchestrateur ouvert pendant un build) :
+// les ~200 derniers Ko suffisent à suivre la progression et à lire une erreur.
+const MAX_LOG_CHARS = 200 * 1024;
 function readBuildLog() {
-  return fs.existsSync(LOGS_FILE) ? fs.readFileSync(LOGS_FILE, 'utf-8') : '';
+  if (!fs.existsSync(LOGS_FILE)) return '';
+  const content = fs.readFileSync(LOGS_FILE, 'utf-8');
+  return content.length > MAX_LOG_CHARS ? `[…]\n${content.slice(-MAX_LOG_CHARS)}` : content;
 }
 
 module.exports = { timestamp, appendBuildLog, appendRawBuildLog, resetBuildLog, readBuildLog };
