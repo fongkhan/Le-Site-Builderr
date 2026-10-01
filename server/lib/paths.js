@@ -33,4 +33,21 @@ function assertSafePath(p, base) {
   return resolved;
 }
 
-module.exports = { generateSlug, assertSafePath };
+// Comme assertSafePath, mais exige un chemin STRICTEMENT sous la base : la racine
+// elle-même est refusée. À utiliser pour tout dossier propre à un site (documentRoot,
+// dépôt…), qui sera un jour remplacé ou supprimé : viser la racine partagée effacerait
+// tous les sites d'un coup.
+function assertStrictlyInside(p, base) {
+  const resolved = assertSafePath(p, base);
+  if (resolved === path.resolve(base)) {
+    throw new Error(`Chemin non autorisé : "${p}" ne peut pas être la racine "${base}" elle-même.`);
+  }
+  return resolved;
+}
+
+// Slug canonique (tel que produit par generateSlug) : minuscules, chiffres, tirets.
+function isValidSlug(value) {
+  return typeof value === 'string' && value.length <= 200 && /^[a-z0-9][a-z0-9-]*$/.test(value);
+}
+
+module.exports = { generateSlug, assertSafePath, assertStrictlyInside, isValidSlug };

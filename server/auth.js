@@ -2,6 +2,8 @@
 // Le front se connecte via les routes REST Payload (/api/users/login) qui posent
 // le cookie httpOnly `payload-token` ; ici on vérifie ce cookie sur chaque requête Express.
 
+const { isValidSlug } = require('./lib/paths');
+
 const DEV_NO_AUTH = process.env.DEV_NO_AUTH === 'true';
 
 let getPayloadInstance = () => null;
@@ -98,6 +100,10 @@ function requireSiteAccess(getSlug) {
     const slug = getSlug(req);
     if (!slug) {
       return res.status(400).json({ error: "Le paramètre ?site=<slug> est requis." });
+    }
+    // Le slug finit dans des chemins de fichiers (data/site_<slug>_…) : format strict.
+    if (!isValidSlug(slug)) {
+      return res.status(400).json({ error: "Identifiant de site invalide." });
     }
     if (isAdmin(req.user)) return next();
     if (!req.userSiteSlugs || !req.userSiteSlugs.has(slug)) {

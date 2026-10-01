@@ -34,7 +34,8 @@ function listReleases(baseDir, slug) {
 
 // Supprime les releases au-delà des `keep` plus récentes. Renvoie les ids supprimés.
 function pruneReleases(baseDir, slug, keep) {
-  const excess = listReleases(baseDir, slug).slice(Math.max(1, keep));
+  // keep invalide (undefined, NaN…) → on conserve au moins la release courante
+  const excess = listReleases(baseDir, slug).slice(Math.max(1, Number.parseInt(keep, 10) || 1));
   for (const r of excess) {
     fs.rmSync(releaseDirFor(baseDir, slug, r.id), { recursive: true, force: true });
   }

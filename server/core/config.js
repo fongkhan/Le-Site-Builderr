@@ -2,6 +2,7 @@
 // Aucun effet de bord à l'import : la création des dossiers passe par ensureRuntimeDirs().
 const fs = require('fs');
 const path = require('path');
+const { isValidSlug } = require('../lib/paths');
 
 // Entier lu dans l'environnement ; valeur absente, invalide ou nulle → valeur par défaut.
 function envInt(name, fallback) {
@@ -49,22 +50,17 @@ function ensureRuntimeDirs() {
   }
 }
 
-// Fichiers de données par site (fallback JSON de Payload + compteurs de visites)
-function getSitePagesFile(slug) {
-  return path.join(DATA_DIR, `site_${slug}_pages.json`);
+// Fichiers de données par site (fallback JSON de Payload + compteurs de visites).
+// Défense en profondeur : un slug non canonique (« ../x ») ne produit jamais de chemin.
+function siteDataFile(prefix, slug, suffix) {
+  if (!isValidSlug(slug)) throw new Error(`Identifiant de site invalide : ${JSON.stringify(slug)}`);
+  return path.join(DATA_DIR, `${prefix}${slug}${suffix}`);
 }
 
-function getSiteThemeFile(slug) {
-  return path.join(DATA_DIR, `site_${slug}_theme.json`);
-}
-
-function getSitePostsFile(slug) {
-  return path.join(DATA_DIR, `posts_${slug}.json`);
-}
-
-function getSiteStatsFile(slug) {
-  return path.join(DATA_DIR, `stats_${slug}.json`);
-}
+const getSitePagesFile = (slug) => siteDataFile('site_', slug, '_pages.json');
+const getSiteThemeFile = (slug) => siteDataFile('site_', slug, '_theme.json');
+const getSitePostsFile = (slug) => siteDataFile('posts_', slug, '.json');
+const getSiteStatsFile = (slug) => siteDataFile('stats_', slug, '.json');
 
 module.exports = {
   envInt,

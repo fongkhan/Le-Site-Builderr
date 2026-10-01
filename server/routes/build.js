@@ -1,17 +1,16 @@
 // Déploiement : état du build, webhook de (re)build et canal interne lu par le build Astro.
-const express = require('express');
 const fs = require('fs');
 const auth = require('../auth');
 const sitesStore = require('../sites-store');
 const media = require('../lib/media');
-const { sendError } = require('../core/http');
+const { sendError, createRouter } = require('../core/http');
 const { logAudit } = require('../core/audit');
 const { readBuildLog } = require('../core/build-log');
 const { LOCK_FILE } = require('../core/config');
 const { readSitePages, readSitePosts } = require('../services/content');
 const build = require('../services/build');
 
-const router = express.Router();
+const router = createRouter();
 
 router.get('/api/build-status', auth.authenticate, auth.requireAuth, (req, res) => {
   const buildStatus = build.getBuildStatus();
@@ -25,10 +24,10 @@ router.get('/api/build-status', auth.authenticate, auth.requireAuth, (req, res) 
           .filter(q => req.userSiteSlugs.has(q.slug))
       };
 
-  // Un client ne voit les logs que si le build en cours/dernier concerne un de ses sites
-  const canSeeLogs = auth.isAdmin(req.user) ||
-    !buildStatus.buildingSite ||
-    req.userSiteSlugs.has(buildStatus.buildingSite);
+  // Un client ne voit les logs (et le résultat) que si le build en cours ou le dernier
+  // build concerne un de ses sites.
+  const logSite = build.getLogSite();
+  const canSeeLogs = auth.isAdmin(req.user) || !logSite || req.userSiteSlugs.has(logSite);
 
   if (!canSeeLogs) {
     return res.json({
@@ -58,30 +57,36 @@ router.post('/webhook/rebuild', auth.authenticate, auth.requireAuth, auth.requir
   // immédiatement si le build est libre, fermant la fenêtre TOCTOU.
   const reserved = build.tryReserve();
 
-  const site = await sitesStore.getSiteBySlug(siteSlug);
+  let site;
+  try {
+    site = await sitesStore.getSiteBySlug(siteSlug);
+  } catch (e) {
+    if (reserved) build.release(); // jamais de verrou orphelin sur une erreur de base
+    return sendError(res, "Impossible de lancer le build.", e);
+  }
   if (!site) {
-    if (reserved) build.cancelReservation(); // libérer la réservation prise à tort
+    if (reserved) build.release(); // libérer la réservation prise à tort
     return res.status(404).json({ error: "Site non trouvé dans la base cPanel." });
   }
 
-  // Mémoriser le déclencheur pour l'historique et les notifications
-  build.setTrigger(siteSlug, (req.user && req.user.email) || 'système');
+  const triggeredBy = (req.user && req.user.email) || 'système';
   logAudit(req, 'build.declenchement', siteSlug);
 
   // Créneau réservé : démarrage immédiat (le build consomme le verrou déjà posé)
   if (reserved) {
     res.status(202).json({ message: 'Build démarré avec succès.', queued: false });
-    build.launch(siteSlug);
+    build.launch(siteSlug, triggeredBy);
     return;
   }
 
-  // Build déjà en cours pour CE site : rien à faire
+  // Build déjà en cours pour CE site : un nouveau build est programmé juste après, pour
+  // publier les modifications enregistrées depuis son démarrage (dédupliqué).
+  const position = build.enqueue(siteSlug, triggeredBy);
   if (build.getBuildStatus().buildingSite === siteSlug) {
-    return res.status(202).json({ message: 'Build déjà en cours pour ce site.', queued: false, alreadyBuilding: true });
+    return res.status(202).json({ message: 'Build déjà en cours pour ce site : une nouvelle publication suivra.', queued: true, position, alreadyBuilding: true });
   }
 
   // Un autre build occupe le verrou : mise en file (dédupliquée)
-  const position = build.enqueue(siteSlug);
   return res.status(202).json({ message: `Site ajouté à la file d'attente (position ${position}).`, queued: true, position });
 });
 

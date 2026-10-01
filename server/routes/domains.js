@@ -1,17 +1,16 @@
 // Domaine personnalisé (ADMIN only) : rattacher le vrai nom de domaine d'un client.
 // Preuve de propriété par enregistrement TXT, puis création du domaine additionnel côté
 // cPanel (AutoSSL prend le relais pour le certificat). Fonctionne aussi en simulation.
-const express = require('express');
 const dns = require('dns').promises;
 const auth = require('../auth');
 const sitesStore = require('../sites-store');
 const hosting = require('../core/hosting');
 const domains = require('../lib/domains');
-const { sendError, limiters } = require('../core/http');
+const { sendError, limiters, createRouter } = require('../core/http');
 const { logAudit } = require('../core/audit');
 const { resolveSiteDomain, initialSslStatus } = require('../services/sites');
 
-const router = express.Router();
+const router = createRouter();
 const adminOnly = [limiters.domain, auth.authenticate, auth.requireAdmin];
 
 // 1) Saisie : valide le domaine, génère le jeton TXT à publier, passe en 'pending'.
@@ -23,6 +22,11 @@ router.post('/api/sites/:slug/custom-domain', ...adminOnly, async (req, res) => 
     const domain = domains.normalizeDomain(req.body && req.body.domain);
     if (!domains.isValidDomain(domain, { rootDomain: process.env.CPANEL_ROOT_DOMAIN })) {
       return res.status(400).json({ error: "Nom de domaine invalide. Saisissez un domaine public (ex. mon-commerce.fr)." });
+    }
+    // Un domaine ne sert qu'un seul site (sinon activation ou détachement sur le mauvais site)
+    const owner = (await sitesStore.listSites()).find((s) => s.slug !== site.slug && (s.customDomain === domain || s.domain === domain));
+    if (owner) {
+      return res.status(409).json({ error: "Ce domaine est déjà rattaché à un autre site." });
     }
 
     // Réutilise le jeton si on reconfigure le même domaine, sinon en génère un nouveau.
@@ -75,14 +79,13 @@ router.post('/api/sites/:slug/custom-domain/verify', ...adminOnly, async (req, r
       return sendError(res, "Domaine vérifié, mais son rattachement à l'hébergement a échoué.", e, 502);
     }
 
-    // Le domaine client devient le domaine servi ; SSL repart en attente (AutoSSL).
-    await sitesStore.updateSite(site.slug, { domain: site.customDomain, domainStatus: 'active', sslStatus: initialSslStatus() });
-    logAudit(req, 'site.domaine.active', site.slug, site.customDomain);
-
-    // Statut SSL courant (best-effort — n'échoue pas la requête).
+    // Statut SSL courant (best-effort — AutoSSL peut ne pas avoir encore émis le certificat).
     let sslStatus = initialSslStatus();
     try { sslStatus = await hosting.getSslStatus(site.customDomain); } catch { /* AutoSSL pas encore émis */ }
-    await sitesStore.updateSite(site.slug, { sslStatus });
+
+    // Le domaine client devient le domaine servi.
+    await sitesStore.updateSite(site.slug, { domain: site.customDomain, domainStatus: 'active', sslStatus });
+    logAudit(req, 'site.domaine.active', site.slug, site.customDomain);
 
     res.json({ verified: true, domainStatus: 'active', domain: site.customDomain, sslStatus });
   } catch (e) {
@@ -95,20 +98,22 @@ router.delete('/api/sites/:slug/custom-domain', ...adminOnly, async (req, res) =
   try {
     const site = await sitesStore.getSiteBySlug(req.params.slug);
     if (!site) return res.status(404).json({ error: "Site non trouvé." });
+    // Rien à détacher : le domaine servi actuel est conservé tel quel
+    if (!site.customDomain) {
+      return res.json({ success: true, domain: site.domain, domainStatus: site.domainStatus || 'none' });
+    }
 
-    if (site.customDomain) {
-      try {
-        await hosting.removeCustomDomain(site.customDomain);
-      } catch (e) {
-        console.error('⚠️ [Domaine] Retrait cPanel best-effort échoué —', (e && e.message) || e);
-      }
+    try {
+      await hosting.removeCustomDomain(site.customDomain);
+    } catch (e) {
+      console.error('⚠️ [Domaine] Retrait cPanel best-effort échoué —', (e && e.message) || e);
     }
     // Rebascule le domaine servi sur le sous-domaine généré.
     const subdomain = await resolveSiteDomain(site.slug);
     await sitesStore.updateSite(site.slug, {
       customDomain: '', domainVerifyToken: '', domainStatus: 'none', domain: subdomain,
     });
-    logAudit(req, 'site.domaine.detache', site.slug, site.customDomain || '');
+    logAudit(req, 'site.domaine.detache', site.slug, site.customDomain);
 
     res.json({ success: true, domain: subdomain, domainStatus: 'none' });
   } catch (e) {

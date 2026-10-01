@@ -58,3 +58,14 @@ test('listReleases — site sans release ou dossier pollué', () => {
   assert.equal(listReleases(base, 's').length, 1);
   fs.rmSync(base, { recursive: true, force: true });
 });
+
+test('pruneReleases — keep invalide : la release la plus récente est toujours conservée', () => {
+  const { base, dist } = setup();
+  saveRelease(base, 'mon-site', dist, 1000000000000);
+  const newest = saveRelease(base, 'mon-site', dist, 1000000000500);
+  for (const keep of [undefined, NaN, 'abc', 0, -3]) {
+    pruneReleases(base, 'mon-site', keep);
+    assert.deepEqual(listReleases(base, 'mon-site').map((r) => r.id), [newest], String(keep));
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+});

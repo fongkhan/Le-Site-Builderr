@@ -1,14 +1,13 @@
 // CMS : pages, articles de blog et thème d'un site. Le paramètre ?site= est obligatoire
 // et l'accès est vérifié par ownership (admin ou propriétaire du site).
-const express = require('express');
 const auth = require('../auth');
 const { generateSlug } = require('../lib/paths');
 const { validateTheme } = require('../lib/theme');
-const { sendError } = require('../core/http');
+const { sendError, createRouter } = require('../core/http');
 const { logAudit } = require('../core/audit');
 const content = require('../services/content');
 
-const router = express.Router();
+const router = createRouter();
 const siteAccess = [auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site)];
 
 // --- Pages ---
@@ -22,8 +21,14 @@ router.get('/api/site-pages', ...siteAccess, async (req, res) => {
 });
 
 router.post('/api/site-pages', ...siteAccess, async (req, res) => {
-  await content.saveSitePages(req.query.site, req.body);
-  res.json({ success: true, message: "Pages enregistrées avec succès !" });
+  const invalid = content.validatePagesBody(req.body);
+  if (invalid) return res.status(400).json({ error: invalid });
+  try {
+    await content.saveSitePages(req.query.site, req.body);
+    res.json({ success: true, message: "Pages enregistrées avec succès !" });
+  } catch (e) {
+    sendError(res, "Impossible d'enregistrer les pages.", e);
+  }
 });
 
 // --- Blog / actualités ---
@@ -43,11 +48,19 @@ router.post('/api/site-posts', ...siteAccess, async (req, res) => {
   const body = req.body || {};
   const title = typeof body.title === 'string' ? body.title.trim() : '';
   if (!title) return res.status(400).json({ error: "Le titre de l'article est requis." });
-  // Le slug de l'article est dérivé/validé (jamais vide, URL-safe) — sinon dérivé du titre.
-  const postSlug = generateSlug(body.slug) || generateSlug(title);
-  if (!postSlug) return res.status(400).json({ error: "Titre invalide : impossible d'en dériver une adresse." });
+  // Slug fourni = mise à jour de cet article. Sinon (nouvel article), slug dérivé du titre
+  // et rendu unique : un titre déjà utilisé n'écrase jamais l'article existant.
+  const explicitSlug = generateSlug(body.slug);
+  const derivedSlug = generateSlug(title);
+  if (!explicitSlug && !derivedSlug) return res.status(400).json({ error: "Titre invalide : impossible d'en dériver une adresse." });
 
   try {
+    let postSlug = explicitSlug;
+    if (!postSlug) {
+      const taken = new Set((await content.readSitePosts(siteSlug)).docs.map((p) => p.slug));
+      postSlug = derivedSlug;
+      for (let n = 2; taken.has(postSlug); n++) postSlug = `${derivedSlug}-${n}`;
+    }
     await content.upsertPost(siteSlug, content.normalizePost({ ...body, title, slug: postSlug }));
     logAudit(req, 'article.enregistrement', siteSlug, postSlug);
     res.json({ success: true, slug: postSlug });
@@ -73,7 +86,11 @@ router.delete('/api/site-posts', ...siteAccess, async (req, res) => {
 // --- Thème ---
 
 router.get('/api/theme', ...siteAccess, async (req, res) => {
-  res.json(await content.readSiteTheme(req.query.site));
+  try {
+    res.json(await content.readSiteTheme(req.query.site));
+  } catch (e) {
+    sendError(res, "Impossible de lire le thème du site.", e);
+  }
 });
 
 router.post('/api/theme', ...siteAccess, async (req, res) => {
@@ -86,8 +103,13 @@ router.post('/api/theme', ...siteAccess, async (req, res) => {
     return res.status(400).json({ error: validation.error });
   }
 
-  await content.saveSiteTheme(req.query.site, themeData);
-  res.json({ success: true, message: "Thème mis à jour avec succès !" });
+  try {
+    // Seul le thème validé est persisté (pas d'autres clés arbitraires du corps)
+    await content.saveSiteTheme(req.query.site, { theme: themeData.theme });
+    res.json({ success: true, message: "Thème mis à jour avec succès !" });
+  } catch (e) {
+    sendError(res, "Impossible d'enregistrer le thème.", e);
+  }
 });
 
 module.exports = router;

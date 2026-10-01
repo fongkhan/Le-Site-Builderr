@@ -35,3 +35,18 @@ test('total — somme des visites', () => {
   assert.equal(total({ a: 2, b: 3, c: 0 }), 5);
   assert.equal(total({}), 0);
 });
+
+test('lastNDays — aucun jour sauté ni doublé au changement d’heure, quel que soit le fuseau', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const statsPath = new URL('../../lib/stats.js', import.meta.url).pathname;
+  for (const tz of ['Europe/Paris', 'Europe/London', 'America/New_York', 'UTC']) {
+    const out = execFileSync(process.execPath, ['-e', `
+      const { lastNDays } = require(${JSON.stringify(statsPath)});
+      process.stdout.write(JSON.stringify(lastNDays({}, 120, '2026-11-15').map((d) => d.date)));
+    `], { env: { ...process.env, TZ: tz } });
+    const dates = JSON.parse(String(out));
+    assert.equal(new Set(dates).size, 120, `${tz} : dates en double`);
+    assert.equal(dates[119], '2026-11-15', tz);
+    assert.equal(dates[0], '2026-07-19', tz);
+  }
+});

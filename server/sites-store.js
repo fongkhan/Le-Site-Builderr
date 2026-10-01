@@ -144,9 +144,12 @@ async function deleteSite(slug) {
     });
     if (res.docs.length === 0) return false;
     const siteId = res.docs[0].id;
-    // Supprime d'abord les contenus rattachés (sinon docs orphelins)
-    await payload.delete({ collection: 'pages', where: { site: { equals: siteId } }, overrideAccess: true });
-    await payload.delete({ collection: 'themes', where: { site: { equals: siteId } }, overrideAccess: true });
+    // Supprime d'abord les contenus rattachés (sinon docs orphelins, hérités par un futur
+    // site recréé sous le même slug). Les médias sont conservés : un site dupliqué peut
+    // référencer les fichiers de son site source.
+    for (const collection of ['pages', 'themes', 'posts', 'builds']) {
+      await payload.delete({ collection, where: { site: { equals: siteId } }, overrideAccess: true });
+    }
     await payload.delete({ collection: 'payload_sites', id: siteId, overrideAccess: true });
     return true;
   }

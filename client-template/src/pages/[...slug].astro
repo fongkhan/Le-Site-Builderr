@@ -62,8 +62,11 @@ export async function getStaticPaths() {
     });
   } catch (error: any) {
     console.error("Erreur lors de la récupération des pages depuis l'API :", error.message);
-    
-    // Page de fallback si l'API est injoignable pendant la phase de build
+    // Build de l'orchestrateur : on échoue plutôt que de publier une page de secours
+    // par-dessus le vrai site (la version en ligne est conservée).
+    if (process.env.ACTIVE_SITE_SLUG && process.env.BUILD_TOKEN) throw error;
+
+    // Build local du template seul : page de fallback si l'API est injoignable
     return [
       {
         params: { slug: undefined },

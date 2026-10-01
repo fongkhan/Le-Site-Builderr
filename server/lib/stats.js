@@ -18,8 +18,10 @@ function recordHit(data, day = today(), retentionDays = RETENTION_DAYS) {
 
 // Supprime les jours antérieurs à la fenêtre de rétention (relative à `ref`).
 function pruneOldDays(data, ref = today(), retentionDays = RETENTION_DAYS) {
+  // Calcul en UTC : indépendant du fuseau du serveur (pas de jour sauté ou doublé
+  // au passage à l'heure d'été/hiver).
   const cutoff = new Date(ref);
-  cutoff.setDate(cutoff.getDate() - retentionDays);
+  cutoff.setUTCDate(cutoff.getUTCDate() - retentionDays);
   const cutoffStr = cutoff.toISOString().slice(0, 10);
   const out = {};
   for (const [d, c] of Object.entries(data || {})) {
@@ -35,7 +37,7 @@ function lastNDays(data, n = 30, ref = today()) {
   const base = new Date(ref);
   for (let i = n - 1; i >= 0; i--) {
     const d = new Date(base);
-    d.setDate(d.getDate() - i);
+    d.setUTCDate(d.getUTCDate() - i);
     const key = d.toISOString().slice(0, 10);
     series.push({ date: key, count: Number((data || {})[key]) || 0 });
   }

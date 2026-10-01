@@ -11,12 +11,13 @@ const releases = require('../lib/releases');
 const seo = require('../lib/seo');
 const media = require('../lib/media');
 const i18n = require('../lib/i18n');
-const { assertSafePath } = require('../lib/paths');
+const { assertSafePath, assertStrictlyInside } = require('../lib/paths');
 const { replaceDirAtomically } = require('../lib/fs-swap');
 const { getPayloadInstance } = require('../core/payload');
 const { sendMail } = require('../core/mail');
 const { appendBuildLog, appendRawBuildLog, resetBuildLog } = require('../core/build-log');
 const {
+  envInt,
   PORT,
   ASTRO_PROJECT_DIR,
   DIST_DIR,
@@ -27,8 +28,10 @@ const {
   UPLOADS_DIR,
   DEPLOY_KEEP_RELEASES,
 } = require('../core/config');
-const { applySiteThemeCss, readSitePages, readSitePosts } = require('./content');
+const { applySiteThemeCss, findPayloadSiteId, readSitePages, readSitePosts } = require('./content');
 const { getSiteOwners, updateSiteStatus } = require('./sites');
+
+const BUILD_TIMEOUT_MS = envInt('BUILD_TIMEOUT_MS', 10 * 60 * 1000);
 
 // Jeton interne régénéré à chaque boot : seul le process de build Astro le reçoit (via env)
 const BUILD_TOKEN = crypto.randomBytes(24).toString('hex');
@@ -47,8 +50,15 @@ const buildQueue = [];
 
 // Déclencheur (email) et heure de départ des builds, pour l'historique (collection
 // « builds ») et les notifications. Volatiles comme la file : perte au restart OK.
+// Le déclencheur d'un build EN FILE est gardé à part : il ne doit pas écraser celui du
+// build en cours du même site.
 const buildTriggers = new Map();
+const queuedTriggers = new Map();
 const buildStartTimes = new Map();
+
+// Site concerné par le journal de build courant (en cours ou dernier terminé) : seuls
+// l'admin et les propriétaires de ce site peuvent lire les logs.
+let logSite = null;
 
 // Verrou mémoire synchrone : posé AVANT tout await pour fermer la fenêtre TOCTOU
 // (deux webhooks concurrents ne peuvent plus démarrer deux builds simultanés).
@@ -83,6 +93,10 @@ function getQueue() {
   return [...buildQueue];
 }
 
+function getLogSite() {
+  return buildStatus.buildingSite || logSite;
+}
+
 // Un build (ou un brouillon) occupe-t-il le template ?
 function isBusy() {
   return buildLockHeld || buildStatus.inProgress || fs.existsSync(LOCK_FILE);
@@ -96,41 +110,57 @@ function tryReserve() {
   return true;
 }
 
-// Annule une réservation prise à tort (site introuvable…), sans relancer la file.
-function cancelReservation() {
+// Libère une réservation (fin d'opération exclusive ou réservation prise à tort) et
+// relance la file d'attente.
+function release() {
   buildLockHeld = false;
-}
-
-function setTrigger(siteSlug, triggeredBy) {
-  buildTriggers.set(siteSlug, triggeredBy);
-}
-
-// Ajoute un site à la file (dédupliquée). Renvoie sa position (1-based).
-function enqueue(siteSlug) {
-  const existingIdx = buildQueue.indexOf(siteSlug);
-  if (existingIdx !== -1) return existingIdx + 1;
-  const position = buildQueue.push(siteSlug);
-  appendBuildLog(`FILE D'ATTENTE : "${siteSlug}" ajouté (position ${position}).`);
-  return position;
+  drainQueue();
 }
 
 // Lance un build dont le créneau est déjà réservé ; un échec de lancement libère le
 // verrou et relance la file.
-function launch(siteSlug, failureLabel = 'Erreur de lancement du build :') {
+function launch(siteSlug, triggeredBy, failureLabel = 'Erreur de lancement du build :') {
+  buildTriggers.set(siteSlug, triggeredBy || 'système');
   startBuild(siteSlug).catch((e) => {
     console.error(failureLabel, e.message);
-    buildLockHeld = false;
-    drainQueue();
+    buildStatus.inProgress = false;
+    buildStatus.buildingSite = null;
+    try { if (fs.existsSync(LOCK_FILE)) fs.unlinkSync(LOCK_FILE); } catch { /* ignore */ }
+    release();
   });
+}
+
+// Ajoute un site à la file (dédupliquée). Renvoie sa position (1-based).
+function enqueue(siteSlug, triggeredBy) {
+  const existingIdx = buildQueue.indexOf(siteSlug);
+  if (existingIdx !== -1) return existingIdx + 1;
+  const position = buildQueue.push(siteSlug);
+  queuedTriggers.set(siteSlug, triggeredBy || 'système');
+  appendBuildLog(`FILE D'ATTENTE : "${siteSlug}" ajouté (position ${position}).`);
+  return position;
 }
 
 // Dépile et lance le build suivant. Appelée à CHAQUE fin de build (succès ou erreur).
 function drainQueue() {
   if (buildQueue.length === 0 || buildLockHeld || fs.existsSync(LOCK_FILE)) return;
   const nextSlug = buildQueue.shift();
+  const triggeredBy = queuedTriggers.get(nextSlug);
+  queuedTriggers.delete(nextSlug);
   buildLockHeld = true; // réserver le créneau avant l'await de startBuild
   appendBuildLog(`FILE D'ATTENTE : lancement du build suivant (${nextSlug}), ${buildQueue.length} restant(s).`);
-  launch(nextSlug, 'Erreur de lancement du build en file :');
+  launch(nextSlug, triggeredBy, 'Erreur de lancement du build en file :');
+}
+
+// Variables du serveur jamais transmises au build (npm install exécute des scripts
+// tiers) : base de données, secrets, clés d'API, identifiants SMTP/cPanel.
+const SECRET_ENV = /(SECRET|PASSWORD|PASSWD|PASS$|TOKEN|API_KEY|_KEY$|DATABASE_URI|^CPANEL_|^SMTP_|^SEED_)/i;
+
+function sanitizedEnv(env = process.env) {
+  const out = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (!SECRET_ENV.test(key)) out[key] = value;
+  }
+  return out;
 }
 
 // Environnement du process de build : site actif, jeton d'accès interne, métadonnées
@@ -138,7 +168,7 @@ function drainQueue() {
 // publique (pas de canonique vers la prod) ni mesure d'audience ni beacon de stats.
 function buildEnvFor(site, siteSlug, { draft = false } = {}) {
   return {
-    ...process.env,
+    ...sanitizedEnv(),
     ACTIVE_SITE_SLUG: siteSlug,
     BUILD_TOKEN,
     ORCHESTRATOR_URL: `http://127.0.0.1:${PORT}`,
@@ -164,10 +194,12 @@ function finalizeBuild(siteSlug, siteName, status, excerpt) {
   (async () => {
     const payloadInstance = getPayloadInstance();
     if (!payloadInstance) return;
-    const siteDoc = await sitesStore.getOrCreatePayloadDoc(siteSlug);
+    // Lecture seule : un site supprimé pendant son build n'est jamais recréé.
+    const siteId = await findPayloadSiteId(payloadInstance, siteSlug);
+    if (!siteId) return;
     await payloadInstance.create({
       collection: 'builds',
-      data: { site: siteDoc.id, status, durationMs, triggeredBy, logExcerpt: String(excerpt || '').slice(-1500) },
+      data: { site: siteId, status, durationMs, triggeredBy, logExcerpt: String(excerpt || '').slice(-1500) },
       overrideAccess: true,
     });
   })().catch((e) => console.error('Historique de build non enregistré :', e.message));
@@ -192,9 +224,22 @@ async function notifyBuildResult(siteSlug, siteName, status, durationMs) {
   await sendMail(emails, subject, text);
 }
 
-// Exécute `npm run build` dans le template (callback (error, stdout, stderr)).
+// Exécute la commande de build dans le template (callback (error, stdout, stderr)).
+// Borné dans le temps (un npm install bloqué ne garde pas le verrou indéfiniment) et
+// avec un tampon de sortie large (le maxBuffer par défaut, 1 Mo, tue les gros builds).
 function runAstroBuild(command, env, callback) {
-  exec(command, { cwd: ASTRO_PROJECT_DIR, env }, callback);
+  exec(command, { cwd: ASTRO_PROJECT_DIR, env, timeout: BUILD_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024, killSignal: 'SIGKILL' }, (error, stdout, stderr) => {
+    if (error && error.killed) {
+      error.message = `Build interrompu après ${Math.round(BUILD_TIMEOUT_MS / 1000)} s (délai maximal BUILD_TIMEOUT_MS dépassé).`;
+    }
+    callback(error, stdout, stderr);
+  });
+}
+
+// Commande de build : installe les dépendances du template au premier build.
+function buildCommand() {
+  const needsInstall = !fs.existsSync(path.join(ASTRO_PROJECT_DIR, 'node_modules'));
+  return `${needsInstall ? 'npm install && ' : ''}npm run build`;
 }
 
 // --- Prévisualisation brouillon ---------------------------------------------
@@ -208,11 +253,11 @@ async function startDraftBuild(siteSlug) {
   fs.writeFileSync(LOCK_FILE, 'locked');
   try {
     // Thème courant appliqué au template avant compilation (comme un vrai build)
-    applySiteThemeCss(siteSlug);
+    await applySiteThemeCss(siteSlug);
     activeBuildingSite = siteSlug;
 
     await new Promise((resolve, reject) => {
-      runAstroBuild('npm run build', buildEnvFor(site, siteSlug, { draft: true }), (error, stdout, stderr) => {
+      runAstroBuild(buildCommand(), buildEnvFor(site, siteSlug, { draft: true }), (error, stdout, stderr) => {
         if (error) return reject(new Error(`Build brouillon échoué : ${String(stderr || stdout).slice(-500)}`));
         resolve();
       });
@@ -234,15 +279,13 @@ async function startDraftBuild(siteSlug) {
   }
 }
 
-// Brouillon exclusif : réserve le créneau, compile, puis libère et relance la file.
-// Précondition : l'appelant a vérifié isBusy() (sinon 409).
+// Brouillon exclusif : compile puis libère le créneau et relance la file.
+// Précondition : le créneau a été réservé par l'appelant (tryReserve).
 async function runDraftPreview(siteSlug) {
-  buildLockHeld = true;
   try {
     return await startDraftBuild(siteSlug);
   } finally {
-    buildLockHeld = false;
-    drainQueue(); // un build en attente peut repartir
+    release(); // un build en attente peut repartir
   }
 }
 
@@ -266,20 +309,19 @@ async function startBuild(siteSlug) {
   buildStatus.status = "running";
   buildStatus.error = null;
   buildStatus.buildingSite = siteSlug;
+  logSite = siteSlug;
   buildStartTimes.set(siteSlug, Date.now());
 
   resetBuildLog('');
   appendBuildLog(`DÉMARRAGE : Build du site "${site.name}" (${siteSlug})...`);
 
   // Thème du site appliqué au template CSS avant compilation
-  applySiteThemeCss(siteSlug);
+  await applySiteThemeCss(siteSlug);
 
   // Site actif pour le routage dynamique d'Astro
   activeBuildingSite = siteSlug;
 
-  // Vérifier si node_modules existe dans client-template, sinon faire npm install
-  const needsInstall = !fs.existsSync(path.join(ASTRO_PROJECT_DIR, 'node_modules'));
-  const cmd = `${needsInstall ? 'npm install && ' : ''}npm run build`;
+  const cmd = buildCommand();
   appendBuildLog(`Commande exécutée : ${cmd} (dans ${ASTRO_PROJECT_DIR})`);
 
   runAstroBuild(cmd, buildEnvFor(site, siteSlug), (error, stdout, stderr) => {
@@ -288,17 +330,15 @@ async function startBuild(siteSlug) {
     handleBuildResult(siteSlug, site, error, stdout, stderr)
       .catch((e) => {
         console.error('Erreur inattendue de post-build :', e.message);
-        buildStatus.status = 'error';
-        buildStatus.error = 'Erreur interne de déploiement.';
-        updateSiteStatus(siteSlug, 'error');
+        failBuild(siteSlug, site, 'Erreur interne de déploiement.', e.message);
       })
       .finally(() => {
-        if (fs.existsSync(LOCK_FILE)) {
-          fs.unlinkSync(LOCK_FILE);
-        }
+        try { if (fs.existsSync(LOCK_FILE)) fs.unlinkSync(LOCK_FILE); } catch { /* ignore */ }
+        // buildingSite n'est remis à zéro qu'ici, APRÈS le statut final : l'orchestrateur
+        // détecte la fin du build et lit success/error au même sondage.
+        buildStatus.buildingSite = null;
         buildStatus.inProgress = false;
-        buildLockHeld = false;
-        drainQueue();
+        release();
       });
   });
 }
@@ -314,12 +354,11 @@ function failBuild(siteSlug, site, publicError, excerpt) {
 // SEO : sitemap.xml + robots.txt générés dans le dist avant publication.
 // Chemins localisés : la langue par défaut est à la racine, les autres préfixées
 // (/en/…). '' (accueil de la langue par défaut) est représenté par « home ».
-async function writeSeoFiles(siteSlug, site, pagesData) {
+function writeSeoFiles(site, pagesData, postsData) {
   const slugs = (pagesData.docs || [])
     .filter((p) => p.slug)
     .map((p) => i18n.localeRouteParam(p.locale, p.slug) || 'home');
   // Ajoute l'index du blog + chaque article publié (URL /blog/<slug>/)
-  const postsData = await readSitePosts(siteSlug, { publishedOnly: true });
   const postSlugs = (postsData.docs || []).map((p) => p.slug).filter(Boolean);
   if (postSlugs.length > 0) {
     slugs.push('blog', ...postSlugs.map((s) => `blog/${s}`));
@@ -330,10 +369,11 @@ async function writeSeoFiles(siteSlug, site, pagesData) {
   }
 }
 
-// Médiathèque : copie dans le dist les images référencées par les pages (URLs /media/…
-// réécrites par le canal interne) — le site publié est autonome. Renvoie le nombre copié.
-function copyReferencedMedia(pagesData) {
-  const filenames = media.collectMediaFilenames(pagesData);
+// Médiathèque : copie dans le dist les images référencées par les pages et les articles
+// publiés (couvertures, images du corps) — URLs /media/… réécrites par le canal interne :
+// le site publié est autonome. Renvoie le nombre de fichiers copiés.
+function copyReferencedMedia(pagesData, postsData) {
+  const filenames = media.collectMediaFilenames({ pages: pagesData, posts: postsData });
   if (filenames.length === 0) return 0;
   const mediaOut = path.join(DIST_DIR, 'media');
   fs.mkdirSync(mediaOut, { recursive: true });
@@ -350,7 +390,6 @@ function copyReferencedMedia(pagesData) {
 
 async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
   activeBuildingSite = null;
-  buildStatus.buildingSite = null;
 
   if (error) {
     console.error(`Erreur de build : ${error.message}`);
@@ -366,20 +405,29 @@ async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
   // en mode simulation.
   const siteDestDir = site.documentRoot;
   try {
-    // Défensif : ne rien détruire hors périmètre (site aux données héritées)
-    assertSafePath(siteDestDir, PUBLIC_HTML_DIR);
+    // Défensif : ne rien détruire hors périmètre, ni la racine partagée elle-même
+    assertStrictlyInside(siteDestDir, PUBLIC_HTML_DIR);
     // Garde : ne pas déployer un build sans sortie exploitable (dist vide malgré exit 0)
     if (!fs.existsSync(DIST_DIR) || !fs.existsSync(path.join(DIST_DIR, 'index.html'))) {
       throw new Error("Build sans sortie exploitable (dist/index.html absent) : déploiement annulé, site actuel préservé.");
     }
-    // SEO et médias : non bloquants (un échec ici ne doit pas empêcher le déploiement)
+    // SEO et médias : non bloquants (un échec ici ne doit pas empêcher le déploiement).
+    // Contenu lu une seule fois pour les deux étapes.
+    let pagesData = { docs: [] };
+    let postsData = { docs: [] };
     try {
-      await writeSeoFiles(siteSlug, site, await readSitePages(siteSlug));
+      pagesData = await readSitePages(siteSlug);
+      postsData = await readSitePosts(siteSlug, { publishedOnly: true });
+    } catch (readErr) {
+      appendBuildLog(`Contenu non relu pour le SEO et les médias : ${readErr.message}`);
+    }
+    try {
+      writeSeoFiles(site, pagesData, postsData);
     } catch (seoErr) {
       appendBuildLog(`SEO non généré : ${seoErr.message}`);
     }
     try {
-      const copied = copyReferencedMedia(await readSitePages(siteSlug));
+      const copied = copyReferencedMedia(pagesData, postsData);
       if (copied > 0) appendBuildLog(`Médias copiés dans le site : ${copied} fichier(s).`);
     } catch (mediaErr) {
       appendBuildLog(`Copie des médias échouée : ${mediaErr.message}`);
@@ -440,11 +488,12 @@ module.exports = {
   getActiveBuildingSite,
   getBuildStatus,
   getQueue,
+  getLogSite,
   isBusy,
   tryReserve,
-  cancelReservation,
-  setTrigger,
+  release,
   enqueue,
   launch,
   runDraftPreview,
+  sanitizedEnv,
 };

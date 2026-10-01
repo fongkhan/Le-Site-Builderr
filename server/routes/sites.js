@@ -8,22 +8,23 @@ const sitesStore = require('../sites-store');
 const hosting = require('../core/hosting');
 const releases = require('../lib/releases');
 const analytics = require('../lib/analytics');
-const { generateSlug, assertSafePath } = require('../lib/paths');
+const { generateSlug, assertSafePath, assertStrictlyInside } = require('../lib/paths');
 const { validateTheme } = require('../lib/theme');
 const { replaceDirAtomically } = require('../lib/fs-swap');
-const { sendError } = require('../core/http');
+const { sendError, createRouter } = require('../core/http');
 const { logAudit } = require('../core/audit');
 const { appendBuildLog } = require('../core/build-log');
 const { getPayloadInstance } = require('../core/payload');
 const {
   PROJECT_DIR,
   PUBLIC_HTML_DIR,
+  REPOSITORIES_DIR,
   RELEASES_DIR,
   getSitePagesFile,
   getSiteThemeFile,
 } = require('../core/config');
-const { DEFAULT_PAGES, DEFAULT_THEME } = require('../services/defaults');
-const { readSitePages, writeJsonFile } = require('../services/content');
+const { DEFAULT_THEME, starterPages } = require('../services/defaults');
+const { readSitePages, readSitePosts, normalizePost, writePostsFile, writeJsonFile } = require('../services/content');
 const {
   toPosixPath,
   defaultDocumentRoot,
@@ -31,13 +32,14 @@ const {
   initialSslStatus,
   ensureConfinedPaths,
   provisionRepository,
+  purgeSiteData,
   uniqueSlug,
   updateSiteStatus,
   getSiteOwnersMap,
 } = require('../services/sites');
 const build = require('../services/build');
 
-const router = express.Router();
+const router = createRouter();
 
 // Nom lisible dérivé d'un slug (« mon-site » → « Mon Site »).
 const titleFromSlug = (slug) => slug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
@@ -93,8 +95,8 @@ router.post('/api/sites', auth.authenticate, auth.requireAdmin, async (req, res)
 
     provisionRepository(newSite.repositoryPath);
 
-    // Fichiers de contenu initiaux du site
-    writeJsonFile(getSitePagesFile(slug), DEFAULT_PAGES);
+    // Fichiers de contenu initiaux du site : pages de départ à son nom, thème par défaut
+    writeJsonFile(getSitePagesFile(slug), starterPages(name));
     writeJsonFile(getSiteThemeFile(slug), DEFAULT_THEME);
 
     logAudit(req, 'site.creation', slug, `nom=${name}`);
@@ -154,17 +156,23 @@ router.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (r
       return res.status(404).json({ error: "Site non trouvé." });
     }
 
-    // La suppression Payload nettoie aussi pages/themes rattachés et la relation users.sites
-    await sitesStore.deleteSite(slug);
-
-    // Fichiers JSON de fallback du site
-    for (const file of [getSitePagesFile(slug), getSiteThemeFile(slug)]) {
-      if (fs.existsSync(file)) fs.unlinkSync(file);
+    // Fichiers de production : jamais hors du périmètre ni la racine partagée elle-même
+    // (un documentRoot hérité invalide n'est pas supprimé, le site l'est quand même).
+    let removableRoot = null;
+    if (deleteFiles && site.documentRoot) {
+      try {
+        removableRoot = assertStrictlyInside(site.documentRoot, PUBLIC_HTML_DIR);
+      } catch {
+        console.error(`⚠️ [Sites] documentRoot hors périmètre conservé lors de la suppression de ${slug} : ${site.documentRoot}`);
+      }
     }
 
-    // Dossier de production du site
-    if (deleteFiles && site.documentRoot && fs.existsSync(site.documentRoot)) {
-      fs.rmSync(site.documentRoot, { recursive: true, force: true });
+    // La suppression Payload nettoie aussi les contenus rattachés et la relation users.sites
+    await sitesStore.deleteSite(slug);
+    purgeSiteData(slug);
+
+    if (removableRoot && fs.existsSync(removableRoot)) {
+      fs.rmSync(removableRoot, { recursive: true, force: true });
     }
 
     logAudit(req, 'site.suppression', req.params.slug, `fichiers=${Boolean(deleteFiles)}`);
@@ -174,7 +182,14 @@ router.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (r
   }
 });
 
-// Scan folder for unregistered sites (admin uniquement — accède au filesystem serveur)
+// Vrai si `p` est dans `base` (ou est `base`).
+const isWithin = (p, base) => {
+  try { assertSafePath(p, base); return true; } catch { return false; }
+};
+
+// Scan folder for unregistered sites (admin uniquement — accède au filesystem serveur).
+// Confiné aux racines importables (production simulée, dépôts) : un dossier situé
+// ailleurs ne pourrait de toute façon pas être importé.
 router.post('/api/sites/scan', auth.authenticate, auth.requireAdmin, async (req, res) => {
   const scanPath = req.body.scanPath || req.query.scanPath || PUBLIC_HTML_DIR;
 
@@ -184,9 +199,12 @@ router.post('/api/sites/scan', auth.authenticate, auth.requireAdmin, async (req,
     const registeredRepos = sites.filter(s => s.repositoryPath).map(s => path.resolve(s.repositoryPath).toLowerCase());
 
     // Les chemins relatifs sont résolus depuis la racine du projet (pas depuis server/)
-    const targetDir = path.isAbsolute(scanPath)
-      ? path.resolve(scanPath)
-      : path.resolve(PROJECT_DIR, scanPath);
+    const targetDir = path.isAbsolute(String(scanPath))
+      ? path.resolve(String(scanPath))
+      : path.resolve(PROJECT_DIR, String(scanPath));
+    if (!isWithin(targetDir, PUBLIC_HTML_DIR) && !isWithin(targetDir, REPOSITORIES_DIR)) {
+      return res.status(400).json({ error: "Chemin non autorisé : le scan est limité au dossier de production et aux dépôts du projet." });
+    }
     if (!fs.existsSync(targetDir)) {
       return res.status(400).json({ error: `Le chemin spécifié n'existe pas : ${targetDir}` });
     }
@@ -214,11 +232,14 @@ router.post('/api/sites/scan', auth.authenticate, auth.requireAdmin, async (req,
         else if (hasPackage) detectedStack = "Node.js / CMS Repository";
         else if (hasIndex) detectedStack = "Static Build / HTML";
 
+        // Proposés uniquement dans leurs racines d'import respectives (sinon l'import
+        // refuserait le chemin) : un build sert de documentRoot, des sources de dépôt.
+        const inPublic = isWithin(resolvedPath, PUBLIC_HTML_DIR);
         scanned.push({
           slug: dirName,
           name: titleFromSlug(dirName),
-          documentRoot: toPosixPath(resolvedPath),
-          repositoryPath: hasPackage ? toPosixPath(resolvedPath) : "",
+          documentRoot: inPublic ? toPosixPath(resolvedPath) : "",
+          repositoryPath: hasPackage && isWithin(resolvedPath, REPOSITORIES_DIR) ? toPosixPath(resolvedPath) : "",
           domain: `${dirName}.o2switch.site`,
           stack: detectedStack
         });
@@ -267,18 +288,22 @@ router.post('/api/sites/import', auth.authenticate, auth.requireAdmin, async (re
 // Racine consultée par le gestionnaire de fichiers : build publié ou dépôt de sources.
 const fileManagerRoot = (site, pathType) => (pathType === 'repository' ? site.repositoryPath : site.documentRoot);
 
-// Arborescence d'un dossier de site. Dans un dépôt, on ignore node_modules/.git/.astro
-// et on borne la profondeur (évite d'épuiser la mémoire du navigateur).
-function walkDir(dir, baseDir, pathType) {
-  let results = [];
-  const list = fs.readdirSync(dir);
-  for (const file of list) {
+// Arborescence d'un dossier de site. Les liens symboliques ne sont jamais suivis (pas de
+// boucle ni de sortie de la racine) ; profondeur et nombre d'entrées sont bornés. Dans un
+// dépôt, on ignore node_modules/.git/.astro et on limite davantage la profondeur.
+const WALK_MAX_ENTRIES = 5000;
+function walkDir(dir, baseDir, pathType, results = []) {
+  const maxDepth = pathType === 'repository' ? 3 : 12;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (results.length >= WALK_MAX_ENTRIES) break;
+    const file = entry.name;
     if (pathType === 'repository' && (file === 'node_modules' || file === '.git' || file === '.astro')) {
       continue;
     }
+    if (entry.isSymbolicLink()) continue;
 
     const filePath = path.join(dir, file);
-    const stat = fs.statSync(filePath);
+    const stat = fs.lstatSync(filePath);
     const relativePath = toPosixPath(path.relative(baseDir, filePath));
 
     if (stat.isDirectory()) {
@@ -288,13 +313,10 @@ function walkDir(dir, baseDir, pathType) {
         isDir: true,
         mtime: stat.mtime
       });
-
-      const depth = relativePath.split('/').length;
-      if (pathType === 'repository' && depth > 3) {
-        continue;
+      if (relativePath.split('/').length <= maxDepth) {
+        walkDir(filePath, baseDir, pathType, results);
       }
-      results = results.concat(walkDir(filePath, baseDir, pathType));
-    } else {
+    } else if (stat.isFile()) {
       results.push({
         name: file,
         path: relativePath,
@@ -341,7 +363,7 @@ router.get('/api/sites/:slug/files/view', auth.authenticate, auth.requireAdmin, 
       return res.status(404).json({ error: "Dossier racine introuvable." });
     }
 
-    const filePath = path.join(rootDir, relativePath);
+    const filePath = path.join(rootDir, String(relativePath));
     // Anti-traversée : le fichier doit rester sous la racine
     const rel = path.relative(rootDir, filePath);
     if (rel.startsWith('..') || path.isAbsolute(rel)) {
@@ -350,6 +372,11 @@ router.get('/api/sites/:slug/files/view', auth.authenticate, auth.requireAdmin, 
 
     if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
       return res.status(404).json({ error: "Fichier non trouvé." });
+    }
+    // Un lien symbolique pourrait pointer hors de la racine : chemin réel vérifié aussi
+    const realRel = path.relative(fs.realpathSync(rootDir), fs.realpathSync(filePath));
+    if (realRel.startsWith('..') || path.isAbsolute(realRel)) {
+      return res.status(403).json({ error: "Accès interdit." });
     }
 
     if (fs.statSync(filePath).size > 200 * 1024) {
@@ -406,30 +433,37 @@ router.get('/api/sites/:slug/builds', auth.authenticate, auth.requireAuth, auth.
 // rien publier. Accessible au propriétaire du site (comme le CMS qu'il édite).
 router.post('/api/sites/:slug/preview-build', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.params.slug), async (req, res) => {
   const slug = req.params.slug;
+  // Astro écrit dans un dossier dist unique : pas de build concurrent. Réservation
+  // SYNCHRONE du créneau (aucun await avant) : deux demandes simultanées ne peuvent
+  // pas compiler en même temps.
+  if (!build.tryReserve()) {
+    return res.status(409).json({ error: "Un build est en cours : réessayez dans un instant." });
+  }
+  let handedOver = false;
   try {
-    // Astro écrit dans un dossier dist unique : pas de build concurrent.
-    if (build.isBusy()) {
-      return res.status(409).json({ error: "Un build est en cours : réessayez dans un instant." });
-    }
     const site = await sitesStore.getSiteBySlug(slug);
     if (!site) return res.status(404).json({ error: "Site non trouvé." });
 
+    handedOver = true; // runDraftPreview libère le créneau dans tous les cas
     const url = await build.runDraftPreview(slug);
     logAudit(req, 'site.previsualisation', slug);
     res.json({ success: true, url });
   } catch (e) {
     sendError(res, "Impossible de générer la prévisualisation.", e);
+  } finally {
+    if (!handedOver) build.release();
   }
 });
 
 // Rollback : republie une version conservée dans le documentRoot (bascule atomique).
 router.post('/api/sites/:slug/rollback', auth.authenticate, auth.requireAdmin, async (req, res) => {
   const slug = req.params.slug;
+  // Pas de rollback pendant un build (le pipeline remplace justement la cible) ; le
+  // créneau est réservé pendant toute la bascule pour qu'aucun build ne démarre en parallèle.
+  if (!build.tryReserve()) {
+    return res.status(409).json({ error: "Un build est en cours : réessayez quand il sera terminé." });
+  }
   try {
-    // Pas de rollback pendant un build : le pipeline va justement remplacer la cible
-    if (build.isBusy()) {
-      return res.status(409).json({ error: "Un build est en cours : réessayez quand il sera terminé." });
-    }
     const site = await sitesStore.getSiteBySlug(slug);
     if (!site) return res.status(404).json({ error: "Site non trouvé." });
 
@@ -439,7 +473,7 @@ router.post('/api/sites/:slug/rollback', auth.authenticate, auth.requireAdmin, a
     if (!releaseDir) return res.status(400).json({ error: "Version inconnue ou invalide." });
 
     const siteDestDir = site.documentRoot;
-    assertSafePath(siteDestDir, PUBLIC_HTML_DIR);
+    assertStrictlyInside(siteDestDir, PUBLIC_HTML_DIR);
     // Même motif atomique que le déploiement : copie complète puis bascule par rename
     replaceDirAtomically(releaseDir, siteDestDir, 'rollback');
 
@@ -454,13 +488,15 @@ router.post('/api/sites/:slug/rollback', auth.authenticate, auth.requireAdmin, a
     res.json({ success: true, release: req.body.release });
   } catch (e) {
     sendError(res, "Échec du retour à la version précédente.", e);
+  } finally {
+    build.release();
   }
 });
 
 // --- Export / import de site (admin only) ---
 
-// Export : archive zip streamée contenant meta.json, pages.json, theme.json et le
-// build déployé (dist/) s'il existe. Sert de sauvegarde ou de transfert.
+// Export : archive zip streamée contenant meta.json, pages.json, posts.json, theme.json
+// et le build déployé (dist/) s'il existe. Sert de sauvegarde ou de transfert.
 router.get('/api/sites/:slug/export', auth.authenticate, auth.requireAdmin, async (req, res) => {
   try {
     const site = await sitesStore.getSiteBySlug(req.params.slug);
@@ -477,6 +513,7 @@ router.get('/api/sites/:slug/export', auth.authenticate, auth.requireAdmin, asyn
     const meta = { slug: site.slug, name: site.name, domain: site.domain, stack: site.stack, exportedAt: new Date().toISOString() };
     archive.append(JSON.stringify(meta, null, 2), { name: 'meta.json' });
     archive.append(JSON.stringify(await readSitePages(site.slug), null, 2), { name: 'pages.json' });
+    archive.append(JSON.stringify(await readSitePosts(site.slug), null, 2), { name: 'posts.json' });
 
     const themeFile = getSiteThemeFile(site.slug);
     if (fs.existsSync(themeFile)) {
@@ -484,7 +521,7 @@ router.get('/api/sites/:slug/export', auth.authenticate, auth.requireAdmin, asyn
     }
     if (site.documentRoot && fs.existsSync(site.documentRoot)) {
       try {
-        assertSafePath(site.documentRoot, PUBLIC_HTML_DIR);
+        assertStrictlyInside(site.documentRoot, PUBLIC_HTML_DIR);
         archive.directory(site.documentRoot, 'dist');
       } catch {
         // documentRoot hérité hors périmètre : on exporte sans le build
@@ -497,13 +534,19 @@ router.get('/api/sites/:slug/export', auth.authenticate, auth.requireAdmin, asyn
   }
 });
 
+// Bornes de l'archive importée (anti zip bomb) : nombre d'entrées et taille décompressée.
+const IMPORT_MAX_ENTRIES = 5000;
+const IMPORT_MAX_UNCOMPRESSED = 200 * 1024 * 1024;
+
 // Import : recrée un site depuis une archive d'export. Corps = zip brut (bornés à 50 Mo).
-// Anti zip-slip : chaque entrée est filtrée (basename/segments contrôlés) et écrite
-// uniquement sous le documentRoot fraîchement créé via assertSafePath.
+// Anti zip-slip : chaque entrée est filtrée (segments contrôlés) et écrite uniquement sous
+// le documentRoot fraîchement créé via assertSafePath. En cas d'échec après la création,
+// le site partiellement importé est supprimé.
 router.post('/api/sites/import-archive',
   auth.authenticate, auth.requireAdmin,
   express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '50mb' }),
   async (req, res) => {
+    let createdSlug = null;
     try {
       if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
         return res.status(400).json({ error: "Archive manquante (envoyez le zip en corps de requête, Content-Type: application/zip)." });
@@ -525,25 +568,36 @@ router.post('/api/sites/import-archive',
       try {
         meta = JSON.parse(readEntry('meta.json') || '');
       } catch {
+        meta = null;
+      }
+      if (!meta || typeof meta !== 'object' || Array.isArray(meta)) {
         return res.status(400).json({ error: "meta.json absent ou invalide dans l'archive." });
       }
 
-      const baseSlug = generateSlug(meta.slug || meta.name || '');
+      const entries = zip.getEntries();
+      const uncompressed = entries.reduce((sum, e) => sum + (Number(e.header && e.header.size) || 0), 0);
+      if (entries.length > IMPORT_MAX_ENTRIES || uncompressed > IMPORT_MAX_UNCOMPRESSED) {
+        return res.status(400).json({ error: "Archive trop volumineuse une fois décompressée." });
+      }
+
+      const asText = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : '');
+      const baseSlug = generateSlug(asText(meta.slug, 200) || asText(meta.name, 200));
       if (!baseSlug) return res.status(400).json({ error: "Slug invalide dans meta.json." });
       const slug = await uniqueSlug(baseSlug);
 
       const documentRoot = defaultDocumentRoot(slug);
       const newSite = await sitesStore.createSite({
         slug,
-        name: meta.name || slug,
+        name: asText(meta.name, 200) || slug,
         domain: await resolveSiteDomain(slug),
         documentRoot,
         repositoryPath: "",
-        stack: meta.stack || "Astro SSG",
+        stack: asText(meta.stack, 100) || "Astro SSG",
         createdWithTool: true,
         status: "draft",
         sslStatus: initialSslStatus()
       });
+      createdSlug = slug;
 
       // Pages : fichier JSON de fallback (repris par le CMS puis persisté dans Payload
       // à la première sauvegarde). Thème : validé avant écriture.
@@ -565,17 +619,30 @@ router.post('/api/sites/import-archive',
           }
         } catch { /* thème illisible : défaut au premier enregistrement */ }
       }
+      const postsRaw = readEntry('posts.json');
+      if (postsRaw) {
+        try {
+          const postsData = JSON.parse(postsRaw);
+          if (postsData && Array.isArray(postsData.docs)) {
+            const posts = postsData.docs
+              .filter((p) => p && typeof p === 'object' && typeof p.title === 'string' && generateSlug(p.slug))
+              .map((p) => normalizePost({ ...p, slug: generateSlug(p.slug) }));
+            writePostsFile(slug, posts);
+          }
+        } catch { /* articles illisibles : le blog démarre vide */ }
+      }
 
       // Build embarqué (dist/) : extraction contrôlée entrée par entrée
       let extracted = 0;
-      for (const entry of zip.getEntries()) {
+      for (const entry of entries) {
         if (entry.isDirectory || !entry.entryName.startsWith('dist/')) continue;
         const relative = entry.entryName.slice('dist/'.length);
-        // refuser toute entrée louche (segments vides, "..", chemins absolus)
+        // refuser toute entrée louche (segments vides, "..", chemins absolus, séparateurs
+        // Windows ou caractères de contrôle)
         const segments = relative.split('/');
-        if (segments.some((s) => s === '' || s === '.' || s === '..')) continue;
+        if (segments.some((s) => s === '' || s === '.' || s === '..' || /[\\:\0]/.test(s))) continue;
         const dest = path.join(documentRoot, ...segments);
-        assertSafePath(dest, PUBLIC_HTML_DIR);
+        assertSafePath(dest, documentRoot);
         fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.writeFileSync(dest, entry.getData());
         extracted++;
@@ -585,6 +652,16 @@ router.post('/api/sites/import-archive',
       logAudit(req, 'site.import-archive', slug, `fichiers=${extracted}`);
       res.json({ success: true, site: newSite, extractedFiles: extracted });
     } catch (e) {
+      // Pas de site à moitié importé : on défait la création (best-effort).
+      if (createdSlug) {
+        try {
+          await sitesStore.deleteSite(createdSlug);
+          purgeSiteData(createdSlug);
+          fs.rmSync(assertStrictlyInside(defaultDocumentRoot(createdSlug), PUBLIC_HTML_DIR), { recursive: true, force: true });
+        } catch (cleanupErr) {
+          console.error("Nettoyage de l'import raté :", cleanupErr.message);
+        }
+      }
       sendError(res, "Échec de l'import de l'archive.", e);
     }
   });
@@ -620,6 +697,9 @@ router.post('/api/sites/:slug/duplicate', auth.authenticate, auth.requireAdmin, 
     if (fs.existsSync(srcTheme)) {
       try { fs.copyFileSync(srcTheme, getSiteThemeFile(slug)); } catch { /* thème par défaut sinon */ }
     }
+    try {
+      writePostsFile(slug, (await readSitePosts(source.slug)).docs);
+    } catch { /* articles source illisibles : le jumeau démarre sans blog */ }
 
     logAudit(req, 'site.duplication', slug, `source=${source.slug}`);
     res.json({ success: true, site: newSite });

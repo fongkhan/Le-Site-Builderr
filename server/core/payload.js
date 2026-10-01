@@ -2,6 +2,7 @@
 // les modules la lisent via getPayloadInstance() au moment de l'appel, jamais à l'import.
 const { getPayload } = require('payload');
 const sitesStore = require('../sites-store');
+const { IS_PRODUCTION } = require('./config');
 
 let payloadInstance = null;
 
@@ -9,6 +10,11 @@ function getPayloadInstance() {
   return payloadInstance;
 }
 
+const DEFAULT_SEED_PASSWORD = 'password123';
+
+// Comptes initiaux. Hors production : admin + client de démonstration (mots de passe
+// surchargeables, utilisés par la CI). En production : seul l'admin est créé, et
+// uniquement avec un SEED_ADMIN_PASSWORD explicite et robuste — jamais « password123 ».
 async function seedUsers(payload) {
   try {
     // 1. Super Admin
@@ -17,18 +23,24 @@ async function seedUsers(payload) {
       where: { email: { equals: 'admin@admin.com' } }
     });
     if (adminRes.docs.length === 0) {
-      await payload.create({
-        collection: 'users',
-        data: {
-          email: 'admin@admin.com',
-          roles: ['admin'],
-          password: process.env.SEED_ADMIN_PASSWORD || 'password123'
-        }
-      });
-      console.log("✔ [Seeding] admin@admin.com créé.");
+      const adminPassword = process.env.SEED_ADMIN_PASSWORD || (IS_PRODUCTION ? '' : DEFAULT_SEED_PASSWORD);
+      if (IS_PRODUCTION && (adminPassword.length < 12 || adminPassword === DEFAULT_SEED_PASSWORD)) {
+        console.error("❌ [Seeding] Aucun administrateur : définissez SEED_ADMIN_PASSWORD (12 caractères minimum) dans le .env puis redémarrez pour créer admin@admin.com.");
+      } else {
+        await payload.create({
+          collection: 'users',
+          data: {
+            email: 'admin@admin.com',
+            roles: ['admin'],
+            password: adminPassword
+          }
+        });
+        console.log("✔ [Seeding] admin@admin.com créé.");
+      }
     }
 
-    // 2. Client de démonstration, rattaché au site seedé par slug (jamais par ID en dur)
+    // 2. Client de démonstration (hors production), rattaché au site seedé par slug
+    if (IS_PRODUCTION && process.env.SEED_DEMO_CLIENT !== 'true') return;
     const clientRes = await payload.find({
       collection: 'users',
       where: { email: { equals: 'client@client.com' } }
@@ -43,7 +55,7 @@ async function seedUsers(payload) {
           sites: [demoSite.id],
           // Offre de démonstration : permet de créer d'autres sites depuis ce compte
           plan: 'pro',
-          password: process.env.SEED_CLIENT_PASSWORD || 'password123'
+          password: process.env.SEED_CLIENT_PASSWORD || DEFAULT_SEED_PASSWORD
         }
       });
       console.log("✔ [Seeding] client@client.com créé (site : boulangerie-artisanale).");
@@ -66,6 +78,9 @@ async function initPayload() {
       await seedUsers(payloadInstance);
     } catch (err) {
       console.error("❌ [Payload CMS] Erreur lors de l'initialisation :", err.message);
+      // En production, un serveur sans base n'accepterait aucune connexion (503 partout) :
+      // on s'arrête pour que le superviseur relance un process propre.
+      if (IS_PRODUCTION && !payloadInstance) process.exit(1);
     }
   } else {
     console.log("💡 [Payload CMS] DATABASE_URI non définie dans le fichier .env. Mode simulation JSON actif.");

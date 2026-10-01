@@ -1,6 +1,5 @@
 // Configuration du compte et fonctionnalités IA : assistant de rédaction du CMS et
 // onboarding (création d'un site complet depuis une description).
-const express = require('express');
 const path = require('path');
 const auth = require('../auth');
 const sitesStore = require('../sites-store');
@@ -8,11 +7,13 @@ const aiQuota = require('../ai-quota');
 const plans = require('../lib/plans');
 const { runOnboard, runAssist } = require('../ai');
 const { generateSlug } = require('../lib/paths');
-const { sendError } = require('../core/http');
+const { sendError, createRouter } = require('../core/http');
 const { logAudit } = require('../core/audit');
 const { getPayloadInstance } = require('../core/payload');
 const { REPOSITORIES_DIR, getSitePagesFile, getSiteThemeFile } = require('../core/config');
-const { DEFAULT_PAGES, DEFAULT_THEME } = require('../services/defaults');
+const fs = require('fs');
+const { DEFAULT_THEME, starterPages } = require('../services/defaults');
+const { assertStrictlyInside } = require('../lib/paths');
 const { writeJsonFile } = require('../services/content');
 const {
   toPosixPath,
@@ -20,11 +21,12 @@ const {
   resolveSiteDomain,
   initialSslStatus,
   provisionRepository,
+  purgeSiteData,
   uniqueSlug,
   attachSiteToUser,
 } = require('../services/sites');
 
-const router = express.Router();
+const router = createRouter();
 
 const ASSIST_ACTIONS = ['rewrite', 'generate-description', 'seo', 'article'];
 
@@ -75,6 +77,17 @@ router.post('/api/ai/assist', auth.authenticate, auth.requireAuth, auth.requireS
   }
 });
 
+// Défait (best-effort) un site d'onboarding dont la création n'a pas pu aboutir.
+async function discardOnboardedSite(slug) {
+  try {
+    if (await sitesStore.getSiteBySlug(slug)) await sitesStore.deleteSite(slug);
+    purgeSiteData(slug);
+    fs.rmSync(assertStrictlyInside(path.join(REPOSITORIES_DIR, slug), REPOSITORIES_DIR), { recursive: true, force: true });
+  } catch (e) {
+    console.error(`Nettoyage du site ${slug} raté :`, e.message);
+  }
+}
+
 // Stack déduite de la qualification IA.
 function stackFromQualification(qualification) {
   const needs = qualification.stack_requirements;
@@ -113,11 +126,10 @@ router.post('/api/onboard', auth.authenticate, auth.requireAuth, async (req, res
     return sendError(res, "Échec de la génération du site par IA.", error);
   }
 
+  let createdSlug = null; // posé seulement une fois le site réellement créé par CETTE requête
   try {
-    // L'IA a réussi : le créneau réservé reste consommé.
-
     // Slug validé (jamais vide → jamais de documentRoot partagé) et unique
-    const siteName = name || result.qualification.site_name || "Nouveau Site";
+    const siteName = String(name || '').trim().slice(0, 120) || result.qualification.site_name || "Nouveau Site";
     const finalSlug = await uniqueSlug(generateSlug(siteName) || generateSlug(result.qualification.site_name || '') || 'site');
 
     const newSite = await sitesStore.createSite({
@@ -131,34 +143,38 @@ router.post('/api/onboard', auth.authenticate, auth.requireAuth, async (req, res
       status: "draft",
       sslStatus: initialSslStatus()
     });
+    createdSlug = finalSlug;
 
     provisionRepository(newSite.repositoryPath);
 
-    // Pages et thème générés pour ce site (theme.css n'est pas écrit ici : fichier
-    // global, régénéré au build depuis le fichier de thème du site).
-    writeJsonFile(getSitePagesFile(finalSlug), result.pages && result.pages.docs ? result.pages : DEFAULT_PAGES);
-    writeJsonFile(getSiteThemeFile(finalSlug), { theme: result.theme || DEFAULT_THEME.theme });
+    // Pages et thème générés pour ce site (repli : pages de départ au nom du site, thème
+    // par défaut). theme.css n'est pas écrit ici : fichier global, régénéré au build.
+    const pages = result.pages || starterPages(siteName, description);
+    const theme = result.theme || DEFAULT_THEME.theme;
+    writeJsonFile(getSitePagesFile(finalSlug), pages);
+    writeJsonFile(getSiteThemeFile(finalSlug), { theme });
 
-    // Référence le site dans Payload et le rattache au compte du client créateur
+    // Référence le site dans Payload et le rattache au compte du client créateur. Pour
+    // un client, le rattachement est indispensable (sans lui, le site lui serait
+    // inaccessible) : son échec annule la création.
     if (getPayloadInstance()) {
-      try {
-        const siteDoc = await sitesStore.getOrCreatePayloadDoc(finalSlug);
-        if (req.user && !req.user.devMode && !auth.isAdmin(req.user)) {
-          await attachSiteToUser(req.user.id, siteDoc.id);
-        }
-      } catch (dbError) {
-        console.error("Erreur de rattachement du site au compte :", dbError.message);
+      const siteDoc = await sitesStore.getOrCreatePayloadDoc(finalSlug);
+      if (req.user && !req.user.devMode && !auth.isAdmin(req.user)) {
+        await attachSiteToUser(req.user.id, siteDoc.id);
       }
     }
 
     logAudit(req, 'site.creation-ia', finalSlug, `nom=${siteName}`);
     res.json({
       qualification: result.qualification,
-      pages: result.pages || DEFAULT_PAGES,
-      theme: result.theme || DEFAULT_THEME.theme,
+      pages,
+      theme,
       site: newSite
     });
   } catch (error) {
+    // Aucun site exploitable : création défaite et créneau IA rendu (jamais décompté).
+    if (createdSlug) await discardOnboardedSite(createdSlug);
+    await aiQuota.releaseSlot(req.user.id);
     sendError(res, "Échec de la génération du site par IA.", error);
   }
 });

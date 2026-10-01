@@ -16,6 +16,10 @@ const { scheduleBackups } = require('./services/backups');
 const { createApp } = require('./express-app');
 
 if (auth.DEV_NO_AUTH) {
+  if (config.IS_PRODUCTION) {
+    console.error('❌ [Sécurité] DEV_NO_AUTH=true est interdit en production (toutes les requêtes seraient admin). Arrêt.');
+    process.exit(1);
+  }
   console.warn('⚠️⚠️⚠️  [Sécurité] DEV_NO_AUTH=true : TOUTES les requêtes sont traitées comme un admin. À ne JAMAIS utiliser en production. ⚠️⚠️⚠️');
 }
 
@@ -29,10 +33,20 @@ build.resetOnBoot();
 const nextApp = next({ dev: !config.IS_PRODUCTION, dir: __dirname });
 const app = createApp({ nextHandler: nextApp.getRequestHandler() });
 
-nextApp.prepare().then(async () => {
-  await initPayload();
-  app.listen(config.PORT, () => {
-    console.log(`Serveur Meta-Builder démarré sur http://localhost:${config.PORT}`);
+nextApp.prepare()
+  .then(async () => {
+    await initPayload();
+    const server = app.listen(config.PORT, () => {
+      console.log(`Serveur Meta-Builder démarré sur http://localhost:${config.PORT}`);
+    });
+    server.on('error', (err) => {
+      console.error(`❌ [Serveur] Écoute impossible sur le port ${config.PORT} :`, err.message);
+      process.exit(1);
+    });
+    scheduleBackups();
+  })
+  .catch((err) => {
+    // Sans Next, ni l'admin ni l'authentification ne fonctionnent : inutile de survivre.
+    console.error('❌ [Serveur] Démarrage impossible :', (err && err.stack) || err);
+    process.exit(1);
   });
-  scheduleBackups();
-});

@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 
 const require = createRequire(import.meta.url);
-const { generateSlug, assertSafePath } = require('../../lib/paths.js');
+const { generateSlug, assertSafePath, assertStrictlyInside, isValidSlug } = require('../../lib/paths.js');
 
 test('generateSlug — noms valides', () => {
   assert.equal(generateSlug('Boulangerie Artisanale'), 'boulangerie-artisanale');
@@ -45,4 +45,21 @@ test('assertSafePath — évasions rejetées', () => {
   assert.throws(() => assertSafePath('/', base));
   // Piège du préfixe : /srv/public-evil ne doit PAS passer
   assert.throws(() => assertSafePath('/srv/public-evil', base));
+});
+
+test('assertStrictlyInside — la racine partagée elle-même est refusée', () => {
+  const base = path.resolve('/srv/public');
+  assert.throws(() => assertStrictlyInside('/srv/public', base));
+  assert.throws(() => assertStrictlyInside('/srv/public/', base));
+  assert.throws(() => assertStrictlyInside('/srv/public/a/..', base));
+  assert.throws(() => assertStrictlyInside('/srv/public-evil/x', base));
+  assert.equal(assertStrictlyInside('/srv/public/mon-site', base), path.resolve('/srv/public/mon-site'));
+});
+
+test('isValidSlug — uniquement des slugs canoniques', () => {
+  assert.ok(isValidSlug('boulangerie-artisanale'));
+  assert.ok(isValidSlug('site2'));
+  for (const bad of ['', '../x', 'A', '-x', 'a b', 'a/b', 'é', null, undefined, 42, 'a'.repeat(201)]) {
+    assert.ok(!isValidSlug(bad), String(bad));
+  }
 });

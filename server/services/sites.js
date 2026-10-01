@@ -6,8 +6,18 @@ const sitesStore = require('../sites-store');
 const hosting = require('../core/hosting');
 const { getPayloadInstance } = require('../core/payload');
 const { appendBuildLog } = require('../core/build-log');
-const { assertSafePath } = require('../lib/paths');
-const { ASTRO_PROJECT_DIR, PUBLIC_HTML_DIR, REPOSITORIES_DIR } = require('../core/config');
+const { assertStrictlyInside, isValidSlug } = require('../lib/paths');
+const {
+  ASTRO_PROJECT_DIR,
+  PUBLIC_HTML_DIR,
+  REPOSITORIES_DIR,
+  RELEASES_DIR,
+  DRAFTS_DIR,
+  getSitePagesFile,
+  getSiteThemeFile,
+  getSitePostsFile,
+  getSiteStatsFile,
+} = require('../core/config');
 
 // Chemins stockés au format POSIX (un chemin Windows saisi reste exploitable).
 const toPosixPath = (p) => String(p).replace(/\\/g, '/');
@@ -37,13 +47,14 @@ function initialSslStatus() {
   return hosting.isRemote ? 'pending' : 'active';
 }
 
-// Confine documentRoot/repositoryPath fournis par le client sous leurs racines autorisées.
-// Renvoie true si OK, sinon envoie une 400 et renvoie false (l'appelant doit s'arrêter).
-// Un chemin arbitraire (ex. "/etc") deviendrait la cible de fs.rmSync au build/delete.
+// Confine documentRoot/repositoryPath fournis par le client STRICTEMENT sous leurs
+// racines autorisées. Renvoie true si OK, sinon envoie une 400 et renvoie false (l'appelant
+// doit s'arrêter). Un chemin arbitraire (ex. "/etc") — ou la racine partagée elle-même —
+// deviendrait la cible de fs.rmSync au build ou à la suppression du site.
 function ensureConfinedPaths(res, { documentRoot, repositoryPath }) {
   try {
-    if (documentRoot) assertSafePath(documentRoot, PUBLIC_HTML_DIR);
-    if (repositoryPath) assertSafePath(repositoryPath, REPOSITORIES_DIR);
+    if (documentRoot) assertStrictlyInside(documentRoot, PUBLIC_HTML_DIR);
+    if (repositoryPath) assertStrictlyInside(repositoryPath, REPOSITORIES_DIR);
     return true;
   } catch (e) {
     res.status(400).json({ error: "Chemin non autorisé : le dossier doit rester dans le périmètre du projet." });
@@ -67,6 +78,23 @@ function provisionRepository(repoPath) {
       console.log(`[Provisioning] Dépôt local copié sans Git dans : ${repoPath}`);
     } catch (err) {
       console.error(`[Provisioning] Erreur de copie du dépôt local : ${err.message}`);
+    }
+  }
+}
+
+// Supprime les données locales d'un site : fichiers JSON (pages, thème, articles,
+// statistiques), versions conservées et brouillon. Un site recréé plus tard sous le même
+// slug repart ainsi de zéro (pas de rollback possible vers le contenu de l'ancien site).
+function purgeSiteData(slug) {
+  if (!isValidSlug(slug)) return;
+  for (const file of [getSitePagesFile(slug), getSiteThemeFile(slug), getSitePostsFile(slug), getSiteStatsFile(slug)]) {
+    try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch (e) { console.error(`Suppression de ${file} impossible :`, e.message); }
+  }
+  for (const base of [RELEASES_DIR, DRAFTS_DIR]) {
+    try {
+      fs.rmSync(assertStrictlyInside(path.join(base, slug), base), { recursive: true, force: true });
+    } catch (e) {
+      console.error(`Nettoyage de ${base}/${slug} impossible :`, e.message);
     }
   }
 }
@@ -151,6 +179,7 @@ async function attachSiteToUser(userId, siteId) {
 }
 
 module.exports = {
+  purgeSiteData,
   toPosixPath,
   defaultDocumentRoot,
   resolveSiteDomain,

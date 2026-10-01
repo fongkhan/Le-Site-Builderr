@@ -13,7 +13,7 @@ const {
   getSiteThemeFile,
   getSitePostsFile,
 } = require('../core/config');
-const { DEFAULT_PAGES, DEFAULT_THEME } = require('./defaults');
+const { DEFAULT_PAGES, DEFAULT_THEME, starterPages } = require('./defaults');
 
 const SEED_SITE_SLUG = 'boulangerie-artisanale';
 
@@ -92,14 +92,15 @@ function writeThemeCss(themeData) {
   fs.writeFileSync(path.join(cssDir, 'theme.css'), cssContent, 'utf-8');
 }
 
-// Applique au template le thème enregistré d'un site avant une compilation.
-function applySiteThemeCss(siteSlug) {
-  const siteThemeFile = getSiteThemeFile(siteSlug);
-  if (!fs.existsSync(siteThemeFile)) return;
+// Applique au template le thème d'un site avant une compilation. Même source que
+// l'éditeur de design (readSiteTheme) ; sans thème enregistré, le thème par défaut est
+// écrit — jamais celui du site compilé précédemment (theme.css est global au template).
+async function applySiteThemeCss(siteSlug) {
   try {
-    writeThemeCss(JSON.parse(fs.readFileSync(siteThemeFile, 'utf-8')));
+    writeThemeCss(await readSiteTheme(siteSlug));
   } catch (e) {
     console.error("Erreur lors de l'application du thème pour le build", e);
+    writeThemeCss(DEFAULT_THEME);
   }
 }
 
@@ -125,6 +126,8 @@ async function readSitePages(siteSlug) {
         const pagesRes = await payloadInstance.find({
           collection: 'pages',
           where: { site: { equals: siteId } },
+          // Toutes les pages : la limite par défaut de Payload (10) tronquait les gros sites
+          pagination: false,
           overrideAccess: true
         });
         if (pagesRes.docs.length > 0) {
@@ -155,77 +158,103 @@ async function readSitePages(siteSlug) {
   }
 
   const sitePagesFile = getSitePagesFile(siteSlug);
-  if (!fs.existsSync(sitePagesFile)) {
-    return DEFAULT_PAGES;
+  if (fs.existsSync(sitePagesFile)) {
+    try {
+      return JSON.parse(fs.readFileSync(sitePagesFile, 'utf-8'));
+    } catch (e) {
+      console.error(`Fichier de pages corrompu pour ${siteSlug}, fallback par défaut :`, e.message);
+    }
   }
-  try {
-    return JSON.parse(fs.readFileSync(sitePagesFile, 'utf-8'));
-  } catch (e) {
-    console.error(`Fichier de pages corrompu pour ${siteSlug}, fallback par défaut :`, e.message);
-    return DEFAULT_PAGES;
-  }
+  return fallbackPages(siteSlug);
 }
 
-// Enregistre les pages d'un site (upsert par site + slug + langue dans Payload, puis
-// miroir JSON du corps reçu).
+// Pages d'un site qui n'en a encore aucune (site importé par scan…) : le contenu de
+// démonstration pour le site seedé, sinon des pages de départ à son nom.
+async function fallbackPages(siteSlug) {
+  if (siteSlug === SEED_SITE_SLUG) return DEFAULT_PAGES;
+  let site = null;
+  try { site = await sitesStore.getSiteBySlug(siteSlug); } catch { site = null; }
+  return starterPages(site ? site.name : siteSlug);
+}
+
+// Valide le corps envoyé par le CMS : { docs: [{ title, slug, locale?, layout? }] }.
+// Renvoie un message d'erreur, ou null si le corps est exploitable.
+function validatePagesBody(body) {
+  if (!body || !Array.isArray(body.docs)) return "Corps invalide : une liste de pages (docs) est attendue.";
+  const keys = new Set();
+  for (const page of body.docs) {
+    if (!page || typeof page !== 'object') return "Page invalide.";
+    if (typeof page.title !== 'string' || !page.title.trim()) return "Chaque page doit avoir un titre.";
+    // Segment d'URL simple (jamais de « / » ni de « .. ») : la page devient /<slug>/ au build
+    if (typeof page.slug !== 'string' || page.slug.length > 200 || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(page.slug)) {
+      return `Adresse de page invalide : ${JSON.stringify(page.slug)}.`;
+    }
+    if (page.layout !== undefined && !Array.isArray(page.layout)) return "Le contenu d'une page (layout) doit être une liste de sections.";
+    const key = `${page.locale === 'en' ? 'en' : 'fr'}:${page.slug}`;
+    if (keys.has(key)) return `Page en double : ${page.slug}.`;
+    keys.add(key);
+  }
+  return null;
+}
+
+// Enregistre les pages d'un site : le corps reçu est la liste COMPLÈTE des pages.
+// Payload : upsert par (site, slug, langue) puis suppression des pages retirées ; une
+// erreur de base est propagée (l'appelant répond 500, rien n'est perdu en silence).
+// Miroir JSON du corps reçu ensuite.
 async function saveSitePages(siteSlug, body) {
   const payloadInstance = getPayloadInstance();
   if (payloadInstance) {
-    try {
-      const siteDoc = await sitesStore.getOrCreatePayloadDoc(siteSlug);
+    const siteDoc = await sitesStore.getOrCreatePayloadDoc(siteSlug);
+    const existingRes = await payloadInstance.find({
+      collection: 'pages',
+      where: { site: { equals: siteDoc.id } },
+      pagination: false,
+      depth: 0,
+      overrideAccess: true
+    });
+    const pageKey = (slug, locale) => `${locale === 'en' ? 'en' : 'fr'}:${slug}`;
+    const existingByKey = new Map(existingRes.docs.map((p) => [pageKey(p.slug, p.locale), p]));
+    const keptKeys = new Set();
 
-      if (body.docs && Array.isArray(body.docs)) {
-        for (const pageInput of body.docs) {
-          // Une page est identifiée par (site, slug, langue) : deux langues peuvent
-          // partager le même slug (« home » en fr et en en).
-          const pageLocale = pageInput.locale === 'en' ? 'en' : 'fr';
-          const pageRes = await payloadInstance.find({
-            collection: 'pages',
-            where: {
-              and: [
-                { site: { equals: siteDoc.id } },
-                { slug: { equals: pageInput.slug } },
-                { locale: { equals: pageLocale } }
-              ]
-            },
-            limit: 1
-          });
+    for (const pageInput of body.docs) {
+      // Une page est identifiée par (site, slug, langue) : deux langues peuvent
+      // partager le même slug (« home » en fr et en en).
+      const pageLocale = pageInput.locale === 'en' ? 'en' : 'fr';
+      const key = pageKey(pageInput.slug, pageLocale);
+      keptKeys.add(key);
 
-          const pageData = {
-            title: pageInput.title,
-            slug: pageInput.slug,
-            locale: pageLocale,
-            metaTitle: pageInput.metaTitle || null,
-            metaDescription: pageInput.metaDescription || null,
-            site: siteDoc.id,
-            layout: pageInput.layout ? pageInput.layout.map(block => {
-              const { blockType, id, ...fields } = block;
-              if (blockType === 'gallery' && fields.images) {
-                fields.images = fields.images.map(img => typeof img === 'string' ? { url: img } : img);
-              }
-              return {
-                blockType: blockType,
-                ...fields
-              };
-            }) : []
-          };
-
-          if (pageRes.docs.length > 0) {
-            await payloadInstance.update({
-              collection: 'pages',
-              id: pageRes.docs[0].id,
-              data: pageData
-            });
-          } else {
-            await payloadInstance.create({
-              collection: 'pages',
-              data: pageData
-            });
+      const pageData = {
+        title: pageInput.title,
+        slug: pageInput.slug,
+        locale: pageLocale,
+        metaTitle: pageInput.metaTitle || null,
+        metaDescription: pageInput.metaDescription || null,
+        site: siteDoc.id,
+        layout: pageInput.layout ? pageInput.layout.map(block => {
+          const { blockType, id, ...fields } = block;
+          if (blockType === 'gallery' && fields.images) {
+            fields.images = fields.images.map(img => typeof img === 'string' ? { url: img } : img);
           }
-        }
+          return {
+            blockType: blockType,
+            ...fields
+          };
+        }) : []
+      };
+
+      const existing = existingByKey.get(key);
+      if (existing) {
+        await payloadInstance.update({ collection: 'pages', id: existing.id, data: pageData });
+      } else {
+        await payloadInstance.create({ collection: 'pages', data: pageData });
       }
-    } catch (dbError) {
-      console.error("Erreur écriture pages dans Payload:", dbError.message);
+    }
+
+    // Pages supprimées dans le CMS : retirées de la base (sinon elles réapparaîtraient)
+    for (const [key, page] of existingByKey) {
+      if (!keptKeys.has(key)) {
+        await payloadInstance.delete({ collection: 'pages', id: page.id, overrideAccess: true });
+      }
     }
   }
 
@@ -257,38 +286,65 @@ function writePostsFile(siteSlug, docs) {
   writeJsonFile(getSitePostsFile(siteSlug), { docs });
 }
 
-// Lit les articles d'un site. Payload prioritaire ; repli sur le fichier JSON.
+// Plus récents d'abord ; articles sans date en dernier (même ordre qu'en base).
+function sortPostsByDate(docs) {
+  return [...docs].sort((a, b) => String(b.publishedAt || '').localeCompare(String(a.publishedAt || '')));
+}
+
+// Articles d'un site en base (normalisés), ou null si Payload est indisponible ou si le
+// site n'y est pas référencé.
+async function readPayloadPosts(payloadInstance, siteSlug, { publishedOnly = false } = {}) {
+  const siteId = await findPayloadSiteId(payloadInstance, siteSlug);
+  if (!siteId) return null;
+  const where = { and: [{ site: { equals: siteId } }] };
+  if (publishedOnly) where.and.push({ status: { equals: 'published' } });
+  const postsRes = await payloadInstance.find({
+    collection: 'posts', where, sort: '-publishedAt', limit: 500, overrideAccess: true,
+  });
+  return postsRes.docs.map(normalizePost);
+}
+
+// Lit les articles d'un site. Payload prioritaire ; repli sur le fichier JSON quand la
+// base n'en contient aucun (site importé, dupliqué, ou créé sans base de données).
 // publishedOnly=true → uniquement les articles publiés (pour le build public).
 async function readSitePosts(siteSlug, { publishedOnly = false } = {}) {
   const payloadInstance = getPayloadInstance();
   if (payloadInstance) {
     try {
-      const siteId = await findPayloadSiteId(payloadInstance, siteSlug);
-      if (siteId) {
-        const where = { and: [{ site: { equals: siteId } }] };
-        if (publishedOnly) where.and.push({ status: { equals: 'published' } });
-        const postsRes = await payloadInstance.find({
-          collection: 'posts', where, sort: '-publishedAt', limit: 500, overrideAccess: true,
-        });
-        return { docs: postsRes.docs.map(normalizePost) };
-      }
+      const fromDb = await readPayloadPosts(payloadInstance, siteSlug, { publishedOnly });
+      if (fromDb && fromDb.length > 0) return { docs: fromDb };
     } catch (dbError) {
       console.error('Erreur lecture posts de Payload, fallback JSON :', dbError.message);
     }
   }
   let docs;
-  try { docs = readPostsFile(siteSlug).map(normalizePost); } catch { docs = []; }
+  try { docs = sortPostsByDate(readPostsFile(siteSlug).map(normalizePost)); } catch { docs = []; }
   if (publishedOnly) docs = docs.filter((p) => p.status === 'published');
   return { docs };
 }
 
-// Écrit le fichier JSON miroir depuis la liste courante (repli hors base de données).
+// Écrit le fichier JSON miroir depuis la base (repli hors base de données). Une base
+// vide donne un miroir vide : un article supprimé ne réapparaît jamais via le repli.
 async function writePostsMirror(siteSlug) {
   try {
-    const { docs } = await readSitePosts(siteSlug);
-    writePostsFile(siteSlug, docs);
+    const payloadInstance = getPayloadInstance();
+    if (!payloadInstance) return;
+    writePostsFile(siteSlug, (await readPayloadPosts(payloadInstance, siteSlug)) || []);
   } catch (e) {
     console.error('Miroir JSON des articles non écrit :', e.message);
+  }
+}
+
+// Avant la première écriture en base d'un site dont les articles ne vivent encore que
+// dans le fichier JSON (import, duplication, passage du mode sans base au mode Payload),
+// on les reprend en base : sinon ils disparaîtraient au premier enregistrement.
+async function adoptJsonPosts(payloadInstance, siteDoc, siteSlug) {
+  const existing = await payloadInstance.find({
+    collection: 'posts', where: { site: { equals: siteDoc.id } }, limit: 1, depth: 0, overrideAccess: true,
+  });
+  if (existing.docs.length > 0) return;
+  for (const post of readPostsFile(siteSlug).map(normalizePost).filter((p) => p.slug && p.title)) {
+    await payloadInstance.create({ collection: 'posts', data: { ...post, site: siteDoc.id }, overrideAccess: true });
   }
 }
 
@@ -297,6 +353,7 @@ async function upsertPost(siteSlug, post) {
   const payloadInstance = getPayloadInstance();
   if (payloadInstance) {
     const siteDoc = await sitesStore.getOrCreatePayloadDoc(siteSlug);
+    await adoptJsonPosts(payloadInstance, siteDoc, siteSlug);
     const existing = await payloadInstance.find({
       collection: 'posts',
       where: { and: [{ site: { equals: siteDoc.id } }, { slug: { equals: post.slug } }] },
@@ -323,6 +380,7 @@ async function deletePost(siteSlug, postSlug) {
   const payloadInstance = getPayloadInstance();
   if (payloadInstance) {
     const siteDoc = await sitesStore.getOrCreatePayloadDoc(siteSlug);
+    await adoptJsonPosts(payloadInstance, siteDoc, siteSlug);
     const existing = await payloadInstance.find({
       collection: 'posts',
       where: { and: [{ site: { equals: siteDoc.id } }, { slug: { equals: postSlug } }] },
@@ -438,8 +496,11 @@ module.exports = {
   applySiteThemeCss,
   findPayloadSiteId,
   readSitePages,
+  validatePagesBody,
   saveSitePages,
   normalizePost,
+  readPostsFile,
+  writePostsFile,
   readSitePosts,
   writePostsMirror,
   upsertPost,

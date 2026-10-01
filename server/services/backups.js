@@ -20,10 +20,14 @@ async function createBackupArchive() {
     const dest = path.join(BACKUPS_DIR, filename);
     const sites = await sitesStore.listSites();
 
+    // Écriture dans un fichier temporaire renommé à la fin : jamais d'archive tronquée
+    // listée comme sauvegarde valide.
+    const partial = `${dest}.part`;
     await new Promise((resolve, reject) => {
-      const output = fs.createWriteStream(dest);
+      const output = fs.createWriteStream(partial);
       const archive = archiver('zip', { zlib: { level: 6 } });
       output.on('close', resolve);
+      output.on('error', reject);
       archive.on('error', reject);
       archive.pipe(output);
       archive.append(JSON.stringify({ createdAt: new Date().toISOString(), sites: sites.map((s) => s.slug) }, null, 2), { name: 'manifest.json' });
@@ -33,12 +37,19 @@ async function createBackupArchive() {
           const base = `sites/${s.slug}`;
           try { archive.append(JSON.stringify(await readSitePages(s.slug), null, 2), { name: `${base}/pages.json` }); } catch { /* ignore */ }
           try { archive.append(JSON.stringify(await readSitePosts(s.slug), null, 2), { name: `${base}/posts.json` }); } catch { /* ignore */ }
-          const themeFile = getSiteThemeFile(s.slug);
-          if (fs.existsSync(themeFile)) archive.file(themeFile, { name: `${base}/theme.json` });
+          try {
+            const themeFile = getSiteThemeFile(s.slug);
+            if (fs.existsSync(themeFile)) archive.file(themeFile, { name: `${base}/theme.json` });
+          } catch { /* slug hérité invalide : thème ignoré */ }
+          archive.append(JSON.stringify(s, null, 2), { name: `${base}/site.json` });
         }
         archive.finalize();
       })().catch(reject);
+    }).catch((err) => {
+      try { fs.rmSync(partial, { force: true }); } catch { /* ignore */ }
+      throw err;
     });
+    fs.renameSync(partial, dest);
 
     // Rétention : ne garder que les BACKUP_KEEP plus récentes.
     let names = [];
@@ -75,16 +86,23 @@ function backupFilePath(name) {
 }
 
 // Sauvegardes planifiées (désactivées par défaut : BACKUP_ENABLED=true).
-// Best-effort : un échec est loggé mais ne perturbe jamais le service.
+// Best-effort : un échec est loggé mais ne perturbe jamais le service. Au démarrage,
+// une sauvegarde est faite tout de suite si la dernière date de plus d'un intervalle :
+// un serveur redémarré plus souvent que l'intervalle sauvegarde quand même.
 function scheduleBackups() {
   if (!BACKUP_ENABLED) return;
   const intervalMs = Math.max(1, BACKUP_INTERVAL_HOURS) * 60 * 60 * 1000;
   console.log(`💾 [Sauvegardes] Planifiées toutes les ${BACKUP_INTERVAL_HOURS} h (rétention ${BACKUP_KEEP}).`);
-  const timer = setInterval(() => {
-    createBackupArchive()
-      .then((name) => name && console.log(`💾 [Sauvegardes] Créée : ${name}`))
-      .catch((e) => console.error('💾 [Sauvegardes] Échec :', e.message));
-  }, intervalMs);
+  const run = () => createBackupArchive()
+    .then((name) => name && console.log(`💾 [Sauvegardes] Créée : ${name}`))
+    .catch((e) => console.error('💾 [Sauvegardes] Échec :', e.message));
+
+  let latest = null;
+  try { latest = listBackups()[0] || null; } catch { latest = null; }
+  if (!latest || Date.now() - Date.parse(latest.createdAt) >= intervalMs) {
+    setTimeout(run, 30 * 1000).unref?.(); // laisse le boot se terminer
+  }
+  const timer = setInterval(run, intervalMs);
   if (timer.unref) timer.unref(); // ne bloque pas l'arrêt du process
 }
 

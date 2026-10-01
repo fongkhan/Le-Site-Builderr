@@ -85,4 +85,32 @@ const DEFAULT_THEME = deepFreeze({
   }
 });
 
-module.exports = { DEFAULT_PAGES, DEFAULT_THEME, deepFreeze };
+// Pages de départ d'un NOUVEAU site : neutres et au nom du site (le contenu de
+// démonstration de la boulangerie n'est réservé qu'au site seedé).
+function starterPages(siteName, tagline) {
+  const name = String(siteName || '').trim().slice(0, 120) || 'Mon site';
+  const subtitle = String(tagline || '').trim().slice(0, 300) || 'Bienvenue ! Présentez ici votre activité en une phrase.';
+  return {
+    docs: [
+      {
+        title: "Accueil",
+        slug: "home",
+        layout: [
+          { blockType: "hero", title: name, subtitle, ctaText: "Nous contacter" },
+          {
+            blockType: "features",
+            title: "Ce que nous proposons",
+            items: [
+              { title: "Notre savoir-faire", description: "Décrivez ce qui fait la qualité de votre travail." },
+              { title: "Nos services", description: "Listez vos principales prestations ou produits." },
+              { title: "Notre engagement", description: "Expliquez pourquoi vos clients vous font confiance." }
+            ]
+          },
+          { blockType: "contact", title: "Contactez-nous", subtitle: "Une question ? Écrivez-nous, nous vous répondrons rapidement.", ctaText: "Envoyer" }
+        ]
+      }
+    ]
+  };
+}
+
+module.exports = { DEFAULT_PAGES, DEFAULT_THEME, deepFreeze, starterPages };

@@ -1,9 +1,12 @@
 // Helpers de récupération du contenu au build (SSG). Le canal interne est authentifié
-// par BUILD_TOKEN (jamais exposé au navigateur). Tout échoue en douceur : un site se
-// construit même si l'API est momentanément indisponible (pages/articles vides).
+// par BUILD_TOKEN (jamais exposé au navigateur).
+// - Build lancé par l'orchestrateur (site + jeton fournis) : une API indisponible fait
+//   ÉCHOUER le build — mieux vaut garder la version en ligne que publier un site vide.
+// - Build local du template seul (npm run build) : échec en douceur (contenu vide).
 
 const baseUrl = process.env.ORCHESTRATOR_URL || 'http://127.0.0.1:4000';
 const siteSlug = process.env.ACTIVE_SITE_SLUG || '';
+export const isOrchestratedBuild = Boolean(process.env.ACTIVE_SITE_SLUG && process.env.BUILD_TOKEN);
 
 async function internalFetch(pathname: string): Promise<any> {
   const res = await fetch(`${baseUrl}${pathname}?site=${encodeURIComponent(siteSlug)}`, {
@@ -36,22 +39,25 @@ export function parseTags(tags: string | undefined): string[] {
     .slice(0, 8);
 }
 
-// Liste des pages (pour le menu). Vide en cas d'erreur.
+// Liste des pages (pour le menu). Vide en cas d'erreur (build local uniquement).
 export async function fetchNavPages(): Promise<NavPage[]> {
   try {
     const data = await internalFetch('/internal/site-pages');
     return (data.docs || []).map((p: any) => ({ title: p.title, slug: p.slug }));
-  } catch {
+  } catch (err) {
+    if (isOrchestratedBuild) throw err;
     return [];
   }
 }
 
-// Articles publiés (triés du plus récent au plus ancien côté serveur). Vide en cas d'erreur.
+// Articles publiés (triés du plus récent au plus ancien côté serveur). Vide en cas
+// d'erreur (build local uniquement).
 export async function fetchPosts(): Promise<Post[]> {
   try {
     const data = await internalFetch('/internal/site-posts');
     return (data.docs || []) as Post[];
-  } catch {
+  } catch (err) {
+    if (isOrchestratedBuild) throw err;
     return [];
   }
 }

@@ -1,25 +1,25 @@
 // Administration : vue d'ensemble multi-sites, sauvegardes, journal d'audit, hébergement.
-const express = require('express');
 const fs = require('fs');
 const auth = require('../auth');
 const sitesStore = require('../sites-store');
 const hosting = require('../core/hosting');
 const stats = require('../lib/stats');
-const { sendError } = require('../core/http');
+const { sendError, createRouter } = require('../core/http');
 const { logAudit } = require('../core/audit');
 const { getPayloadInstance } = require('../core/payload');
 const { getSiteStatsFile } = require('../core/config');
 const { readJsonFile } = require('../services/content');
 const backups = require('../services/backups');
 
-const router = express.Router();
+const router = createRouter();
 
 // Vue d'ensemble multi-sites (admin) : statut, domaine/SSL et visites agrégées par site.
 router.get('/api/admin/overview', auth.authenticate, auth.requireAdmin, async (req, res) => {
   try {
     const sites = await sitesStore.listSites();
     const rows = sites.map((s) => {
-      const statsData = readJsonFile(getSiteStatsFile(s.slug), {}) || {};
+      let statsData = {};
+      try { statsData = readJsonFile(getSiteStatsFile(s.slug), {}) || {}; } catch { statsData = {}; }
       const series = stats.lastNDays(statsData, 30);
       return {
         slug: s.slug,
@@ -77,7 +77,12 @@ router.get('/api/admin/backups/download', auth.authenticate, auth.requireAdmin, 
   if (!fs.existsSync(file)) return res.status(404).json({ error: "Sauvegarde introuvable." });
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
-  fs.createReadStream(file).pipe(res);
+  fs.createReadStream(file)
+    .on('error', (e) => {
+      if (res.headersSent) return res.destroy(e);
+      sendError(res, "Lecture de la sauvegarde impossible.", e);
+    })
+    .pipe(res);
 });
 
 // --- Hébergement (admin only) : état du driver et test de connexion cPanel ---

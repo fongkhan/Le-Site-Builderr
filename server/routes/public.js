@@ -1,20 +1,19 @@
 // Endpoints appelés par les sites PUBLIÉS (autre origine en production) : formulaire de
 // contact et beacon de statistiques. Publics, rate-limités, CORS ouvert route par route
 // (aucun cookie/credential impliqué). Lecture des stats : propriétaire ou admin.
-const express = require('express');
 const fs = require('fs');
 const cors = require('cors');
 const auth = require('../auth');
 const sitesStore = require('../sites-store');
 const stats = require('../lib/stats');
-const { sendError } = require('../core/http');
+const { sendError, createRouter } = require('../core/http');
 const { logAudit } = require('../core/audit');
 const { sendMail } = require('../core/mail');
 const { getSiteStatsFile } = require('../core/config');
 const { readJsonFile } = require('../services/content');
 const { getSiteOwners } = require('../services/sites');
 
-const router = express.Router();
+const router = createRouter();
 
 // --- Formulaire de contact (validation stricte + honeypot) ---
 router.post('/api/contact/:slug', cors(), async (req, res) => {
@@ -43,7 +42,14 @@ router.post('/api/contact/:slug', cors(), async (req, res) => {
       `— Envoyé par le formulaire de contact Meta-Builder`;
 
     if (recipients.length > 0) {
-      await sendMail(recipients, subject, text);
+      try {
+        // Répondre au mail répond directement au visiteur
+        await sendMail(recipients, subject, text, { replyTo: email.trim() });
+      } catch (mailErr) {
+        // Le message n'est jamais perdu : il reste dans les logs du serveur
+        console.log(`📬 [Contact] Message pour « ${site.slug} » non distribué par email :\n${text}`);
+        throw mailErr;
+      }
     } else {
       // Aucun compte rattaché : ne pas perdre le message pour autant
       console.log(`📬 [Contact] Message pour « ${site.slug} » (aucun propriétaire rattaché) :\n${text}`);
