@@ -2,9 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchPages, savePages } from '../../../api/content';
 import { errorMessage } from '../../../api/client';
 import { useToast } from '../../../components/ui/ToastContext';
-import type { Block } from '../../../types';
+import type { Block, PageRef } from '../../../types';
 import type { UpdateOptions } from '../blocks/types';
-import { toEditorPages, toServerPages, updateBlock, type EditorPage } from '../lib/editorModel';
+import { pageKey, removedPages, toEditorPages, toServerPages, updateBlock, type EditorPage } from '../lib/editorModel';
 import type { AutosaveState } from './autosaveController';
 import { useAutosave } from './useAutosave';
 
@@ -37,9 +37,19 @@ export function useSitePages(siteSlug: string): SitePages {
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [pages, setPages] = useState<EditorPage[]>([]);
   const pagesRef = useRef<EditorPage[]>([]);
+  // Pages supprimées pas encore confirmées par le serveur : renvoyées à chaque sauvegarde
+  // jusqu'à son succès (une sauvegarde plus récente remplace la précédente en attente).
+  const pendingDeletes = useRef(new Map<string, PageRef>());
 
   const { state: saveState, schedule, saveNow, retry } = useAutosave<EditorPage[]>(
-    (data) => savePages(siteSlug, toServerPages(data)),
+    async (data) => {
+      const sent = [...pendingDeletes.current.entries()];
+      const result = await savePages(siteSlug, toServerPages(data, sent.map(([, ref]) => ref)));
+      for (const [key, ref] of sent) {
+        if (pendingDeletes.current.get(key) === ref) pendingDeletes.current.delete(key);
+      }
+      return result;
+    },
     {
       onError: (err, info) => {
         const message = errorMessage(err, "Erreur lors de l'enregistrement des pages.");
@@ -75,6 +85,7 @@ export function useSitePages(siteSlug: string): SitePages {
       const prev = pagesRef.current;
       const next = change(prev);
       if (next === prev) return;
+      for (const ref of removedPages(prev, next)) pendingDeletes.current.set(pageKey(ref), ref);
       pagesRef.current = next;
       setPages(next);
       if (immediate) saveNow(next);

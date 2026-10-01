@@ -8,7 +8,7 @@ const sitesStore = require('../sites-store');
 const hosting = require('../core/hosting');
 const releases = require('../lib/releases');
 const analytics = require('../lib/analytics');
-const { generateSlug, assertSafePath, assertStrictlyInside } = require('../lib/paths');
+const { generateSlug, assertSafePath, assertStrictlyInside, previewPathFor } = require('../lib/paths');
 const { validateTheme } = require('../lib/theme');
 const { replaceDirAtomically } = require('../lib/fs-swap');
 const { sendError, createRouter } = require('../core/http');
@@ -50,7 +50,8 @@ router.get('/api/sites', auth.authenticate, auth.requireAuth, async (req, res) =
     if (!auth.isAdmin(req.user)) {
       sites = sites.filter(s => req.userSiteSlugs.has(s.slug));
     }
-    res.json(sites);
+    // Adresse de la copie servie par l'orchestrateur (publication simulée)
+    res.json(sites.map((s) => ({ ...s, previewPath: `${previewPathFor(s.documentRoot, PUBLIC_HTML_DIR, s.slug)}/` })));
   } catch (e) {
     sendError(res, "Impossible de lire la liste des sites.", e);
   }
@@ -572,6 +573,7 @@ router.post('/api/sites/import-archive',
   express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '50mb' }),
   async (req, res) => {
     let createdSlug = null;
+    let createdDocumentRoot = null;
     try {
       if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
         return res.status(400).json({ error: "Archive manquante (envoyez le zip en corps de requête, Content-Type: application/zip)." });
@@ -611,6 +613,9 @@ router.post('/api/sites/import-archive',
       const slug = await uniqueSlug(baseSlug);
 
       const documentRoot = defaultDocumentRoot(slug);
+      // uniqueSlug écarte les dossiers existants : en cas d'échec, on ne supprime que ce
+      // que cet import a créé (jamais des fichiers conservés d'un ancien site).
+      const documentRootExisted = fs.existsSync(documentRoot);
       const newSite = await sitesStore.createSite({
         slug,
         name: asText(meta.name, 200) || slug,
@@ -623,6 +628,7 @@ router.post('/api/sites/import-archive',
         sslStatus: initialSslStatus()
       });
       createdSlug = slug;
+      createdDocumentRoot = documentRootExisted ? null : documentRoot;
 
       // Pages : fichier JSON de fallback (repris par le CMS puis persisté dans Payload
       // à la première sauvegarde). Thème : validé avant écriture.
@@ -682,7 +688,9 @@ router.post('/api/sites/import-archive',
         try {
           await sitesStore.deleteSite(createdSlug);
           purgeSiteData(createdSlug);
-          fs.rmSync(assertStrictlyInside(defaultDocumentRoot(createdSlug), PUBLIC_HTML_DIR), { recursive: true, force: true });
+          if (createdDocumentRoot) {
+            fs.rmSync(assertStrictlyInside(createdDocumentRoot, PUBLIC_HTML_DIR), { recursive: true, force: true });
+          }
         } catch (cleanupErr) {
           console.error("Nettoyage de l'import raté :", cleanupErr.message);
         }

@@ -186,11 +186,21 @@ function routablePages(raw: any[]): PageDoc[] {
   return pages;
 }
 
+// Articles publiables : adresse valide, titre, et une seule fois par adresse (le plus
+// récent, ordre du serveur). Même règle que le sitemap (server/lib/i18n.js publishedRoutes).
 function validPosts(raw: any[]): Post[] {
+  const seen = new Set<string>();
   return raw.filter((p) => {
-    if (p && typeof p.slug === 'string' && SLUG_RE.test(p.slug) && p.title) return true;
-    console.warn(`[contenu] Article ignoré : adresse invalide (${JSON.stringify(p && p.slug)}).`);
-    return false;
+    if (!(p && typeof p.slug === 'string' && SLUG_RE.test(p.slug) && p.title)) {
+      console.warn(`[contenu] Article ignoré : adresse invalide (${JSON.stringify(p && p.slug)}).`);
+      return false;
+    }
+    if (seen.has(p.slug)) {
+      console.warn(`[contenu] Article « ${p.title} » ignoré : adresse /blog/${p.slug}/ en double.`);
+      return false;
+    }
+    seen.add(p.slug);
+    return true;
   });
 }
 
@@ -209,7 +219,10 @@ async function loadSiteContent(): Promise<SiteContent> {
   if (posts.length > 0) (navByLocale[DEFAULT_LOCALE] ||= []).push({ title: 'Actualités', slug: 'blog' });
 
   if (!offline) console.log(`[contenu] ${pages.length} page(s), ${posts.length} article(s) publié(s).`);
-  return { pages, posts, locales: localesInPages(pages), navByLocale, offline };
+  // Langues proposées (sélecteur, hreflang) : seulement celles qui ont une page d'accueil,
+  // cible de ces liens — jamais de lien vers un /en/ inexistant.
+  const locales = localesInPages(pages.filter((p) => p.slug === 'home'));
+  return { pages, posts, locales, navByLocale, offline };
 }
 
 let contentPromise: Promise<SiteContent> | null = null;

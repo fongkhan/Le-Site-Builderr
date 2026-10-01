@@ -63,6 +63,8 @@ function ensureConfinedPaths(res, { documentRoot, repositoryPath }) {
 }
 
 // Copie le client-template dans le dépôt local du site (code source complet, sans Git).
+// Renvoie true si le dossier a été créé par cet appel (un dossier existant n'est jamais
+// touché : l'appelant ne doit supprimer que ce qu'il a créé).
 function provisionRepository(repoPath) {
   if (repoPath && !fs.existsSync(repoPath)) {
     try {
@@ -79,7 +81,9 @@ function provisionRepository(repoPath) {
     } catch (err) {
       console.error(`[Provisioning] Erreur de copie du dépôt local : ${err.message}`);
     }
+    return true;
   }
+  return false;
 }
 
 // Supprime les données locales d'un site : fichiers JSON (pages, thème, articles,
@@ -99,11 +103,19 @@ function purgeSiteData(slug) {
   }
 }
 
-// Premier slug libre : base, base-2, base-3…
+// Dossiers qu'un nouveau site occuperait sous ce slug et qui existent déjà (site supprimé
+// en conservant ses fichiers, dossier repéré par le scan mais pas importé…).
+function slugHasLeftovers(slug) {
+  return fs.existsSync(defaultDocumentRoot(slug)) || fs.existsSync(path.join(REPOSITORIES_DIR, slug));
+}
+
+// Premier slug libre : base, base-2, base-3… Libre = ni enregistré, ni déjà présent sur le
+// disque : un nouveau site n'écrit (et, en cas d'échec, ne supprime) jamais un dossier
+// qu'il n'a pas créé.
 async function uniqueSlug(base) {
   let slug = base;
   let suffix = 2;
-  while (await sitesStore.getSiteBySlug(slug)) slug = `${base}-${suffix++}`;
+  while ((await sitesStore.getSiteBySlug(slug)) || slugHasLeftovers(slug)) slug = `${base}-${suffix++}`;
   return slug;
 }
 

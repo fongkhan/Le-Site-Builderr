@@ -52,3 +52,13 @@ test('normalizeOnboardResult — blocs inconnus écartés, thème invalide refus
   assert.equal(out.pages.docs[0].slug, 'home');
   assert.equal(out.theme, null);
 });
+
+test('normalizeOnboardResult — slugs de pages dédoublonnés', () => {
+  const block = { blockType: 'hero', title: 'x' };
+  const out = normalizeOnboardResult({ pages: { docs: [
+    { title: 'A', slug: 'home', layout: [block] },
+    { title: 'B', slug: 'home', layout: [block] },
+    { title: 'C', slug: 'home', layout: [block] },
+  ] } }, { name: 'X' });
+  assert.deepEqual(out.pages.docs.map((p) => p.slug), ['home', 'home-2', 'home-3']);
+});

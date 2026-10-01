@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { normalizeLocale, localePath, localeRouteParam, localesInPages, DEFAULT_LOCALE } = require('../../lib/i18n.js');
+const { normalizeLocale, localePath, localeRouteParam, localesInPages, DEFAULT_LOCALE, publishedRoutes, ROUTE_SLUG_RE } = require('../../lib/i18n.js');
 
 test('normalizeLocale — repli sur la langue par défaut', () => {
   assert.equal(normalizeLocale('fr'), 'fr');
@@ -55,4 +56,30 @@ test('isRoutablePage — adresses réservées de la langue par défaut', async (
   assert.equal(isRoutablePage(undefined, 'en'), false);
   assert.equal(isRoutablePage('fr', 'contact'), true);
   assert.equal(isRoutablePage('en', 'blog'), true); // /en/blog/ n'entre en collision avec rien
+});
+
+test('publishedRoutes — uniquement les routes générées par le template', () => {
+  const pages = [
+    { slug: 'home', title: 'Accueil' },
+    { slug: 'contact', title: 'Contact' },
+    { slug: 'contact', title: 'Contact bis' }, // doublon de route
+    { slug: 'a-propos/equipe', title: 'Équipe' }, // adresse invalide
+    { slug: 'blog', title: 'Blog' }, // réservée
+    { slug: 'home', locale: 'en', title: 'Home' },
+  ];
+  const posts = [
+    { slug: 'nouveau', title: 'Nouveau' },
+    { slug: 'nouveau', title: 'Ancien homonyme' },
+    { slug: 'Mon article', title: 'Espace' },
+    { slug: 'sans-titre', title: '' },
+  ];
+  assert.deepEqual(publishedRoutes(pages, posts), ['home', 'contact', 'en', 'blog', 'blog/nouveau']);
+  assert.deepEqual(publishedRoutes([], []), []);
+});
+
+test('publishedRoutes — même expression d’adresse que le template', () => {
+  const source = fs.readFileSync(new URL('../../../client-template/src/lib/content.ts', import.meta.url), 'utf-8');
+  const match = source.match(/const SLUG_RE = (\/.+\/);/);
+  assert.ok(match, 'SLUG_RE introuvable dans le template');
+  assert.equal(match[1], String(ROUTE_SLUG_RE));
 });

@@ -5,6 +5,7 @@ import {
   insertBlock,
   moveBlock,
   pageDeletionBlocker,
+  removedPages,
   removeBlock,
   removePage,
   reorderBlock,
@@ -124,5 +125,22 @@ describe('opérations sur les pages', () => {
     const enHome = toEditorPages({ docs: [{ title: 'Home', slug: 'home', locale: 'en', layout: [] }, { title: 'A', slug: 'a', layout: [] }] });
     expect(pageDeletionBlocker(enHome[0], enHome)).toBeNull(); // accueil anglais : supprimable
     expect(pageDeletionBlocker(enHome[1], [enHome[1]])).toMatch(/au moins une page/);
+  });
+
+  it('suppression : un accueil en double reste supprimable (on garde l’autre)', () => {
+    const twoHomes = toEditorPages({ docs: [{ title: 'Accueil', slug: 'home', layout: [] }, { title: 'Accueil 2', slug: 'home', locale: 'fr', layout: [] }] });
+    expect(pageDeletionBlocker(twoHomes[1], twoHomes)).toBeNull();
+    const remaining = removePage(twoHomes, twoHomes[1].id);
+    expect(pageDeletionBlocker(remaining[0], remaining)).toMatch(/accueil/);
+  });
+
+  it('suppressions explicites : seules les pages retirées sont envoyées dans deleted', () => {
+    const pages = load();
+    const next = removePage(pages, pages[1].id);
+    const deleted = removedPages(pages, next);
+    expect(deleted).toEqual([{ slug: 'contact', locale: 'fr' }]);
+    expect(toServerPages(next, deleted)).toMatchObject({ deleted: [{ slug: 'contact', locale: 'fr' }] });
+    expect(toServerPages(next)).not.toHaveProperty('deleted');
+    expect(removedPages(pages, updatePage(pages, pages[1].id, (p) => { p.title = 'x'; }))).toEqual([]);
   });
 });

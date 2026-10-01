@@ -21,6 +21,26 @@ function sendError(res, publicMsg, err, status = 500) {
   if (!res.headersSent) res.status(status).json({ error: publicMsg });
 }
 
+// --- Formulaires HTML postés sans JavaScript (sites publiés) ---
+
+const escapeHtml = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function isHtmlFormPost(req) {
+  return req.is('application/x-www-form-urlencoded') === 'application/x-www-form-urlencoded';
+}
+
+// Réponse à un formulaire posté SANS JavaScript (navigateur, application/x-www-form-
+// urlencoded) : petite page lisible avec un lien de retour vers la page d'origine, jamais
+// du JSON brut affiché au visiteur.
+function sendFormPage(req, res, status, title, text) {
+  let back = '';
+  try {
+    const ref = new URL(req.get('referer') || '');
+    if (ref.protocol === 'http:' || ref.protocol === 'https:') back = ref.href;
+  } catch { /* pas de page d'origine exploitable */ }
+  res.status(status).type('html').send(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>${escapeHtml(title)}</title><style>body{font-family:system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 20px;text-align:center;color:#222}a{color:#2563eb}</style></head><body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p>${back ? `<p><a href="${escapeHtml(back)}">← Revenir au site</a></p>` : ''}</body></html>`);
+}
+
 // --- Limiteurs de débit (anti brute-force / anti-abus) ---
 // Montés AVANT le catch-all Next : sur succès ils appellent next() et laissent
 // Next/Payload traiter la requête (flux intact) ; au-delà du seuil ils renvoient 429 JSON.
@@ -44,7 +64,13 @@ const limiters = {
   ),
   onboard: makeLimiter(30, "Trop de générations demandées. Réessayez dans quelques minutes."),
   webhook: makeLimiter(60, "Trop de requêtes de build reçues. Réessayez plus tard."),
-  contact: makeLimiter(10, "Trop de messages envoyés. Réessayez dans quelques minutes."),
+  contact: makeLimiter(10, "Trop de messages envoyés. Réessayez dans quelques minutes.", {
+    handler: (req, res) => {
+      const message = "Trop de messages envoyés. Réessayez dans quelques minutes.";
+      if (isHtmlFormPost(req)) return sendFormPage(req, res, 429, 'Message non envoyé', message);
+      res.status(429).json({ error: message });
+    },
+  }),
   // Beacon de stats : public, appelé une fois par page vue. Plafond généreux (une même
   // IP peut porter plusieurs visiteurs derrière un NAT) mais borné contre le flood.
   stats: makeLimiter(120, "Trop de requêtes."),
@@ -104,6 +130,11 @@ function jsonBodyForExpressRoutes(req, res, next) {
 // eslint-disable-next-line no-unused-vars
 function jsonErrorHandler(err, req, res, next) {
   if (res.headersSent) return next(err);
+  // Formulaire d'un site publié posté sans JavaScript : page HTML plutôt que JSON
+  if (isPublicRoute(req.path) && isHtmlFormPost(req) && err && (err.type === 'entity.too.large' || err.type === 'entity.parse.failed')) {
+    const tooLarge = err.type === 'entity.too.large';
+    return sendFormPage(req, res, tooLarge ? 413 : 400, 'Message non envoyé', tooLarge ? 'Votre message est trop long.' : 'Formulaire invalide.');
+  }
   if (err && err.type === 'entity.parse.failed') {
     return res.status(400).json({ error: "Corps de requête JSON invalide." });
   }
@@ -144,6 +175,8 @@ function createRouter() {
 
 module.exports = {
   sendError,
+  isHtmlFormPost,
+  sendFormPage,
   makeLimiter,
   limiters,
   mountRateLimits,

@@ -133,7 +133,7 @@ async function readSitePages(siteSlug) {
         });
         if (pagesRes.docs.length > 0) {
           return {
-            docs: pagesRes.docs.map(page => ({
+            docs: [...splitDuplicatePages(pagesRes.docs).kept.values()].map(page => ({
               title: page.title,
               slug: page.slug,
               locale: page.locale || 'fr',
@@ -161,7 +161,9 @@ async function readSitePages(siteSlug) {
   const sitePagesFile = getSitePagesFile(siteSlug);
   if (fs.existsSync(sitePagesFile)) {
     try {
-      return JSON.parse(fs.readFileSync(sitePagesFile, 'utf-8'));
+      const data = JSON.parse(fs.readFileSync(sitePagesFile, 'utf-8'));
+      if (data && Array.isArray(data.docs)) return { ...data, docs: dedupePageDocs(data.docs) };
+      return data;
     } catch (e) {
       console.error(`Fichier de pages corrompu pour ${siteSlug}, fallback par défaut :`, e.message);
     }
@@ -178,22 +180,40 @@ async function fallbackPages(siteSlug) {
   return starterPages(site ? site.name : siteSlug);
 }
 
-// Schémas d'URL exécutables : jamais acceptés dans un champ de bloc (liens des réseaux
-// sociaux, boutons, images…), qui finissent en href/src sur le site publié.
-const DANGEROUS_URL = /^[\s\u0000-\u001f]*(javascript|vbscript|data\s*:\s*text\/html)/i;
+// Schémas d'URL exécutables : jamais acceptés dans un champ d'URL de bloc (image, avatar,
+// lien Google, réseaux sociaux), qui finit en href/src sur le site publié. Les champs de
+// texte ne sont pas concernés : « JavaScript & TypeScript » est un intitulé légitime.
+const DANGEROUS_URL = /^(?:javascript|vbscript)\s*:|^data\s*:\s*text\/html/i;
+const URL_FIELDS = new Set([
+  'backgroundImage', 'image', 'images', 'url', 'avatar', 'googleBusinessUrl',
+  'socials', 'facebook', 'instagram', 'linkedin', 'x',
+]);
 
-function findDangerousUrl(value) {
-  if (typeof value === 'string') return DANGEROUS_URL.test(value.replace(/[\u0000-\u001f]/g, '')) ? value : null;
+// Les navigateurs ignorent blancs et caractères de contrôle dans un schéma (« java\tscript: »).
+const isDangerousUrl = (value) => DANGEROUS_URL.test(value.replace(/[\u0000-\u0020]/g, ''));
+
+function findDangerousUrl(value, inUrlField = false) {
+  if (typeof value === 'string') return inUrlField && isDangerousUrl(value) ? value : null;
   if (Array.isArray(value)) {
     for (const v of value) {
-      const found = findDangerousUrl(v);
+      const found = findDangerousUrl(v, inUrlField);
       if (found) return found;
     }
     return null;
   }
-  if (value && typeof value === 'object') return findDangerousUrl(Object.values(value));
+  if (value && typeof value === 'object') {
+    for (const [key, v] of Object.entries(value)) {
+      const found = findDangerousUrl(v, inUrlField || URL_FIELDS.has(key));
+      if (found) return found;
+    }
+  }
   return null;
 }
+
+// Clé d'une page : (langue, slug). Deux langues peuvent partager le même slug.
+const pageKey = (slug, locale) => `${locale === 'en' ? 'en' : 'fr'}:${slug}`;
+const PAGE_SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const MAX_DELETED_PAGES = 500;
 
 // Valide le corps envoyé par le CMS : { docs: [{ title, slug, locale?, layout? }] }.
 // Renvoie un message d'erreur, ou null si le corps est exploitable.
@@ -204,23 +224,69 @@ function validatePagesBody(body) {
     if (!page || typeof page !== 'object') return "Page invalide.";
     if (typeof page.title !== 'string' || !page.title.trim()) return "Chaque page doit avoir un titre.";
     // Segment d'URL simple (jamais de « / » ni de « .. ») : la page devient /<slug>/ au build
-    if (typeof page.slug !== 'string' || page.slug.length > 200 || !/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(page.slug)) {
+    if (typeof page.slug !== 'string' || page.slug.length > 200 || !PAGE_SLUG_RE.test(page.slug)) {
       return `Adresse de page invalide : ${JSON.stringify(page.slug)}.`;
     }
     if (page.layout !== undefined && !Array.isArray(page.layout)) return "Le contenu d'une page (layout) doit être une liste de sections.";
-    const key = `${page.locale === 'en' ? 'en' : 'fr'}:${page.slug}`;
+    const key = pageKey(page.slug, page.locale);
     if (keys.has(key)) return `Page en double : ${page.slug}.`;
     keys.add(key);
     if (findDangerousUrl(page.layout)) return "Lien non autorisé dans le contenu (javascript:, vbscript: ou data:text/html).";
   }
+  // Pages supprimées dans l'éditeur : [{ slug, locale? }]
+  if (body.deleted !== undefined) {
+    if (!Array.isArray(body.deleted) || body.deleted.length > MAX_DELETED_PAGES) return "Liste de pages supprimées invalide.";
+    for (const ref of body.deleted) {
+      if (!ref || typeof ref.slug !== 'string' || ref.slug.length > 200 || !PAGE_SLUG_RE.test(ref.slug)) {
+        return "Liste de pages supprimées invalide.";
+      }
+    }
+  }
   return null;
 }
 
-// Enregistre les pages d'un site : le corps reçu est la liste COMPLÈTE des pages.
-// Payload : upsert par (site, slug, langue) puis suppression des pages retirées ; une
-// erreur de base est propagée (l'appelant répond 500, rien n'est perdu en silence).
-// Miroir JSON du corps reçu ensuite.
+// Une page par clé (langue, slug) : des doublons en base (sauvegardes concurrentes,
+// création dans l'admin Payload…) ne doivent jamais bloquer l'éditeur. On garde la plus
+// récemment modifiée ; les autres sont renvoyées pour suppression.
+function splitDuplicatePages(docs) {
+  const kept = new Map();
+  const duplicates = [];
+  const newer = (a, b) => {
+    const byDate = String(a.updatedAt || '').localeCompare(String(b.updatedAt || ''));
+    return byDate !== 0 ? byDate > 0 : String(a.id) > String(b.id);
+  };
+  for (const doc of docs) {
+    const key = pageKey(doc.slug, doc.locale);
+    const current = kept.get(key);
+    if (!current) kept.set(key, doc);
+    else if (newer(doc, current)) { duplicates.push(current); kept.set(key, doc); }
+    else duplicates.push(doc);
+  }
+  return { kept, duplicates };
+}
+
+// Première occurrence de chaque clé (fichier JSON : onboarding, import, ancien format).
+function dedupePageDocs(docs) {
+  const seen = new Set();
+  return docs.filter((p) => {
+    if (!p || typeof p !== 'object') return false;
+    const key = pageKey(p.slug, p.locale);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+// Enregistre les pages d'un site. Payload : upsert par (site, slug, langue), puis
+// suppression des pages listées dans body.deleted (absentes du corps) et des doublons.
+// Une page simplement absente du corps est conservée : elle a pu être créée depuis un
+// autre onglet ou par un autre utilisateur. Une erreur de base est propagée (l'appelant
+// répond 500, rien n'est perdu en silence). Miroir JSON des pages reçues ensuite.
 async function saveSitePages(siteSlug, body) {
+  const docs = body.docs;
+  const sentKeys = new Set(docs.map((p) => pageKey(p.slug, p.locale)));
+  const deletedKeys = new Set((body.deleted || []).map((ref) => pageKey(ref.slug, ref.locale)).filter((k) => !sentKeys.has(k)));
+
   const payloadInstance = getPayloadInstance();
   if (payloadInstance) {
     const siteDoc = await sitesStore.getOrCreatePayloadDoc(siteSlug);
@@ -231,17 +297,10 @@ async function saveSitePages(siteSlug, body) {
       depth: 0,
       overrideAccess: true
     });
-    const pageKey = (slug, locale) => `${locale === 'en' ? 'en' : 'fr'}:${slug}`;
-    const existingByKey = new Map(existingRes.docs.map((p) => [pageKey(p.slug, p.locale), p]));
-    const keptKeys = new Set();
+    const { kept: existingByKey, duplicates } = splitDuplicatePages(existingRes.docs);
 
-    for (const pageInput of body.docs) {
-      // Une page est identifiée par (site, slug, langue) : deux langues peuvent
-      // partager le même slug (« home » en fr et en en).
+    for (const pageInput of docs) {
       const pageLocale = pageInput.locale === 'en' ? 'en' : 'fr';
-      const key = pageKey(pageInput.slug, pageLocale);
-      keptKeys.add(key);
-
       const pageData = {
         title: pageInput.title,
         slug: pageInput.slug,
@@ -261,7 +320,7 @@ async function saveSitePages(siteSlug, body) {
         }) : []
       };
 
-      const existing = existingByKey.get(key);
+      const existing = existingByKey.get(pageKey(pageInput.slug, pageLocale));
       if (existing) {
         await payloadInstance.update({ collection: 'pages', id: existing.id, data: pageData });
       } else {
@@ -269,15 +328,26 @@ async function saveSitePages(siteSlug, body) {
       }
     }
 
-    // Pages supprimées dans le CMS : retirées de la base (sinon elles réapparaîtraient)
-    for (const [key, page] of existingByKey) {
-      if (!keptKeys.has(key)) {
-        await payloadInstance.delete({ collection: 'pages', id: page.id, overrideAccess: true });
-      }
+    // Pages supprimées dans le CMS (sinon elles réapparaîtraient) et doublons
+    const toDelete = [...duplicates, ...[...existingByKey].filter(([key]) => deletedKeys.has(key)).map(([, page]) => page)];
+    for (const page of toDelete) {
+      await payloadInstance.delete({ collection: 'pages', id: page.id, overrideAccess: true });
     }
+    writeJsonFile(getSitePagesFile(siteSlug), { docs });
+    return;
   }
 
-  writeJsonFile(getSitePagesFile(siteSlug), body);
+  // Mode sans base : même règle sur le fichier JSON (pages absentes conservées)
+  let previous = [];
+  try {
+    const data = readJsonStrict(getSitePagesFile(siteSlug), null);
+    previous = data && Array.isArray(data.docs) ? data.docs : [];
+  } catch { previous = []; }
+  const keptPrevious = dedupePageDocs(previous).filter((p) => {
+    const key = pageKey(p.slug, p.locale);
+    return !sentKeys.has(key) && !deletedKeys.has(key);
+  });
+  writeJsonFile(getSitePagesFile(siteSlug), { docs: [...docs, ...keptPrevious] });
 }
 
 // --- Blog / actualités : articles par site ---
@@ -295,15 +365,24 @@ function normalizePost(p) {
   };
 }
 
-// Articles du fichier JSON (repli hors base de données), non normalisés. Un fichier
-// illisible lève une erreur : il n'est jamais réécrit comme s'il était vide.
-function readPostsFile(siteSlug) {
+// Fichier JSON des articles, non normalisés. Deux origines : un miroir de la base
+// (mirror=true, écrit après chaque modification) ou des articles qui n'existent encore que
+// dans le fichier (import, duplication, mode sans base). Un fichier illisible lève une
+// erreur : il n'est jamais réécrit comme s'il était vide.
+function readPostsFileData(siteSlug) {
   const data = readJsonStrict(getSitePostsFile(siteSlug), null);
-  return data && Array.isArray(data.docs) ? data.docs : [];
+  return {
+    docs: data && Array.isArray(data.docs) ? data.docs : [],
+    mirror: Boolean(data && data.source === 'payload'),
+  };
 }
 
-function writePostsFile(siteSlug, docs) {
-  writeJsonAtomic(getSitePostsFile(siteSlug), { docs });
+function readPostsFile(siteSlug) {
+  return readPostsFileData(siteSlug).docs;
+}
+
+function writePostsFile(siteSlug, docs, { mirror = false } = {}) {
+  writeJsonAtomic(getSitePostsFile(siteSlug), mirror ? { source: 'payload', docs } : { docs });
 }
 
 // Plus récents d'abord ; articles sans date en dernier (même ordre qu'en base).
@@ -313,43 +392,52 @@ function sortPostsByDate(docs) {
 
 // Articles d'un site en base (normalisés), ou null si Payload est indisponible ou si le
 // site n'y est pas référencé.
-async function readPayloadPosts(payloadInstance, siteSlug, { publishedOnly = false } = {}) {
+async function readPayloadPosts(payloadInstance, siteSlug) {
   const siteId = await findPayloadSiteId(payloadInstance, siteSlug);
   if (!siteId) return null;
-  const where = { and: [{ site: { equals: siteId } }] };
-  if (publishedOnly) where.and.push({ status: { equals: 'published' } });
   const postsRes = await payloadInstance.find({
-    collection: 'posts', where, sort: '-publishedAt', limit: 500, overrideAccess: true,
+    collection: 'posts', where: { site: { equals: siteId } }, sort: '-publishedAt', limit: 500, overrideAccess: true,
   });
   return postsRes.docs.map(normalizePost);
 }
 
-// Lit les articles d'un site. Payload prioritaire ; repli sur le fichier JSON quand la
-// base n'en contient aucun (site importé, dupliqué, ou créé sans base de données).
+// Le fichier JSON contient-il des articles pas encore repris en base ? (jamais un miroir :
+// un article supprimé ou dépublié dans l'admin Payload ne doit pas revenir par ce biais)
+function hasUnadoptedJsonPosts(siteSlug) {
+  try {
+    const { docs, mirror } = readPostsFileData(siteSlug);
+    return !mirror && docs.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+// Lit les articles d'un site. La base fait foi dès que le site y est référencé ; repli
+// sur le fichier JSON si la base est indisponible, si le site n'y est pas, ou si ses
+// articles n'existent encore que dans le fichier (site importé ou dupliqué).
 // publishedOnly=true → uniquement les articles publiés (pour le build public).
 async function readSitePosts(siteSlug, { publishedOnly = false } = {}) {
+  const published = (docs) => (publishedOnly ? docs.filter((p) => p.status === 'published') : docs);
   const payloadInstance = getPayloadInstance();
   if (payloadInstance) {
     try {
-      const fromDb = await readPayloadPosts(payloadInstance, siteSlug, { publishedOnly });
-      if (fromDb && fromDb.length > 0) return { docs: fromDb };
+      const fromDb = await readPayloadPosts(payloadInstance, siteSlug);
+      if (fromDb && (fromDb.length > 0 || !hasUnadoptedJsonPosts(siteSlug))) return { docs: published(fromDb) };
     } catch (dbError) {
       console.error('Erreur lecture posts de Payload, fallback JSON :', dbError.message);
     }
   }
   let docs;
   try { docs = sortPostsByDate(readPostsFile(siteSlug).map(normalizePost)); } catch { docs = []; }
-  if (publishedOnly) docs = docs.filter((p) => p.status === 'published');
-  return { docs };
+  return { docs: published(docs) };
 }
 
-// Écrit le fichier JSON miroir depuis la base (repli hors base de données). Une base
-// vide donne un miroir vide : un article supprimé ne réapparaît jamais via le repli.
+// Écrit le fichier JSON miroir depuis la base (repli si la base devient indisponible).
 async function writePostsMirror(siteSlug) {
   try {
     const payloadInstance = getPayloadInstance();
     if (!payloadInstance) return;
-    writePostsFile(siteSlug, (await readPayloadPosts(payloadInstance, siteSlug)) || []);
+    writePostsFile(siteSlug, (await readPayloadPosts(payloadInstance, siteSlug)) || [], { mirror: true });
   } catch (e) {
     console.error('Miroir JSON des articles non écrit :', e.message);
   }
@@ -357,7 +445,8 @@ async function writePostsMirror(siteSlug) {
 
 // Avant la première écriture en base d'un site dont les articles ne vivent encore que
 // dans le fichier JSON (import, duplication, passage du mode sans base au mode Payload),
-// on les reprend en base : sinon ils disparaîtraient au premier enregistrement.
+// on les reprend en base : sinon ils disparaîtraient au premier enregistrement. Un miroir
+// n'est jamais repris (base vidée volontairement depuis l'admin Payload).
 async function adoptJsonPosts(payloadInstance, siteDoc, siteSlug) {
   const existing = await payloadInstance.find({
     collection: 'posts', where: { site: { equals: siteDoc.id } }, limit: 1, depth: 0, overrideAccess: true,
@@ -365,7 +454,9 @@ async function adoptJsonPosts(payloadInstance, siteDoc, siteSlug) {
   if (existing.docs.length > 0) return;
   let jsonPosts = [];
   try {
-    jsonPosts = readPostsFile(siteSlug);
+    const data = readPostsFileData(siteSlug);
+    if (data.mirror) return;
+    jsonPosts = data.docs;
   } catch (e) {
     console.error(`Articles JSON de ${siteSlug} illisibles, non repris en base :`, e.message);
   }

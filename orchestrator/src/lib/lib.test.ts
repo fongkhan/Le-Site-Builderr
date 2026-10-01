@@ -36,6 +36,7 @@ describe('siteUrls', () => {
     expect(publishedSiteUrl({ slug: 'mon-site', domain: 'mon-site.fr' }, 'cpanel')).toBe('https://mon-site.fr/');
     expect(publishedSiteUrl({ slug: 'mon-site', domain: 'mon-site.fr' }, 'simulation')).toBe('/preview/mon-site/');
     expect(publishedSiteUrl({ slug: 'mon-site', domain: 'x.fr' }, undefined)).toBe('/preview/mon-site/');
+    expect(publishedSiteUrl({ slug: 'site-client', domain: 'x.fr', previewPath: '/preview/Site_Client/' }, 'simulation')).toBe('/preview/Site_Client/');
   });
 });
 

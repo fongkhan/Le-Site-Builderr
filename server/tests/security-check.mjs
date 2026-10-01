@@ -503,6 +503,48 @@ if (admin.token && client.token) {
   check("CORS : preflight d'une route privée depuis une origine inconnue -> refusé", !priv.headers.get('access-control-allow-origin'), `ACAO=${priv.headers.get('access-control-allow-origin')}`);
   const big = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { name: 'x', email: 'a@b.fr', message: 'x'.repeat(64 * 1024) } });
   check('Contact : corps de 64 Ko -> 413 (limite des endpoints publics)', big.status === 413, `HTTP ${big.status}`);
+  // Demande de RDV envoyée par le script du site : le serveur compose le message
+  const rdv = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { kind: 'appointment', name: 'Client RDV', email: 'rdv@example.com', service: 'Coupe', slot: 'mardi', phone: '0600000000' } });
+  check('Contact : demande de RDV en JSON (sans message libre) -> 200', rdv.status === 200, `HTTP ${rdv.status}`);
+  // Formulaire posté sans JavaScript : une erreur s'affiche en page HTML, jamais en JSON brut
+  const bigForm = await fetch(`${BASE}/api/contact/boulangerie-artisanale`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `name=x&email=a%40b.fr&message=${'x'.repeat(40 * 1024)}`,
+  });
+  check('Contact sans JavaScript : message trop long -> 413 en page HTML', bigForm.status === 413 && (bigForm.headers.get('content-type') || '').includes('text/html'), `HTTP ${bigForm.status} ${bigForm.headers.get('content-type')}`);
+}
+
+// ---- Pages : suppression explicite, doublons, textes libres ----
+if (admin.token) {
+  const created = await req('/api/sites', { method: 'POST', body: { name: 'Pages SC' }, token: admin.token });
+  const slug = created.json?.site?.slug;
+  if (slug) {
+    const url = `/api/site-pages?site=${slug}`;
+    const pg = (s, extra = {}) => ({ title: s, slug: s, layout: [], ...extra });
+    const keys = async () => ((await req(url, { token: admin.token })).json?.docs || []).map((p) => p.slug).sort().join(',');
+    await req(url, { method: 'POST', body: { docs: [pg('home'), pg('tarifs'), pg('equipe')] }, token: admin.token });
+    await req(url, { method: 'POST', body: { docs: [pg('home'), pg('tarifs')] }, token: admin.token });
+    check('Pages : une page absente du corps (autre onglet) est conservée', (await keys()) === 'equipe,home,tarifs', await keys());
+    await req(url, { method: 'POST', body: { docs: [pg('home'), pg('tarifs')], deleted: [{ slug: 'equipe', locale: 'fr' }] }, token: admin.token });
+    check('Pages : une page listée dans deleted est supprimée', (await keys()) === 'home,tarifs', await keys());
+    const faq = { blockType: 'faq', title: 'JavaScript & TypeScript', items: [{ question: 'JavaScript est-il nécessaire ?', answer: 'Non.' }] };
+    const text = await req(url, { method: 'POST', body: { docs: [pg('home', { layout: [faq] }), pg('tarifs')] }, token: admin.token });
+    check('Pages : le mot « JavaScript » dans un texte est accepté', text.status === 200, `HTTP ${text.status}`);
+    const link = await req(url, { method: 'POST', body: { docs: [pg('home', { layout: [{ blockType: 'footer', socials: { x: 'javascript:alert(1)' } }] })] }, token: admin.token });
+    check('Pages : lien javascript: dans un réseau social -> 400', link.status === 400, `HTTP ${link.status}`);
+    // Doublon créé hors du CMS (REST Payload) : la lecture le masque, la sauvegarde le purge
+    const siteDoc = await req(`/api/payload_sites?where[slug][equals]=${slug}&depth=0`, { token: admin.token });
+    const siteId = siteDoc.json?.docs?.[0]?.id;
+    if (siteId) {
+      await req('/api/pages', { method: 'POST', body: { title: 'Doublon', slug: 'tarifs', locale: 'fr', site: siteId, layout: [] }, token: admin.token });
+      check('Pages : un doublon en base est masqué à la lecture', (await keys()) === 'home,tarifs', await keys());
+      const save = await req(url, { method: 'POST', body: { docs: [pg('home'), pg('tarifs')] }, token: admin.token });
+      const count = await req(`/api/pages?where[site][equals]=${siteId}&where[slug][equals]=tarifs&depth=0`, { token: admin.token });
+      check('Pages : la sauvegarde réussit et purge le doublon', save.status === 200 && count.json?.totalDocs === 1, `HTTP ${save.status}, ${count.json?.totalDocs} page(s) « tarifs »`);
+    }
+    await req(`/api/sites/${slug}`, { method: 'DELETE', token: admin.token });
+  }
 }
 
 if (admin.token) {

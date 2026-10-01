@@ -9,7 +9,8 @@ export function fetchPages(siteSlug: string): Promise<PagesData> {
   return apiFetch(`/api/site-pages${siteQuery(siteSlug)}`);
 }
 
-// Le corps est la liste COMPLÈTE des pages : une page absente est supprimée.
+// Le corps contient les pages de l'éditeur ; seules les pages listées dans `deleted` sont
+// supprimées (une page absente du corps est conservée).
 export function savePages(siteSlug: string, data: PagesData): Promise<{ success: boolean }> {
   return apiFetch(`/api/site-pages${siteQuery(siteSlug)}`, { method: 'POST', body: JSON.stringify(data) });
 }

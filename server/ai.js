@@ -296,10 +296,15 @@ function normalizeOnboardResult(raw, { name, features } = {}) {
   };
 
   const rawDocs = raw && raw.pages && Array.isArray(raw.pages.docs) ? raw.pages.docs : [];
+  // Slugs uniques : deux pages « home » rendraient le contenu impossible à enregistrer
+  const taken = new Set();
   const docs = rawDocs
     .filter((p) => p && typeof p === 'object')
     .map((p, i) => {
-      const slug = typeof p.slug === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(p.slug) ? p.slug : (i === 0 ? 'home' : `page-${i + 1}`);
+      const base = typeof p.slug === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(p.slug) ? p.slug : (i === 0 ? 'home' : `page-${i + 1}`);
+      let slug = base;
+      for (let n = 2; taken.has(slug); n++) slug = `${base}-${n}`;
+      taken.add(slug);
       return {
         title: clip(p.title, 120) || (i === 0 ? 'Accueil' : `Page ${i + 1}`),
         slug,

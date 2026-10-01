@@ -76,11 +76,12 @@ const canonicalUrl = siteUrl ? siteUrl + stripBase(Astro.url.pathname) : '';
 const ogImage = image ? absoluteUrl(image, siteUrl) : '';
 
 // hreflang : sur chaque page d'accueil d'un site multilingue, liens vers l'accueil de
-// chaque langue présente + x-default (langue par défaut). URLs absolues obligatoires.
+// chaque langue qui en a un (`locales`) + x-default (langue par défaut, si son accueil
+// existe). URLs absolues obligatoires.
 const hreflangs = siteUrl && isHome && locales.length > 1
 	? [
 			...locales.map((l) => ({ lang: l, href: siteUrl + localePath(l, 'home') })),
-			{ lang: 'x-default', href: siteUrl + localePath(DEFAULT_LOCALE, 'home') },
+			...(locales.includes(DEFAULT_LOCALE) ? [{ lang: 'x-default', href: siteUrl + localePath(DEFAULT_LOCALE, 'home') }] : []),
 		]
 	: [];
 const jsonLdScripts = (jsonLd || []).filter(Boolean).map((d) => jsonLdString(d));

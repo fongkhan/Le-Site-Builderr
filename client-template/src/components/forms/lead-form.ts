@@ -26,27 +26,18 @@ function field(form: HTMLFormElement, name: string): string {
   return el && typeof el.value === 'string' ? el.value.trim() : '';
 }
 
-// Corps attendu par l'API de contact : { name, email, message, company (honeypot) }.
-// Une demande de RDV compose un message lisible (prestation, créneau, téléphone).
+// Corps attendu par l'API de contact : { name, email, message, company (honeypot) }, plus
+// pour une demande de RDV { kind, service, slot, phone } — le serveur compose alors le
+// message, exactement comme pour un envoi sans JavaScript.
 function payloadFor(form: HTMLFormElement, kind: LeadKind) {
-  let message = field(form, 'message');
-  if (kind === 'appointment') {
-    const lines = ['Demande de rendez-vous'];
-    const service = field(form, 'service');
-    const slot = field(form, 'slot');
-    const phone = field(form, 'phone');
-    if (service) lines.push(`Prestation : ${service}`);
-    if (slot) lines.push(`Créneau souhaité : ${slot}`);
-    if (phone) lines.push(`Téléphone : ${phone}`);
-    if (message) lines.push('', message);
-    message = lines.join('\n');
-  }
-  return {
+  const base = {
     name: field(form, 'name'),
     email: field(form, 'email'),
-    message,
+    message: field(form, 'message'),
     company: field(form, 'company'),
   };
+  if (kind !== 'appointment') return base;
+  return { ...base, kind, service: field(form, 'service'), slot: field(form, 'slot'), phone: field(form, 'phone') };
 }
 
 function enhance(form: HTMLFormElement) {

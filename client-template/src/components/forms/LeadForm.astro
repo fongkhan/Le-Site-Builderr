@@ -41,6 +41,7 @@ const action = `${apiBase}/api/contact/${encodeURIComponent(slug)}`;
 
       {isAppointment && (
         <>
+          <input type="hidden" name="kind" value="appointment" />
           <label class="visually-hidden" for={fid('phone')}>Votre téléphone</label>
           <input id={fid('phone')} type="tel" name="phone" placeholder="Votre téléphone" maxlength="40" autocomplete="tel" />
 

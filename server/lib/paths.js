@@ -50,4 +50,18 @@ function isValidSlug(value) {
   return typeof value === 'string' && value.length <= 200 && /^[a-z0-9][a-z0-9-]*$/.test(value);
 }
 
-module.exports = { generateSlug, assertSafePath, assertStrictlyInside, isValidSlug };
+// Chemin d'URL sous lequel l'orchestrateur sert un site publié en simulation : /preview
+// expose PUBLIC_HTML_DIR tel quel, l'URL suit donc le dossier RÉEL du site (dossier importé
+// « Site_Client », documentRoot modifié…), et non son slug. Repli sur le slug si le dossier
+// est hors de la racine.
+function previewPathFor(documentRoot, publicHtmlDir, slug) {
+  if (documentRoot) {
+    const rel = path.relative(path.resolve(publicHtmlDir), path.resolve(documentRoot));
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+      return `/preview/${rel.split(path.sep).map(encodeURIComponent).join('/')}`;
+    }
+  }
+  return `/preview/${encodeURIComponent(slug)}`;
+}
+
+module.exports = { generateSlug, assertSafePath, assertStrictlyInside, isValidSlug, previewPathFor };

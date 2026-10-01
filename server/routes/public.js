@@ -5,7 +5,7 @@ const cors = require('cors');
 const auth = require('../auth');
 const sitesStore = require('../sites-store');
 const stats = require('../lib/stats');
-const { sendError, createRouter } = require('../core/http');
+const { sendError, createRouter, isHtmlFormPost, sendFormPage } = require('../core/http');
 const { logAudit } = require('../core/audit');
 const { sendMail } = require('../core/mail');
 const { getSiteStatsFile } = require('../core/config');
@@ -17,21 +17,8 @@ const router = createRouter();
 
 // --- Formulaire de contact / prise de rendez-vous (validation stricte + honeypot) ---
 
-const escapeHtml = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-// Réponse à un formulaire posté SANS JavaScript (navigateur, application/x-www-form-
-// urlencoded) : petite page lisible avec un lien de retour vers la page d'origine.
-function sendFormPage(req, res, status, title, text) {
-  let back = '';
-  try {
-    const ref = new URL(req.get('referer') || '');
-    if (ref.protocol === 'http:' || ref.protocol === 'https:') back = ref.href;
-  } catch { /* pas de page d'origine exploitable */ }
-  res.status(status).type('html').send(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>${escapeHtml(title)}</title><style>body{font-family:system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 20px;text-align:center;color:#222}a{color:#2563eb}</style></head><body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p>${back ? `<p><a href="${escapeHtml(back)}">← Revenir au site</a></p>` : ''}</body></html>`);
-}
-
-// Message d'une demande de rendez-vous postée sans JavaScript (le script du site compose
-// le même texte côté navigateur avant un envoi JSON).
+// Message d'une demande de rendez-vous, composé ici pour les deux modes d'envoi (JSON
+// depuis le script du site, formulaire HTML sans JavaScript).
 function composeAppointmentMessage(body) {
   const field = (k) => (typeof body[k] === 'string' ? body[k].trim().slice(0, 200) : '');
   const lines = ['Demande de rendez-vous'];
@@ -44,7 +31,7 @@ function composeAppointmentMessage(body) {
 }
 
 router.post('/api/contact/:slug', cors(), async (req, res) => {
-  const isHtmlForm = req.is('application/x-www-form-urlencoded') === 'application/x-www-form-urlencoded';
+  const isHtmlForm = isHtmlFormPost(req);
   const fail = (status, error) => (isHtmlForm
     ? sendFormPage(req, res, status, "Message non envoyé", error)
     : res.status(status).json({ error }));
@@ -54,7 +41,8 @@ router.post('/api/contact/:slug', cors(), async (req, res) => {
 
     const body = req.body || {};
     const { name, email, company } = body;
-    const isAppointment = isHtmlForm && ['service', 'slot', 'phone'].some((k) => typeof body[k] === 'string');
+    // Demande de RDV : marquée par le formulaire (champ kind), ou reconnue à ses champs
+    const isAppointment = body.kind === 'appointment' || (isHtmlForm && ['service', 'slot', 'phone'].some((k) => typeof body[k] === 'string'));
     const message = isAppointment ? composeAppointmentMessage(body) : body.message;
     const done = () => (isHtmlForm
       ? sendFormPage(req, res, 200, 'Merci !', isAppointment ? 'Votre demande de rendez-vous a bien été envoyée.' : 'Votre message a bien été envoyé.')

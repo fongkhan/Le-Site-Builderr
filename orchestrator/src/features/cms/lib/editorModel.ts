@@ -1,4 +1,4 @@
-import type { Block, PageDoc, PagesData } from '../../../types';
+import type { Block, PageDoc, PageRef, PagesData } from '../../../types';
 
 // Modèle de l'éditeur de contenu. Chaque page et chaque bloc reçoit un identifiant CLIENT
 // stable (attribué au chargement et à la création, jamais envoyé au serveur) : l'éditeur
@@ -58,14 +58,29 @@ export function toEditorPages(data: PagesData): EditorPage[] {
   }));
 }
 
-// Pages de l'éditeur → corps envoyé au serveur (liste COMPLÈTE, sans identifiants client).
-export function toServerPages(pages: EditorPage[]): PagesData {
-  return {
+// Pages de l'éditeur → corps envoyé au serveur (sans identifiants client). Une page absente
+// du corps n'est PAS supprimée (elle a pu être créée depuis un autre onglet) : seules les
+// pages listées dans `deleted` le sont.
+export function toServerPages(pages: EditorPage[], deleted: PageRef[] = []): PagesData {
+  const body: PagesData = {
     docs: pages.map((page) => ({
       ...omitId(page),
       layout: page.layout.map((block) => omitId(block)),
     })),
   };
+  if (deleted.length > 0) body.deleted = deleted;
+  return body;
+}
+
+/** Clé d'une page côté serveur : langue + adresse */
+export function pageKey(page: Pick<PageDoc, 'slug' | 'locale'>): string {
+  return `${pageLocale(page)}:${page.slug}`;
+}
+
+// Pages présentes dans `prev` mais plus dans `next` (suppressions de l'éditeur).
+export function removedPages(prev: EditorPage[], next: EditorPage[]): PageRef[] {
+  const kept = new Set(next.map((p) => p.id));
+  return prev.filter((p) => !kept.has(p.id)).map((p) => ({ slug: p.slug, locale: pageLocale(p) }));
 }
 
 export function findBlock(pages: EditorPage[], blockId: string): { page: EditorPage; block: EditorBlock; index: number } | null {
@@ -147,7 +162,8 @@ export function removePage(pages: EditorPage[], pageId: string): EditorPage[] {
 
 // Raison pour laquelle une page ne peut pas être supprimée, ou null si elle peut l'être.
 export function pageDeletionBlocker(page: EditorPage, pages: EditorPage[]): string | null {
-  if (isDefaultHome(page)) return "La page d'accueil du site ne peut pas être supprimée.";
+  // Un accueil en double (contenu ancien ou importé) reste supprimable : on garde l'autre
+  if (isDefaultHome(page) && pages.filter(isDefaultHome).length <= 1) return "La page d'accueil du site ne peut pas être supprimée.";
   if (pages.length <= 1) return 'Le site doit garder au moins une page.';
   return null;
 }

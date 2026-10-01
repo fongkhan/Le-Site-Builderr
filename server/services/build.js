@@ -11,7 +11,7 @@ const releases = require('../lib/releases');
 const seo = require('../lib/seo');
 const media = require('../lib/media');
 const i18n = require('../lib/i18n');
-const { assertSafePath, assertStrictlyInside } = require('../lib/paths');
+const { assertSafePath, assertStrictlyInside, previewPathFor } = require('../lib/paths');
 const { replaceDirAtomically } = require('../lib/fs-swap');
 const { getPayloadInstance } = require('../core/payload');
 const { sendMail } = require('../core/mail');
@@ -94,11 +94,11 @@ function getActiveBasePath() {
 }
 
 // Chemin sous lequel le site compilé sera servi : à la racine de son domaine en mode
-// cPanel ; sous /preview/<slug>/ (publication simulée) ou /draft/<slug>/ (brouillon)
-// sur l'orchestrateur. Astro préfixe CSS, JS et liens internes avec ce chemin.
-function basePathFor(siteSlug, { draft = false } = {}) {
+// cPanel ; sous /preview/<dossier du site>/ (publication simulée) ou /draft/<slug>/
+// (brouillon) sur l'orchestrateur. Astro préfixe CSS, JS et liens internes avec ce chemin.
+function basePathFor(site, siteSlug, { draft = false } = {}) {
   if (draft) return `/draft/${siteSlug}`;
-  return hosting.isRemote ? '/' : `/preview/${siteSlug}`;
+  return hosting.isRemote ? '/' : previewPathFor(site && site.documentRoot, PUBLIC_HTML_DIR, siteSlug);
 }
 
 function getBuildStatus() {
@@ -188,7 +188,7 @@ function buildEnvFor(site, siteSlug, { draft = false } = {}) {
     ACTIVE_SITE_SLUG: siteSlug,
     BUILD_TOKEN,
     ORCHESTRATOR_URL: `http://127.0.0.1:${PORT}`,
-    SITE_BASE_PATH: basePathFor(siteSlug, { draft }),
+    SITE_BASE_PATH: basePathFor(site, siteSlug, { draft }),
     // Origine publique de l'API (formulaire de contact, prise de RDV, statistiques).
     // Vide : même origine que le site (aperçu servi par l'orchestrateur).
     PUBLIC_API_BASE: String(process.env.PUBLIC_API_URL || '').replace(/\/+$/, ''),
@@ -286,7 +286,7 @@ async function startDraftBuild(siteSlug) {
     // Thème courant appliqué au template avant compilation (comme un vrai build)
     await applySiteThemeCss(siteSlug);
     activeBuildingSite = siteSlug;
-    activeBasePath = basePathFor(siteSlug, { draft: true });
+    activeBasePath = basePathFor(site, siteSlug, { draft: true });
 
     await new Promise((resolve, reject) => {
       runAstroBuild(buildCommand(), buildEnvFor(site, siteSlug, { draft: true }), (error, stdout, stderr) => {
@@ -297,6 +297,14 @@ async function startDraftBuild(siteSlug) {
 
     if (!fs.existsSync(path.join(DIST_DIR, 'index.html'))) {
       throw new Error('Build brouillon sans sortie exploitable.');
+    }
+
+    // Images de la médiathèque : réécrites en /draft/<slug>/media/ par le canal interne,
+    // elles doivent être présentes dans le brouillon (non bloquant)
+    try {
+      await copyReferencedMedia(siteSlug, await readSitePages(siteSlug), await readSitePosts(siteSlug, { publishedOnly: true }));
+    } catch (mediaErr) {
+      console.error(`Médias du brouillon non copiés : ${mediaErr.message}`);
     }
 
     // Publication atomique dans le dossier de brouillons (jamais dans PUBLIC_HTML_DIR)
@@ -353,7 +361,7 @@ async function startBuild(siteSlug) {
 
   // Site actif pour le routage dynamique d'Astro
   activeBuildingSite = siteSlug;
-  activeBasePath = basePathFor(siteSlug);
+  activeBasePath = basePathFor(site, siteSlug);
 
   const cmd = buildCommand();
   appendBuildLog(`Commande exécutée : ${cmd} (dans ${ASTRO_PROJECT_DIR})`);
@@ -389,37 +397,49 @@ function failBuild(siteSlug, site, publicError, excerpt) {
 // Chemins localisés : la langue par défaut est à la racine, les autres préfixées
 // (/en/…). '' (accueil de la langue par défaut) est représenté par « home ».
 function writeSeoFiles(site, pagesData, postsData) {
-  const slugs = (pagesData.docs || [])
-    .filter((p) => p.slug && i18n.isRoutablePage(p.locale, p.slug)) // même règle que le template
-    .map((p) => i18n.localeRouteParam(p.locale, p.slug) || 'home');
-  // Ajoute l'index du blog + chaque article publié (URL /blog/<slug>/)
-  const postSlugs = (postsData.docs || []).map((p) => p.slug).filter(Boolean);
-  if (postSlugs.length > 0) {
-    slugs.push('blog', ...postSlugs.map((s) => `blog/${s}`));
-  }
+  // Exactement les routes générées par le template : jamais d'URL en 404 dans le sitemap
+  const slugs = i18n.publishedRoutes(pagesData.docs, postsData.docs);
   if (slugs.length > 0) {
     fs.writeFileSync(path.join(DIST_DIR, 'sitemap.xml'), seo.generateSitemap(site.domain, slugs), 'utf-8');
     fs.writeFileSync(path.join(DIST_DIR, 'robots.txt'), seo.generateRobots(site.domain), 'utf-8');
   }
 }
 
-// Médiathèque : copie dans le dist les images référencées par les pages et les articles
-// publiés (couvertures, images du corps) — URLs /media/… réécrites par le canal interne :
-// le site publié est autonome. Renvoie le nombre de fichiers copiés.
-function copyReferencedMedia(pagesData, postsData) {
+// Noms des fichiers de la médiathèque qui appartiennent au site : un contenu qui cite le
+// fichier d'un autre client (nom deviné) ne le publie jamais.
+async function ownedMediaFilenames(siteSlug, filenames) {
+  const payloadInstance = getPayloadInstance();
+  if (!payloadInstance || filenames.length === 0) return new Set();
+  const siteId = await findPayloadSiteId(payloadInstance, siteSlug);
+  if (!siteId) return new Set();
+  const res = await payloadInstance.find({
+    collection: 'media',
+    where: { and: [{ site: { equals: siteId } }, { filename: { in: filenames } }] },
+    pagination: false,
+    depth: 0,
+    overrideAccess: true,
+  });
+  return new Set(res.docs.map((d) => d.filename).filter(Boolean));
+}
+
+// Médiathèque : copie dans le dist les images du site référencées par les pages et les
+// articles publiés (couvertures, images du corps) — URLs /media/… réécrites par le canal
+// interne : le site publié est autonome. Renvoie { copied, ignored }.
+async function copyReferencedMedia(siteSlug, pagesData, postsData) {
   const filenames = media.collectMediaFilenames({ pages: pagesData, posts: postsData });
-  if (filenames.length === 0) return 0;
+  if (filenames.length === 0) return { copied: 0, ignored: 0 };
+  const owned = await ownedMediaFilenames(siteSlug, filenames);
   const mediaOut = path.join(DIST_DIR, 'media');
-  fs.mkdirSync(mediaOut, { recursive: true });
   let copied = 0;
   for (const name of filenames) {
     const src = path.join(UPLOADS_DIR, path.basename(name));
-    if (fs.existsSync(src)) {
+    if (owned.has(name) && fs.existsSync(src)) {
+      fs.mkdirSync(mediaOut, { recursive: true });
       fs.copyFileSync(src, path.join(mediaOut, path.basename(name)));
       copied++;
     }
   }
-  return copied;
+  return { copied, ignored: filenames.length - owned.size };
 }
 
 async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
@@ -462,8 +482,9 @@ async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
       appendBuildLog(`SEO non généré : ${seoErr.message}`);
     }
     try {
-      const copied = copyReferencedMedia(pagesData, postsData);
+      const { copied, ignored } = await copyReferencedMedia(siteSlug, pagesData, postsData);
       if (copied > 0) appendBuildLog(`Médias copiés dans le site : ${copied} fichier(s).`);
+      if (ignored > 0) appendBuildLog(`Médias ignorés (absents de la médiathèque du site) : ${ignored} fichier(s).`);
     } catch (mediaErr) {
       appendBuildLog(`Copie des médias échouée : ${mediaErr.message}`);
     }

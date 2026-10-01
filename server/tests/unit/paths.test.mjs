@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 
 const require = createRequire(import.meta.url);
-const { generateSlug, assertSafePath, assertStrictlyInside, isValidSlug } = require('../../lib/paths.js');
+const { generateSlug, assertSafePath, assertStrictlyInside, isValidSlug, previewPathFor } = require('../../lib/paths.js');
 
 test('generateSlug — noms valides', () => {
   assert.equal(generateSlug('Boulangerie Artisanale'), 'boulangerie-artisanale');
@@ -62,4 +62,15 @@ test('isValidSlug — uniquement des slugs canoniques', () => {
   for (const bad of ['', '../x', 'A', '-x', 'a b', 'a/b', 'é', null, undefined, 42, 'a'.repeat(201)]) {
     assert.ok(!isValidSlug(bad), String(bad));
   }
+});
+
+test('previewPathFor — suit le dossier réel du site sous la racine publique', () => {
+  const root = path.join(path.sep, 'srv', 'public_html');
+  assert.equal(previewPathFor(path.join(root, 'mon-site'), root, 'mon-site'), '/preview/mon-site');
+  assert.equal(previewPathFor(path.join(root, 'Site_Client'), root, 'site-client'), '/preview/Site_Client');
+  assert.equal(previewPathFor(path.join(root, 'clients', 'foo bar'), root, 'foo'), '/preview/clients/foo%20bar');
+  // Hors de la racine, racine elle-même ou chemin absent : repli sur le slug
+  assert.equal(previewPathFor(path.join(path.sep, 'ailleurs', 'x'), root, 'x'), '/preview/x');
+  assert.equal(previewPathFor(root, root, 'x'), '/preview/x');
+  assert.equal(previewPathFor('', root, 'x'), '/preview/x');
 });

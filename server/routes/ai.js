@@ -80,12 +80,15 @@ router.post('/api/ai/assist', auth.authenticate, auth.requireAuth, auth.requireS
   }
 });
 
-// Défait (best-effort) un site d'onboarding dont la création n'a pas pu aboutir.
-async function discardOnboardedSite(slug) {
+// Défait (best-effort) un site d'onboarding dont la création n'a pas pu aboutir. Le dépôt
+// n'est supprimé que s'il a été créé par cette requête.
+async function discardOnboardedSite(slug, { repositoryCreated = false } = {}) {
   try {
     if (await sitesStore.getSiteBySlug(slug)) await sitesStore.deleteSite(slug);
     purgeSiteData(slug);
-    fs.rmSync(assertStrictlyInside(path.join(REPOSITORIES_DIR, slug), REPOSITORIES_DIR), { recursive: true, force: true });
+    if (repositoryCreated) {
+      fs.rmSync(assertStrictlyInside(path.join(REPOSITORIES_DIR, slug), REPOSITORIES_DIR), { recursive: true, force: true });
+    }
   } catch (e) {
     console.error(`Nettoyage du site ${slug} raté :`, e.message);
   }
@@ -130,6 +133,7 @@ router.post('/api/onboard', auth.authenticate, auth.requireAuth, async (req, res
   }
 
   let createdSlug = null; // posé seulement une fois le site réellement créé par CETTE requête
+  let repositoryCreated = false;
   try {
     // Slug validé (jamais vide → jamais de documentRoot partagé) et unique
     const siteName = String(name || '').trim().slice(0, 120) || result.qualification.site_name || "Nouveau Site";
@@ -148,7 +152,7 @@ router.post('/api/onboard', auth.authenticate, auth.requireAuth, async (req, res
     });
     createdSlug = finalSlug;
 
-    provisionRepository(newSite.repositoryPath);
+    repositoryCreated = provisionRepository(newSite.repositoryPath);
 
     // Pages et thème générés pour ce site (repli : pages de départ au nom du site, thème
     // par défaut). theme.css n'est pas écrit ici : fichier global, régénéré au build.
@@ -176,7 +180,7 @@ router.post('/api/onboard', auth.authenticate, auth.requireAuth, async (req, res
     });
   } catch (error) {
     // Aucun site exploitable : création défaite et créneau IA rendu (jamais décompté).
-    if (createdSlug) await discardOnboardedSite(createdSlug);
+    if (createdSlug) await discardOnboardedSite(createdSlug, { repositoryCreated });
     await aiQuota.releaseSlot(req.user.id);
     sendError(res, "Échec de la génération du site par IA.", error);
   }

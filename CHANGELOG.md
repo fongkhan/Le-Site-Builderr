@@ -23,10 +23,15 @@ Toutes les modifications notables apportées à ce projet sont documentées dans
 - Build : verrou jamais orphelin, délai maximal, « déjà en cours » reprogramme une publication, fin de build détectée de façon fiable, logs d'un client invisibles pour les autres, thème jamais hérité du site précédent.
 - Nouveau site : pages de départ au nom du site (plus de contenu « boulangerie »). IA : modèle Anthropic à jour, délai maximal, sortie validée. Statistiques : plus de jour sauté au changement d'heure.
 - Orchestrateur : sauvegarde automatique sans boucle de réessais, modifications concurrentes préservées, domaine personnalisé conservé après activation, double soumission de l'onboarding impossible, modales imbriquées correctes, sondage du build unique.
+- CMS : une page n'est supprimée que sur demande explicite (une page créée depuis un autre onglet n'est plus effacée par une sauvegarde automatique) ; des pages en double en base ne bloquent plus l'enregistrement ; le mot « JavaScript » est accepté dans les textes (seuls les champs d'URL sont filtrés) ; une image téléversée pendant la suppression d'un élément de liste vise le bon élément.
+- Médiathèque : seules les images du site sont publiées (le fichier d'un autre client cité dans un contenu est ignoré) ; images présentes dans l'aperçu brouillon.
+- Nouveau site (IA, import, duplication) : jamais sur un dossier existant ; un échec ne supprime que ce qui a été créé. Pages générées par l'IA sans adresse en double.
+- Articles : un article supprimé ou dépublié dans l'admin Payload ne réapparaît plus via le fichier JSON de repli.
+- Sites publiés : sitemap limité aux pages réellement générées ; hreflang et sélecteur de langue uniquement vers les accueils existants ; adresse d'aperçu calculée depuis le dossier réel du site ; demande de rendez-vous reconnue avec ou sans JavaScript ; erreurs du formulaire sans JavaScript affichées en page lisible.
 
 ### Vérification
 
-- Matrice de sécurité : 140 contrôles (13 nouveaux, dont 9 échouaient sur l'ancien code). Tests unitaires serveur étendus ; tests Vitest côté orchestrateur (exécutés en CI).
+- Matrice de sécurité : 148 contrôles (21 nouveaux, dont 9 échouaient sur l'ancien code). Tests unitaires serveur étendus ; tests Vitest côté orchestrateur (exécutés en CI).
 
 ## [2.1.0] - 2026-07-17
 
