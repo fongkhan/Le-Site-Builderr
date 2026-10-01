@@ -1,59 +1,74 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import { fetchNavPages, fetchPosts, buildNav, parseTags } from '../../lib/content';
-import type { Post } from '../../lib/content';
+import { DEFAULT_LOCALE } from '../../lib/i18n.mjs';
+import { getSiteContent, parseTags } from '../../lib/content';
+import type { NavPage, Post } from '../../lib/content';
 import { markdownToHtml } from '../../lib/markdown.mjs';
+import { formatDate, isoDate } from '../../lib/format';
+import { absoluteUrl, safeHttpUrl, withBase } from '../../lib/url';
 
+// Une page par article publié. Le blog n'est pas localisé : menu de la langue par défaut.
 export async function getStaticPaths() {
-  const [pages, posts] = await Promise.all([fetchNavPages(), fetchPosts()]);
-  const nav = buildNav(pages, posts);
+  const { posts, navByLocale, locales } = await getSiteContent();
+  const nav = navByLocale[DEFAULT_LOCALE] || [];
   return posts.map((post) => ({
     params: { slug: post.slug },
-    props: { post, nav },
+    props: { post, nav, locales },
   }));
 }
 
-interface Props { post: Post; nav: { title: string; slug: string }[]; }
-const { post, nav } = Astro.props;
+interface Props {
+  post: Post;
+  nav: NavPage[];
+  locales: string[];
+}
+const { post, nav, locales } = Astro.props;
 
 // Rendu du corps en mini-markdown (gras, listes, liens, titres), échappé et sûr.
 const bodyHtml = markdownToHtml(post.body);
 const tags = parseTags(post.tags);
-const fmtDate = (iso?: string | null) => {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? '' : d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
-};
+const cover = safeHttpUrl(post.coverImage);
+const published = formatDate(post.publishedAt);
 
 // Données structurées Article (schema.org) : améliore l'affichage dans les moteurs.
+// Image en URL absolue (exigée par schema.org/Google) : omise sans URL publique.
 const siteName = process.env.PUBLIC_SITE_NAME || '';
-const articleLd = post.title
-  ? JSON.stringify({
-      '@context': 'https://schema.org',
-      '@type': 'Article',
-      headline: post.title,
-      ...(post.excerpt ? { description: post.excerpt } : {}),
-      ...(post.coverImage ? { image: [post.coverImage] } : {}),
-      ...(post.publishedAt ? { datePublished: post.publishedAt } : {}),
-      ...(tags.length ? { keywords: tags.join(', ') } : {}),
-      ...(siteName ? { publisher: { '@type': 'Organization', name: siteName } } : {}),
-    }).replace(/</g, '\\u003c')
-  : null;
+const siteUrl = (process.env.PUBLIC_SITE_URL || '').replace(/\/+$/, '');
+const coverAbsolute = cover ? absoluteUrl(cover, siteUrl) : '';
+const articleLd = {
+  '@context': 'https://schema.org',
+  '@type': 'Article',
+  headline: post.title,
+  ...(post.excerpt ? { description: post.excerpt } : {}),
+  ...(coverAbsolute ? { image: [coverAbsolute] } : {}),
+  ...(isoDate(post.publishedAt) ? { datePublished: isoDate(post.publishedAt) } : {}),
+  ...(tags.length ? { keywords: tags.join(', ') } : {}),
+  ...(siteName ? { publisher: { '@type': 'Organization', name: siteName } } : {}),
+};
 ---
 
-<Layout title={post.title} description={post.excerpt} pages={nav} currentSlug="blog">
-  {articleLd && <script type="application/ld+json" set:html={articleLd} />}
+<Layout
+  title={post.title}
+  description={post.excerpt}
+  pages={nav}
+  currentSlug="blog"
+  locale={DEFAULT_LOCALE}
+  locales={locales}
+  image={cover}
+  ogType="article"
+  jsonLd={[articleLd]}
+>
   <article class="post">
     <div class="container">
-      <a class="post-back" href="/blog/">← Toutes les actualités</a>
+      <a class="post-back" href={withBase('/blog/')}>← Toutes les actualités</a>
       <h1>{post.title}</h1>
-      {post.publishedAt && <time class="post-date">{fmtDate(post.publishedAt)}</time>}
+      {published && <time class="post-date" datetime={isoDate(post.publishedAt)}>{published}</time>}
       {tags.length > 0 && (
         <div class="post-tags">
           {tags.map((t) => <span class="post-tag">{t}</span>)}
         </div>
       )}
-      {post.coverImage && <img class="post-cover" src={post.coverImage} alt={post.title} />}
+      {cover && <img class="post-cover" src={cover} alt="" />}
       <div class="post-body" set:html={bodyHtml} />
     </div>
   </article>

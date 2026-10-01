@@ -15,27 +15,62 @@ const { getSiteOwners } = require('../services/sites');
 
 const router = createRouter();
 
-// --- Formulaire de contact (validation stricte + honeypot) ---
+// --- Formulaire de contact / prise de rendez-vous (validation stricte + honeypot) ---
+
+const escapeHtml = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// Réponse à un formulaire posté SANS JavaScript (navigateur, application/x-www-form-
+// urlencoded) : petite page lisible avec un lien de retour vers la page d'origine.
+function sendFormPage(req, res, status, title, text) {
+  let back = '';
+  try {
+    const ref = new URL(req.get('referer') || '');
+    if (ref.protocol === 'http:' || ref.protocol === 'https:') back = ref.href;
+  } catch { /* pas de page d'origine exploitable */ }
+  res.status(status).type('html').send(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>${escapeHtml(title)}</title><style>body{font-family:system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 20px;text-align:center;color:#222}a{color:#2563eb}</style></head><body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p>${back ? `<p><a href="${escapeHtml(back)}">← Revenir au site</a></p>` : ''}</body></html>`);
+}
+
+// Message d'une demande de rendez-vous postée sans JavaScript (le script du site compose
+// le même texte côté navigateur avant un envoi JSON).
+function composeAppointmentMessage(body) {
+  const field = (k) => (typeof body[k] === 'string' ? body[k].trim().slice(0, 200) : '');
+  const lines = ['Demande de rendez-vous'];
+  if (field('service')) lines.push(`Prestation : ${field('service')}`);
+  if (field('slot')) lines.push(`Créneau souhaité : ${field('slot')}`);
+  if (field('phone')) lines.push(`Téléphone : ${field('phone')}`);
+  const extra = typeof body.message === 'string' ? body.message.trim() : '';
+  if (extra) lines.push('', extra);
+  return lines.join('\n');
+}
+
 router.post('/api/contact/:slug', cors(), async (req, res) => {
+  const isHtmlForm = req.is('application/x-www-form-urlencoded') === 'application/x-www-form-urlencoded';
+  const fail = (status, error) => (isHtmlForm
+    ? sendFormPage(req, res, status, "Message non envoyé", error)
+    : res.status(status).json({ error }));
   try {
     const site = await sitesStore.getSiteBySlug(req.params.slug);
-    if (!site) return res.status(404).json({ error: "Site inconnu." });
+    if (!site) return fail(404, "Site inconnu.");
 
-    const { name, email, message, company } = req.body || {};
+    const body = req.body || {};
+    const { name, email, company } = body;
+    const isAppointment = isHtmlForm && ['service', 'slot', 'phone'].some((k) => typeof body[k] === 'string');
+    const message = isAppointment ? composeAppointmentMessage(body) : body.message;
+    const done = () => (isHtmlForm
+      ? sendFormPage(req, res, 200, 'Merci !', isAppointment ? 'Votre demande de rendez-vous a bien été envoyée.' : 'Votre message a bien été envoyé.')
+      : res.json({ success: true }));
 
-    // Honeypot : un humain ne remplit jamais ce champ caché. On répond 200 sans
+    // Honeypot : un humain ne remplit jamais ce champ caché. On répond un succès sans
     // rien envoyer pour ne pas donner d'indice aux robots.
-    if (typeof company === 'string' && company.trim() !== '') {
-      return res.json({ success: true });
-    }
+    if (typeof company === 'string' && company.trim() !== '') return done();
 
     const isNonEmpty = (v, max) => typeof v === 'string' && v.trim().length > 0 && v.length <= max;
     if (!isNonEmpty(name, 120) || !isNonEmpty(message, 5000) || !isNonEmpty(email, 200) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({ error: "Nom, email valide et message sont requis." });
+      return fail(400, "Nom, email valide et message sont requis.");
     }
 
     const recipients = await getSiteOwners(site.slug);
-    const subject = `📬 Nouveau message via ${site.name}`;
+    const subject = `${isAppointment ? '📅 Demande de rendez-vous' : '📬 Nouveau message'} via ${site.name}`;
     const text =
       `Nouveau message reçu depuis le site « ${site.name} » (${site.domain}) :\n\n` +
       `Nom : ${name.trim()}\nEmail : ${email.trim()}\n\n${message.trim()}\n\n` +
@@ -55,9 +90,13 @@ router.post('/api/contact/:slug', cors(), async (req, res) => {
       console.log(`📬 [Contact] Message pour « ${site.slug} » (aucun propriétaire rattaché) :\n${text}`);
     }
     // Sans l'email du visiteur : le journal d'audit ne stocke pas de données personnelles
-    logAudit(req, 'contact.recu', site.slug, 'formulaire de contact');
-    res.json({ success: true });
+    logAudit(req, 'contact.recu', site.slug, isAppointment ? 'demande de rendez-vous' : 'formulaire de contact');
+    done();
   } catch (e) {
+    if (isHtmlForm) {
+      console.error('❌ [Contact] envoi impossible —', (e && e.message) || e);
+      return sendFormPage(req, res, 500, 'Message non envoyé', "Impossible d'envoyer le message pour le moment. Réessayez plus tard.");
+    }
     sendError(res, "Impossible d'envoyer le message pour le moment.", e);
   }
 });

@@ -1,0 +1,156 @@
+---
+// Section de formulaire commune aux blocs Contact et Appointment (prise de RDV) :
+// titre, introduction et formulaire accessible (libellés associés, masqués visuellement
+// pour garder le design à placeholders). Les deux formulaires postent vers l'API de
+// contact du site ; l'envoi en fetch est géré par lead-form.ts.
+interface Props {
+  kind: 'contact' | 'appointment';
+  /** id d'ancre de la section (#contact, #rendez-vous), unique sur la page. */
+  anchorId: string;
+  title: string;
+  subtitle?: string;
+  ctaText: string;
+  /** Prestations proposées (prise de RDV uniquement). */
+  services?: string[];
+}
+
+const { kind, anchorId, title, subtitle, ctaText, services = [] } = Astro.props;
+const isAppointment = kind === 'appointment';
+const fid = (name: string) => `${anchorId}-${name}`;
+
+// Slug injecté au build ; l'API de contact est servie par l'orchestrateur.
+// PUBLIC_API_BASE pointe vers l'origine de l'API en production (vide = même origine,
+// cas de l'aperçu /preview servi par l'orchestrateur). Jamais préfixé par le chemin de
+// base du site : l'API est à la racine de son origine.
+const slug = process.env.ACTIVE_SITE_SLUG || '';
+const apiBase = (process.env.PUBLIC_API_BASE || '').replace(/\/+$/, '');
+const action = `${apiBase}/api/contact/${encodeURIComponent(slug)}`;
+---
+
+<section class="lead-section" id={anchorId} aria-labelledby={fid('title')}>
+  <div class="lead-container">
+    <h2 id={fid('title')}>{title}</h2>
+    {subtitle && <p class="lead-intro">{subtitle}</p>}
+
+    <form class="lead-form" method="post" action={action} data-kind={kind}>
+      <label class="visually-hidden" for={fid('name')}>Votre nom</label>
+      <input id={fid('name')} type="text" name="name" placeholder="Votre nom" required maxlength="120" autocomplete="name" />
+
+      <label class="visually-hidden" for={fid('email')}>Votre email</label>
+      <input id={fid('email')} type="email" name="email" placeholder="Votre email" required maxlength="200" autocomplete="email" />
+
+      {isAppointment && (
+        <>
+          <label class="visually-hidden" for={fid('phone')}>Votre téléphone</label>
+          <input id={fid('phone')} type="tel" name="phone" placeholder="Votre téléphone" maxlength="40" autocomplete="tel" />
+
+          {services.length > 0 && (
+            <>
+              <label class="visually-hidden" for={fid('service')}>Prestation souhaitée</label>
+              <select id={fid('service')} name="service">
+                <option value="">Prestation souhaitée…</option>
+                {services.map((s) => <option value={s}>{s}</option>)}
+              </select>
+            </>
+          )}
+
+          <label class="visually-hidden" for={fid('slot')}>Créneau souhaité</label>
+          <input id={fid('slot')} type="text" name="slot" placeholder="Créneau souhaité (ex. mardi après-midi)" maxlength="120" />
+        </>
+      )}
+
+      <label class="visually-hidden" for={fid('message')}>{isAppointment ? 'Précisions (facultatif)' : 'Votre message'}</label>
+      {isAppointment
+        ? <textarea id={fid('message')} name="message" placeholder="Précisions (facultatif)…" rows="3" maxlength="4000"></textarea>
+        : <textarea id={fid('message')} name="message" placeholder="Votre message…" required rows="4" maxlength="5000"></textarea>}
+
+      <!-- Champ anti-robot : caché aux humains (et aux lecteurs d'écran), rempli seulement par les bots -->
+      <div class="hp-field" aria-hidden="true">
+        <label for={fid('company')}>Société (ne pas remplir)</label>
+        <input id={fid('company')} type="text" name="company" tabindex="-1" autocomplete="off" />
+      </div>
+
+      <button type="submit">{ctaText}</button>
+      <p class="lead-status" role="status" aria-live="polite"></p>
+    </form>
+  </div>
+</section>
+
+<script>
+  import './lead-form';
+</script>
+
+<style>
+  .lead-section {
+    padding: 80px 20px;
+    background-color: var(--color-bg);
+  }
+
+  .lead-container {
+    max-width: 560px;
+    margin: 0 auto;
+    text-align: center;
+  }
+
+  .lead-section h2 {
+    font-size: 2.5rem;
+    margin-bottom: 15px;
+  }
+
+  .lead-intro {
+    opacity: 0.85;
+    margin-bottom: 30px;
+  }
+
+  .lead-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    text-align: left;
+  }
+
+  .lead-form input,
+  .lead-form select,
+  .lead-form textarea {
+    padding: 12px 14px;
+    border: 1px solid color-mix(in srgb, var(--color-text) 20%, transparent);
+    border-radius: var(--border-radius);
+    font-family: var(--font-body), sans-serif;
+    font-size: 1rem;
+    background-color: #fff;
+    color: #111;
+  }
+
+  /* Honeypot : invisible pour les humains */
+  .hp-field {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    opacity: 0;
+  }
+
+  .lead-form button {
+    background-color: var(--color-primary);
+    color: #fff;
+    border: none;
+    border-radius: var(--border-radius);
+    padding: 12px 20px;
+    font-weight: 600;
+    font-size: 1rem;
+    cursor: pointer;
+    transition: opacity 0.2s ease;
+  }
+
+  .lead-form button:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+
+  .lead-status {
+    min-height: 1.2em;
+    font-size: 0.9rem;
+    margin: 0;
+  }
+</style>

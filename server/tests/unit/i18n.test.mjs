@@ -48,3 +48,11 @@ test('i18n — serveur et template appliquent exactement la même règle', async
     }
   }
 });
+
+test('isRoutablePage — adresses réservées de la langue par défaut', async () => {
+  const { isRoutablePage } = require('../../lib/i18n.js');
+  assert.equal(isRoutablePage('fr', 'blog'), false);
+  assert.equal(isRoutablePage(undefined, 'en'), false);
+  assert.equal(isRoutablePage('fr', 'contact'), true);
+  assert.equal(isRoutablePage('en', 'blog'), true); // /en/blog/ n'entre en collision avec rien
+});

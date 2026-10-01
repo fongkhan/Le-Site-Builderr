@@ -89,11 +89,14 @@ function isPublicRoute(reqPath) {
 
 // 10 Mo pour l'orchestrateur (images base64 de l'onboarding, pages) ; 32 Ko suffisent
 // largement aux endpoints publics non authentifiés.
+// Les endpoints publics acceptent aussi un formulaire HTML classique (sans JavaScript).
 const jsonParser = express.json({ limit: '10mb' });
 const publicJsonParser = express.json({ limit: '32kb' });
+const publicFormParser = express.urlencoded({ extended: false, limit: '32kb' });
 function jsonBodyForExpressRoutes(req, res, next) {
   if (!isExpressRoute(req.path)) return next();
-  (isPublicRoute(req.path) ? publicJsonParser : jsonParser)(req, res, next);
+  if (!isPublicRoute(req.path)) return jsonParser(req, res, next);
+  publicJsonParser(req, res, (err) => (err ? next(err) : publicFormParser(req, res, next)));
 }
 
 // Dernier middleware : erreurs non gérées rendues en JSON (jamais la page HTML par

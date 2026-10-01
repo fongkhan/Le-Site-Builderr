@@ -1,4 +1,6 @@
 ---
+import { cssUrl } from '../../lib/url';
+
 interface Props {
   data: {
     title: string;
@@ -6,17 +8,26 @@ interface Props {
     ctaText?: string;
     backgroundImage?: string;
   };
+  /** Cible du bouton selon son libellé (ancre du formulaire de la page) ; sans cible, pas de bouton. */
+  ctaTarget?: (label?: string) => string | null;
 }
 
-const { data } = Astro.props;
+const { data, ctaTarget } = Astro.props;
+const ctaHref = data.ctaText && ctaTarget ? ctaTarget(data.ctaText) : null;
+
+// Image de fond saisie par le client : filtrée (http(s) ou média du site) et placée
+// dans une chaîne CSS échappée. Sans image valide, AUCUN attribut style n'est émis :
+// le dégradé du thème (règle .hero-section:not(.has-bg)) s'applique.
+const bg = cssUrl(data.backgroundImage);
+const style = bg ? `background-image: linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.7)), ${bg};` : undefined;
 ---
 
-<section class="hero-section" style={data.backgroundImage ? `background-image: linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.7)), url(${data.backgroundImage});` : ''}>
+<section class:list={['hero-section', { 'has-bg': Boolean(bg) }]} style={style}>
   <div class="hero-content">
     <h1>{data.title}</h1>
     {data.subtitle && <p>{data.subtitle}</p>}
-    {data.ctaText && (
-      <a href="#" class="cta-button">
+    {ctaHref && (
+      <a href={ctaHref} class="cta-button">
         {data.ctaText}
       </a>
     )}
@@ -38,8 +49,9 @@ const { data } = Astro.props;
     position: relative;
   }
 
-  /* Si pas d'image de fond, on applique un dégradé basé sur le thème */
-  .hero-section:not([style]) {
+  /* Sans image de fond : dégradé basé sur le thème (l'image, si présente, est posée
+     en style inline et l'emporte sur cette règle) */
+  .hero-section:not(.has-bg) {
     background-image: linear-gradient(135deg, var(--color-primary) 0%, var(--color-text) 100%);
   }
 

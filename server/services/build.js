@@ -256,10 +256,21 @@ function runAstroBuild(command, env, callback) {
   });
 }
 
-// Commande de build : installe les dépendances du template au premier build.
+// Commande de build : installe les dépendances du template au premier build, et à
+// nouveau quand son package-lock.json a changé depuis la dernière installation
+// (nouvelle dépendance après une mise à jour : polices auto-hébergées…).
+function templateNeedsInstall() {
+  const installedLock = path.join(ASTRO_PROJECT_DIR, 'node_modules', '.package-lock.json');
+  if (!fs.existsSync(installedLock)) return true;
+  try {
+    return fs.statSync(path.join(ASTRO_PROJECT_DIR, 'package-lock.json')).mtimeMs > fs.statSync(installedLock).mtimeMs;
+  } catch {
+    return false;
+  }
+}
+
 function buildCommand() {
-  const needsInstall = !fs.existsSync(path.join(ASTRO_PROJECT_DIR, 'node_modules'));
-  return `${needsInstall ? 'npm install && ' : ''}npm run build`;
+  return `${templateNeedsInstall() ? 'npm install --no-audit --no-fund && ' : ''}npm run build`;
 }
 
 // --- Prévisualisation brouillon ---------------------------------------------
@@ -379,7 +390,7 @@ function failBuild(siteSlug, site, publicError, excerpt) {
 // (/en/…). '' (accueil de la langue par défaut) est représenté par « home ».
 function writeSeoFiles(site, pagesData, postsData) {
   const slugs = (pagesData.docs || [])
-    .filter((p) => p.slug)
+    .filter((p) => p.slug && i18n.isRoutablePage(p.locale, p.slug)) // même règle que le template
     .map((p) => i18n.localeRouteParam(p.locale, p.slug) || 'home');
   // Ajoute l'index du blog + chaque article publié (URL /blog/<slug>/)
   const postSlugs = (postsData.docs || []).map((p) => p.slug).filter(Boolean);

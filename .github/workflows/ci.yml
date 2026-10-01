@@ -49,7 +49,7 @@ jobs:
       - run: npm test
 
   client-template:
-    name: Template Astro — build
+    name: Template Astro — build & site de démonstration
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -64,6 +64,16 @@ jobs:
       # Sans serveur, le build utilise la page de fallback hors-ligne : il doit passer quand même
       - run: npm ci
       - run: npm run build
+      # Fixture : les 11 blocs, 2 langues, le blog et des saisies hostiles, servis sous un
+      # sous-chemin (aperçu) puis à la racine (production) — sortie vérifiée automatiquement
+      - name: Build fixture sous /preview/demo
+        run: |
+          TEMPLATE_FIXTURE=$PWD/fixtures/site.json SITE_BASE_PATH=/preview/demo PUBLIC_SITE_URL=https://demo.example PUBLIC_SITE_NAME=Demo npm run build
+          node scripts/check-fixture-build.mjs /preview/demo
+      - name: Build fixture à la racine
+        run: |
+          TEMPLATE_FIXTURE=$PWD/fixtures/site.json SITE_BASE_PATH=/ PUBLIC_SITE_URL=https://demo.example PUBLIC_SITE_NAME=Demo npm run build
+          node scripts/check-fixture-build.mjs /
 
   security:
     name: Serveur — matrice de sécurité (rôles & ownership)

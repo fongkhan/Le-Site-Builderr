@@ -1,8 +1,12 @@
 ---
 import '../styles/base.css';
 import '../styles/theme.css';
+import '../styles/blocks.css';
+// Polices du thème auto-hébergées (voir integrations/theme-fonts.mjs)
+import 'virtual:theme-fonts.css';
 import { localePath, normalizeLocale, LOCALE_LABELS, DEFAULT_LOCALE } from '../lib/i18n.mjs';
-
+import { withBase, stripBase, absoluteUrl } from '../lib/url';
+import { jsonLdString } from '../lib/jsonld';
 
 interface NavPage {
 	title: string;
@@ -16,12 +20,31 @@ interface Props {
 	currentSlug?: string;
 	locale?: string;
 	locales?: string[];
+	/** Page d'accueil d'une langue : reçoit les liens hreflang vers les autres accueils. */
+	isHome?: boolean;
+	/** Image de partage (og:image) : URL absolue ou chemin du site. */
+	image?: string;
+	ogType?: 'website' | 'article';
+	/** Données structurées schema.org de la page (une balise par entrée). */
+	jsonLd?: unknown[];
 }
 
-const { title = "Mon Site Composable", description, pages = [], currentSlug, locale = DEFAULT_LOCALE, locales = [] } = Astro.props;
+const {
+	title = "Mon Site Composable",
+	description,
+	pages = [],
+	currentSlug,
+	locale = DEFAULT_LOCALE,
+	locales = [],
+	isHome = false,
+	image,
+	ogType = 'website',
+	jsonLd = [],
+} = Astro.props;
 const pageLocale = normalizeLocale(locale);
-// Chemin d'une page dans la langue courante (règle partagée avec le serveur).
-const pageHref = (slug: string) => localePath(pageLocale, slug);
+// Lien interne vers une page de la langue courante (règle partagée avec le serveur),
+// préfixé par le chemin de base (/preview/<slug>/… en aperçu).
+const pageHref = (slug: string) => withBase(localePath(pageLocale, slug));
 // Sélecteur de langue : affiché seulement si le site a plusieurs langues.
 // Chaque langue pointe vers SA page d'accueil (pas de correspondance 1:1 garantie).
 const otherLocales = (locales || []).filter((l) => l !== pageLocale);
@@ -38,7 +61,7 @@ const beaconUrl = statsSlug ? `${statsApiBase}/api/stats/hit/${statsSlug}` : '';
 // Métadonnées de partage (Open Graph / Twitter) + URL canonique. PUBLIC_SITE_NAME/URL
 // sont injectés au build ; en construction autonome, on retombe sur des valeurs neutres.
 const siteName = process.env.PUBLIC_SITE_NAME || title;
-const siteUrl = process.env.PUBLIC_SITE_URL || '';
+const siteUrl = (process.env.PUBLIC_SITE_URL || '').replace(/\/+$/, '');
 
 // Mesure d'audience (GA4 ou Matomo) : valeurs validées côté serveur à l'écriture.
 // Le script n'est JAMAIS chargé avant le consentement (bannière RGPD ci-dessous).
@@ -46,52 +69,68 @@ const analyticsProvider = process.env.PUBLIC_ANALYTICS_PROVIDER || '';
 const analyticsId = process.env.PUBLIC_ANALYTICS_ID || '';
 const analyticsHost = process.env.PUBLIC_ANALYTICS_HOST || '';
 const analyticsEnabled = Boolean(analyticsProvider && analyticsId);
-// Le site est publié à la racine de son (sous-)domaine ; on retire le préfixe de base
-// « /sites/<slug> » utilisé par le build pour obtenir l'URL publique réelle.
-const activeSlug = process.env.ACTIVE_SITE_SLUG || '';
-const basePrefix = activeSlug ? `/sites/${activeSlug}` : '';
-let relPath = Astro.url.pathname;
-if (basePrefix && relPath.startsWith(basePrefix)) relPath = relPath.slice(basePrefix.length) || '/';
-const canonicalUrl = siteUrl ? siteUrl.replace(/\/$/, '') + relPath : '';
+
+// Le site public est servi à la racine de son domaine : on retire le chemin de base du
+// build (« /preview/<slug> » en publication simulée) pour obtenir l'URL publique réelle.
+const canonicalUrl = siteUrl ? siteUrl + stripBase(Astro.url.pathname) : '';
+const ogImage = image ? absoluteUrl(image, siteUrl) : '';
+
+// hreflang : sur chaque page d'accueil d'un site multilingue, liens vers l'accueil de
+// chaque langue présente + x-default (langue par défaut). URLs absolues obligatoires.
+const hreflangs = siteUrl && isHome && locales.length > 1
+	? [
+			...locales.map((l) => ({ lang: l, href: siteUrl + localePath(l, 'home') })),
+			{ lang: 'x-default', href: siteUrl + localePath(DEFAULT_LOCALE, 'home') },
+		]
+	: [];
+const jsonLdScripts = (jsonLd || []).filter(Boolean).map((d) => jsonLdString(d));
 ---
 
 <!doctype html>
 <html lang={pageLocale}>
 	<head>
 		<meta charset="UTF-8" />
-		<meta name="viewport" content="width=device-width" />
-		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<link rel="icon" type="image/svg+xml" href={withBase('/favicon.svg')} />
+		<link rel="icon" href={withBase('/favicon.ico')} sizes="32x32" />
 		<meta name="generator" content={Astro.generator} />
 		<title>{title}</title>
 		{description && <meta name="description" content={description} />}
+		{isDraft && <meta name="robots" content="noindex, nofollow" />}
 		{canonicalUrl && <link rel="canonical" href={canonicalUrl} />}
+		{hreflangs.map((h) => <link rel="alternate" hreflang={h.lang} href={h.href} />)}
 
 		<!-- Partage social (Open Graph / Twitter) -->
-		<meta property="og:type" content="website" />
+		<meta property="og:type" content={ogType} />
 		<meta property="og:title" content={title} />
 		{description && <meta property="og:description" content={description} />}
 		<meta property="og:site_name" content={siteName} />
+		<meta property="og:locale" content={pageLocale === 'fr' ? 'fr_FR' : 'en_US'} />
 		{canonicalUrl && <meta property="og:url" content={canonicalUrl} />}
-		<meta name="twitter:card" content="summary" />
+		{ogImage && <meta property="og:image" content={ogImage} />}
+		<meta name="twitter:card" content={ogImage ? 'summary_large_image' : 'summary'} />
 		<meta name="twitter:title" content={title} />
 		{description && <meta name="twitter:description" content={description} />}
+		{ogImage && <meta name="twitter:image" content={ogImage} />}
 
-		<!-- Google Fonts pré-chargées pour correspondre aux palettes IA -->
-		<link rel="preconnect" href="https://fonts.googleapis.com">
-		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-		<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=Inter:wght@300;400;600;700&family=Lora:ital,wght@0,400;0,700;1,400&family=Outfit:wght@400;600;800&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Space+Grotesk:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;600;700&family=Karla:wght@400;700&display=swap" rel="stylesheet">
+		<!-- Données structurées schema.org (sérialisation sûre, voir lib/jsonld.ts) -->
+		{jsonLdScripts.map((ld) => <script type="application/ld+json" set:html={ld} />)}
 	</head>
 	<body>
 		{(pages.length > 1 || otherLocales.length > 0) && (
-			<nav class="site-nav">
+			<nav class="site-nav" aria-label="Navigation principale">
 				{pages.map((p) => (
-					<a href={pageHref(p.slug)} class={p.slug === currentSlug ? 'active' : ''}>{p.title}</a>
+					<a
+						href={pageHref(p.slug)}
+						class={p.slug === currentSlug ? 'active' : undefined}
+						aria-current={p.slug === currentSlug ? 'page' : undefined}
+					>{p.title}</a>
 				))}
 				{otherLocales.length > 0 && (
 					<span class="lang-switch">
-						<span class="lang-current" aria-current="true">{LOCALE_LABELS[pageLocale] || pageLocale}</span>
+						<span class="lang-current" aria-current="true">{LOCALE_LABELS[pageLocale as keyof typeof LOCALE_LABELS] || pageLocale}</span>
 						{otherLocales.map((l) => (
-							<a href={localePath(l, 'home')} hreflang={l} lang={l}>{LOCALE_LABELS[l] || l}</a>
+							<a href={withBase(localePath(l, 'home'))} hreflang={l} lang={l}>{LOCALE_LABELS[l as keyof typeof LOCALE_LABELS] || l}</a>
 						))}
 					</span>
 				)}

@@ -1,33 +1,42 @@
 ---
+import { safeHttpUrl } from '../../lib/url';
+
 interface ProductItem {
-  name: string;
-  price: string;
-  image: string;
+  name?: string;
+  price?: string;
+  image?: string;
 }
 
 interface Props {
   data: {
-    title: string;
-    products: ProductItem[];
+    title?: string;
+    products?: ProductItem[];
   };
+  /** Cible du bouton selon son libellé (ancre du formulaire de la page) ; sans cible, pas de bouton. */
+  ctaTarget?: (label?: string) => string | null;
 }
 
-const { data } = Astro.props;
+const { data, ctaTarget } = Astro.props;
+// Pas de lien d'achat côté CMS : « Commander » mène au formulaire de la page.
+const ctaHref = ctaTarget ? ctaTarget('Commander') : null;
+const products = (data.products || []).filter(Boolean).map((p) => ({ ...p, image: safeHttpUrl(p.image) }));
 ---
 
 <section class="products-section">
   <div class="container">
-    <h2>{data.title}</h2>
+    {data.title && <h2 class="section-title">{data.title}</h2>}
     <div class="products-grid">
-      {data.products && data.products.map((product) => (
+      {products.map((product) => (
         <div class="product-card">
           <div class="product-image-container">
-            <img src={product.image} alt={product.name} loading="lazy" />
+            {product.image && <img src={product.image} alt={product.name || ''} loading="lazy" decoding="async" />}
           </div>
           <div class="product-info">
-            <h3>{product.name}</h3>
-            <span class="price">{product.price}</span>
-            <button class="buy-button">Acheter</button>
+            {product.name && <h3>{product.name}</h3>}
+            {product.price && <span class="price">{product.price}</span>}
+            {ctaHref && (
+              <a class="buy-button" href={ctaHref} aria-label={product.name ? `Commander « ${product.name} »` : undefined}>Commander</a>
+            )}
           </div>
         </div>
       ))}
@@ -47,24 +56,6 @@ const { data } = Astro.props;
     text-align: center;
   }
 
-  .products-section h2 {
-    font-size: 2.5rem;
-    margin-bottom: 50px;
-    position: relative;
-    padding-bottom: 15px;
-  }
-
-  .products-section h2::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 60px;
-    height: 4px;
-    background-color: var(--color-primary);
-    border-radius: 2px;
-  }
 
   .products-grid {
     display: grid;
@@ -128,6 +119,8 @@ const { data } = Astro.props;
   }
 
   .buy-button {
+    display: block;
+    text-decoration: none;
     margin-top: auto;
     padding: 10px 20px;
     background-color: var(--color-primary);

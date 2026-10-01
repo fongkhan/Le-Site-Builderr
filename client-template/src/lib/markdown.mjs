@@ -12,22 +12,47 @@ function escapeHtml(s) {
     .replace(/'/g, '&#39;');
 }
 
-// Applique gras / italique / liens sur du texte DÉJÀ échappé.
+// Gras **texte** : un caractère non blanc juste après l'ouverture et juste avant la
+// fermeture (« 5 ** 2 » n'est pas du gras). Le contenu peut contenir de l'italique
+// (*…*) ; la fermeture ne doit pas être suivie d'une 3e étoile (« ***x*** » → gras +
+// italique correctement imbriqués).
+const BOLD_RE = /\*\*(?=\S)([\s\S]+?)(?<=\S)\*\*(?!\*)/g;
+// Italique *texte* : mêmes contraintes de non-blanc, et pas au milieu d'un mot
+// (« 2*3*4 » reste tel quel). Traité après le gras.
+const ITALIC_RE = /(^|[^*\p{L}\p{N}])\*(?=[^\s*])([^*]*?[^\s*])\*(?![*\p{L}\p{N}])/gu;
+// Liens [texte](url) — uniquement http(s)/mailto (après échappement, « :// » est intact).
+const LINK_RE = /\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g;
+// Jeton de remplacement des liens (le caractère NUL est retiré de l'entrée).
+const TOKEN_RE = /\u0000(\d+)\u0000/g;
+
+// Balises <strong> équilibrées dans un fragment (évite un italique qui chevaucherait
+// un gras : « **a *b** c* » est laissé tel quel plutôt que mal imbriqué).
+function balancedStrong(fragment) {
+  return (fragment.match(/<strong>/g) || []).length === (fragment.match(/<\/strong>/g) || []).length;
+}
+
+// Gras puis italique sur du texte DÉJÀ échappé et sans lien.
+function emphasis(text) {
+  return text
+    .replace(BOLD_RE, '<strong>$1</strong>')
+    .replace(ITALIC_RE, (m, before, inner) => (balancedStrong(inner) ? `${before}<em>${inner}</em>` : m));
+}
+
+// Applique liens / gras / italique sur du texte DÉJÀ échappé. Les liens sont d'abord
+// remplacés par des jetons : leurs URLs ne sont jamais touchées par le gras/italique
+// (une « * » dans un href restait sinon transformée en <em>).
 function inline(escaped) {
-  let out = escaped;
-  // Liens [texte](url) — uniquement http(s)/mailto (après échappement, "://" est intact)
-  out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+)\)/g,
-    (_m, text, url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`);
-  // Gras **texte**
-  out = out.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  // Italique *texte* (traité après le gras)
-  out = out.replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, '$1<em>$2</em>');
-  return out;
+  const links = [];
+  const tokenized = escaped.replace(LINK_RE, (_m, text, url) => {
+    links.push(`<a href="${url}" target="_blank" rel="noopener noreferrer">${emphasis(text)}</a>`);
+    return `\u0000${links.length - 1}\u0000`;
+  });
+  return emphasis(tokenized).replace(TOKEN_RE, (_m, i) => links[Number(i)]);
 }
 
 export function markdownToHtml(md) {
   if (!md) return '';
-  const escaped = escapeHtml(String(md));
+  const escaped = escapeHtml(String(md).replace(/\u0000/g, ''));
   const lines = escaped.split(/\r?\n/);
   const html = [];
   let paragraph = [];

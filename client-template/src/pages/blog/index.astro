@@ -1,27 +1,33 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import { fetchNavPages, fetchPosts, buildNav, parseTags } from '../../lib/content';
+import { DEFAULT_LOCALE } from '../../lib/i18n.mjs';
+import { getSiteContent, parseTags } from '../../lib/content';
+import { formatDate, isoDate } from '../../lib/format';
+import { safeHttpUrl, withBase } from '../../lib/url';
 
-const pages = await fetchNavPages();
-const posts = await fetchPosts();
-const nav = buildNav(pages, posts);
-
-const fmtDate = (iso?: string | null) => {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? '' : d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
-};
+// Le blog n'est pas localisé : il est rattaché à la langue par défaut (menu de cette
+// langue, sélecteur vers les accueils des autres langues).
+const { posts, navByLocale, locales } = await getSiteContent();
+const nav = navByLocale[DEFAULT_LOCALE] || [];
+const cards = posts.map((post) => ({ ...post, cover: safeHttpUrl(post.coverImage), tagList: parseTags(post.tags) }));
 ---
 
-<Layout title="Actualités" description="Nos derniers articles et actualités." pages={nav} currentSlug="blog">
+<Layout
+  title="Actualités"
+  description="Nos derniers articles et actualités."
+  pages={nav}
+  currentSlug="blog"
+  locale={DEFAULT_LOCALE}
+  locales={locales}
+>
   <section class="blog-index">
     <div class="container">
       <h1>Actualités</h1>
-      {posts.length === 0 ? (
+      {cards.length === 0 ? (
         <p class="blog-empty">Aucun article pour le moment. Revenez bientôt !</p>
       ) : (
         <>
-          {posts.length > 2 && (
+          {cards.length > 2 && (
             <div class="blog-search">
               <label class="blog-search-label" for="blog-q">Rechercher un article</label>
               <input type="search" id="blog-q" class="blog-search-input" placeholder="Mot-clé, thème…" autocomplete="off" />
@@ -29,23 +35,23 @@ const fmtDate = (iso?: string | null) => {
             </div>
           )}
           <div class="blog-grid">
-            {posts.map((post) => (
+            {cards.map((post) => (
               <a
                 class="blog-card"
-                href={`/blog/${post.slug}/`}
-                data-search={`${post.title} ${post.excerpt || ''} ${parseTags(post.tags).join(' ')}`.toLowerCase()}
+                href={withBase(`/blog/${post.slug}/`)}
+                data-search={`${post.title} ${post.excerpt || ''} ${post.tagList.join(' ')}`.toLowerCase()}
               >
-                {post.coverImage && <img class="blog-cover" src={post.coverImage} alt={post.title} loading="lazy" />}
+                {post.cover && <img class="blog-cover" src={post.cover} alt="" loading="lazy" decoding="async" />}
                 <div class="blog-card-body">
-                  {post.publishedAt && <time class="blog-date">{fmtDate(post.publishedAt)}</time>}
+                  {formatDate(post.publishedAt) && <time class="blog-date" datetime={isoDate(post.publishedAt)}>{formatDate(post.publishedAt)}</time>}
                   <h2>{post.title}</h2>
-                  {parseTags(post.tags).length > 0 && (
+                  {post.tagList.length > 0 && (
                     <div class="blog-tags">
-                      {parseTags(post.tags).map((t) => <span class="blog-tag">{t}</span>)}
+                      {post.tagList.map((t) => <span class="blog-tag">{t}</span>)}
                     </div>
                   )}
                   {post.excerpt && <p class="blog-excerpt">{post.excerpt}</p>}
-                  <span class="blog-more">Lire l'article →</span>
+                  <span class="blog-more" aria-hidden="true">Lire l'article →</span>
                 </div>
               </a>
             ))}

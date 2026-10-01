@@ -31,7 +31,18 @@ function localesInPages(pages) {
   return LOCALES.filter((l) => present.has(l));
 }
 
+// Adresses réservées pour une page de la langue par défaut (servie à la racine) :
+// « blog » est la route du blog et chaque code de langue préfixe ses pages (/en/…).
+// Une page CMS à cette adresse serait masquée : ni générée, ni listée dans le sitemap.
+const RESERVED_ROOT_SLUGS = new Set(['blog', ...LOCALES.filter((l) => l !== DEFAULT_LOCALE)]);
+
+function isRoutablePage(locale, slug) {
+  return !(normalizeLocale(locale) === DEFAULT_LOCALE && RESERVED_ROOT_SLUGS.has(slug));
+}
+
 module.exports = {
+  RESERVED_ROOT_SLUGS,
+  isRoutablePage,
   LOCALES,
   DEFAULT_LOCALE,
   LOCALE_LABELS,
