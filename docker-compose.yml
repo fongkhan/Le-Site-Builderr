@@ -10,9 +10,11 @@ services:
     container_name: metabuilder-db
     environment:
       POSTGRES_DB: metabuilder_db
-      POSTGRES_PASSWORD: postgrespassword
+      # Surchargeable : POSTGRES_PASSWORD=... docker compose up -d (adapter DATABASE_URI)
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgrespassword}
     ports:
-      - '5432:5432'
+      # Exposée uniquement en local (jamais sur toutes les interfaces de la machine)
+      - '127.0.0.1:5432:5432'
     volumes:
       - metabuilder_pgdata:/var/lib/postgresql/data
     healthcheck:

@@ -1,5 +1,5 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { fetchBuildStatus } from '../api/sites';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { fetchBuildStatus } from '../api/deploy';
 import { useAuth } from '../auth/AuthContext';
 import type { BuildStatus } from '../types';
 
@@ -20,23 +20,48 @@ const IDLE_STATUS: BuildStatus = {
 const ACTIVE_MS = 2000;
 const IDLE_MS = 12000;
 
-const BuildStatusContext = createContext<BuildStatus>(IDLE_STATUS);
+interface BuildStatusContextValue {
+  status: BuildStatus;
+  /** Sonde immédiatement (ex. juste après avoir lancé un build) */
+  refresh: () => void;
+}
 
-// Un SEUL poller partagé pour toute l'app (avant : chaque consommateur créait son
-// propre setInterval 2s → N requêtes/2s). Backoff adaptatif + pause onglet caché.
+const BuildStatusContext = createContext<BuildStatusContextValue>({ status: IDLE_STATUS, refresh: () => {} });
+
+// Un SEUL poller partagé pour toute l'app. Une seule chaîne de requêtes à la fois :
+// un sondage demandé pendant une requête en vol est simplement relancé à sa fin
+// (jamais deux boucles concurrentes). Pause quand l'onglet est caché.
 export function BuildStatusProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [status, setStatus] = useState<BuildStatus>(IDLE_STATUS);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     if (!user) {
       setStatus(IDLE_STATUS);
+      pollRef.current = () => {};
       return;
     }
     let cancelled = false;
+    let inFlight = false;
+    let pending = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
-    const poll = async () => {
+    const schedule = (ms: number) => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(poll, ms);
+    };
+
+    async function poll() {
+      if (cancelled) return;
+      if (inFlight) {
+        pending = true;
+        return;
+      }
+      if (timer) clearTimeout(timer);
+      timer = null;
+      if (document.hidden) return; // reprise au retour sur l'onglet
+      inFlight = true;
       let next = IDLE_MS;
       try {
         const data = await fetchBuildStatus();
@@ -45,32 +70,45 @@ export function BuildStatusProvider({ children }: { children: ReactNode }) {
         next = data.inProgress || (data.queueLength ?? 0) > 0 ? ACTIVE_MS : IDLE_MS;
       } catch {
         // serveur indisponible / session expirée : garder le dernier état, re-tenter au rythme lent
+      } finally {
+        inFlight = false;
       }
-      if (!cancelled) timer.current = setTimeout(poll, next);
-    };
+      if (cancelled) return;
+      if (pending) {
+        pending = false;
+        poll();
+      } else {
+        schedule(next);
+      }
+    }
 
-    // Reprise immédiate au retour sur l'onglet (le polling ne s'arrête pas mais on
-    // rafraîchit sans attendre le prochain tick).
     const onVisible = () => {
-      if (document.hidden || cancelled) return;
-      if (timer.current) clearTimeout(timer.current);
-      poll();
+      if (!document.hidden) poll();
     };
 
+    pollRef.current = poll;
     poll();
     document.addEventListener('visibilitychange', onVisible);
     return () => {
       cancelled = true;
-      if (timer.current) clearTimeout(timer.current);
+      if (timer) clearTimeout(timer);
+      pollRef.current = () => {};
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [user]);
 
-  return <BuildStatusContext.Provider value={status}>{children}</BuildStatusContext.Provider>;
+  const refresh = useCallback(() => pollRef.current(), []);
+  const value = useMemo(() => ({ status, refresh }), [status, refresh]);
+  return <BuildStatusContext.Provider value={value}>{children}</BuildStatusContext.Provider>;
 }
 
-// Signature inchangée : renvoie le BuildStatus courant partagé.
+// Renvoie le BuildStatus courant partagé.
 // eslint-disable-next-line react-refresh/only-export-components
 export function useBuildStatus(): BuildStatus {
-  return useContext(BuildStatusContext);
+  return useContext(BuildStatusContext).status;
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function useRefreshBuildStatus(): () => void {
+  return useContext(BuildStatusContext).refresh;
 }

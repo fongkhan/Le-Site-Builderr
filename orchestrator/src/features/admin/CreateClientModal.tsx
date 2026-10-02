@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { createClient } from '../../api/users';
+import { errorMessage } from '../../api/client';
 import { Modal } from '../../components/ui/Modal';
 import { useToast } from '../../components/ui/ToastContext';
 import type { Site } from '../../types';
@@ -29,8 +30,8 @@ export function CreateClientModal({ sites, onClose, onCreated }: { sites: Site[]
     }
     let aiDailyQuota: number | null = null;
     if (quotaEnabled) {
-      const n = Number.parseInt(quota, 10);
-      if (!Number.isFinite(n) || n < 0) {
+      const n = Number(quota.trim());
+      if (quota.trim() === '' || !Number.isInteger(n) || n < 0) {
         toast.error('Le quota IA doit être un entier positif ou nul.');
         return;
       }
@@ -43,7 +44,7 @@ export function CreateClientModal({ sites, onClose, onCreated }: { sites: Site[]
       onCreated();
       onClose();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Échec de la création du compte.');
+      toast.error(errorMessage(err, 'Échec de la création du compte.'));
     } finally {
       setSaving(false);
     }

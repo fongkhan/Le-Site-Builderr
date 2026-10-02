@@ -1,4 +1,6 @@
 ---
+import { safeHttpUrl, safeMailto, safeTel } from '../../lib/url';
+
 interface Props {
   data: {
     title?: string;
@@ -12,41 +14,26 @@ interface Props {
 
 const { data } = Astro.props;
 
-// Lien fiche Google : uniquement en https (une URL invalide est simplement ignorée)
-const gbUrl = (data.googleBusinessUrl || '').trim();
-const googleUrl = /^https:\/\/\S+$/i.test(gbUrl) ? gbUrl : '';
+// Liens construits depuis des saisies du client : fiche Google en http(s) uniquement,
+// téléphone réduit aux chiffres, email plausible. Une valeur refusée est affichée
+// sans lien (ou ignorée pour la fiche Google).
+const googleUrl = safeHttpUrl(data.googleBusinessUrl, { relative: false });
+const telHref = safeTel(data.phone);
+const mailHref = safeMailto(data.email);
 
-// Données structurées LocalBusiness (schema.org) : renforce le référencement local
-// (nom, adresse, téléphone, horaires) — les infos que Google met en avant pour un
-// commerce de proximité. Sérialisation sûre (échappe « < »).
-const siteName = process.env.PUBLIC_SITE_NAME || '';
-const siteUrl = process.env.PUBLIC_SITE_URL || '';
-const businessLd = (siteName && (data.address || data.phone || data.email))
-  ? JSON.stringify({
-      '@context': 'https://schema.org',
-      '@type': 'LocalBusiness',
-      name: siteName,
-      ...(siteUrl ? { url: siteUrl } : {}),
-      ...(data.address ? { address: data.address } : {}),
-      ...(data.phone ? { telephone: data.phone } : {}),
-      ...(data.email ? { email: data.email } : {}),
-      ...(data.hours ? { openingHours: data.hours.split('\n').map((l) => l.trim()).filter(Boolean) } : {}),
-      ...(googleUrl ? { sameAs: [googleUrl] } : {}),
-    }).replace(/</g, '\\u003c')
-  : null;
+// Les données structurées LocalBusiness sont émises une seule fois par la page
+// (premier bloc Infos, @id stable : voir lib/jsonld.ts) et non par chaque bloc.
 ---
-
-{businessLd && <script type="application/ld+json" set:html={businessLd} />}
 
 <section class="info-section">
   <div class="container">
     <h2>{data.title || 'Infos pratiques'}</h2>
     <div class="info-card">
-      {data.address && <div class="info-row"><span class="info-icon">📍</span><span>{data.address}</span></div>}
-      {data.phone && <div class="info-row"><span class="info-icon">📞</span><a href={`tel:${data.phone.replace(/\s/g, '')}`}>{data.phone}</a></div>}
-      {data.email && <div class="info-row"><span class="info-icon">✉️</span><a href={`mailto:${data.email}`}>{data.email}</a></div>}
-      {data.hours && <div class="info-row"><span class="info-icon">🕒</span><span class="info-hours">{data.hours}</span></div>}
-      {googleUrl && <div class="info-row"><span class="info-icon">⭐</span><a href={googleUrl} target="_blank" rel="noopener noreferrer">Voir notre fiche Google</a></div>}
+      {data.address && <div class="info-row"><span class="info-icon" aria-hidden="true">📍</span><span class="info-multiline">{data.address}</span></div>}
+      {data.phone && <div class="info-row"><span class="info-icon" aria-hidden="true">📞</span>{telHref ? <a href={telHref}>{data.phone}</a> : <span>{data.phone}</span>}</div>}
+      {data.email && <div class="info-row"><span class="info-icon" aria-hidden="true">✉️</span>{mailHref ? <a href={mailHref}>{data.email}</a> : <span>{data.email}</span>}</div>}
+      {data.hours && <div class="info-row"><span class="info-icon" aria-hidden="true">🕒</span><span class="info-hours">{data.hours}</span></div>}
+      {googleUrl && <div class="info-row"><span class="info-icon" aria-hidden="true">⭐</span><a href={googleUrl} target="_blank" rel="noopener noreferrer">Voir notre fiche Google</a></div>}
     </div>
   </div>
 </section>
@@ -90,7 +77,8 @@ const businessLd = (siteName && (data.address || data.phone || data.email))
     flex-shrink: 0;
   }
 
-  .info-hours {
+  .info-hours,
+  .info-multiline {
     white-space: pre-line;
   }
 

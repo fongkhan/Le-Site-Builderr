@@ -1,27 +1,39 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { useSites } from '../../state/SitesContext';
 import { useAuth } from '../../auth/AuthContext';
-import { fetchConfig } from '../../api/sites';
+import { useConfig } from '../../state/ConfigContext';
+import { publishedSiteUrl } from '../../lib/siteUrls';
 import { Spinner } from '../../components/ui/Spinner';
 import { EmptyState } from '../../components/ui/EmptyState';
-import type { Site, PlanInfo } from '../../types';
+import type { HostingMode, Site } from '../../types';
 
 export function SitesListPage() {
-  const { sites, loading } = useSites();
+  const { sites, loading, error, refresh } = useSites();
   const { isAdmin } = useAuth();
+  const { config } = useConfig();
   const [query, setQuery] = useState('');
-  const [plan, setPlan] = useState<PlanInfo | null>(null);
-
   // Offre du compte (null pour un admin : aucune limite)
-  useEffect(() => {
-    fetchConfig().then((c) => setPlan(c.plan ?? null)).catch(() => setPlan(null));
-  }, []);
+  const plan = config?.plan ?? null;
 
   if (loading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', padding: 60 }}>
         <Spinner label="Chargement de vos sites…" />
+      </div>
+    );
+  }
+
+  // Échec de chargement : ne pas le confondre avec « aucun site » (pas de redirection)
+  if (error && sites.length === 0) {
+    return (
+      <div className="glass-panel animate-slide" style={{ maxWidth: 640, margin: '40px auto' }}>
+        <EmptyState
+          icon="⚠️"
+          title="Impossible de charger vos sites"
+          description={error}
+          action={<button className="btn btn-primary" onClick={() => refresh()}>Réessayer</button>}
+        />
       </div>
     );
   }
@@ -64,6 +76,7 @@ export function SitesListPage() {
               className="input-text"
               style={{ padding: '9px 12px', fontSize: '0.9rem', minWidth: 200 }}
               placeholder="🔍 Rechercher…"
+              aria-label="Rechercher un site"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
@@ -100,7 +113,7 @@ export function SitesListPage() {
         return (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 20 }}>
             {filtered.map((site) => (
-              <SiteCard key={site.slug} site={site} />
+              <SiteCard key={site.slug} site={site} hostingMode={config?.hostingMode} />
             ))}
           </div>
         );
@@ -115,7 +128,7 @@ const STATUS_LABELS: Record<string, { label: string; color: string }> = {
   draft: { label: 'Brouillon — jamais déployé', color: 'var(--amber-400)' },
 };
 
-function SiteCard({ site }: { site: Site }) {
+function SiteCard({ site, hostingMode }: { site: Site; hostingMode: HostingMode | undefined }) {
   const status = STATUS_LABELS[site.status] ?? STATUS_LABELS.draft;
   const deployed = site.status === 'active';
 
@@ -135,11 +148,11 @@ function SiteCard({ site }: { site: Site }) {
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginTop: 'auto', flexWrap: 'wrap' }}>
-        <Link to={`/sites/${site.slug}/design`} className="btn btn-primary" style={{ textDecoration: 'none', flex: 1, justifyContent: 'center', padding: '9px 12px', fontSize: '0.85rem' }}>
+        <Link to={`/sites/${encodeURIComponent(site.slug)}/design`} className="btn btn-primary" style={{ textDecoration: 'none', flex: 1, justifyContent: 'center', padding: '9px 12px', fontSize: '0.85rem' }}>
           Gérer le site →
         </Link>
         {deployed && (
-          <a href={`/preview/${site.slug}/index.html`} target="_blank" rel="noreferrer" className="btn btn-secondary" style={{ textDecoration: 'none', padding: '9px 12px', fontSize: '0.85rem' }}>
+          <a href={publishedSiteUrl(site, hostingMode)} target="_blank" rel="noreferrer" className="btn btn-secondary" style={{ textDecoration: 'none', padding: '9px 12px', fontSize: '0.85rem' }}>
             Voir en ligne ↗
           </a>
         )}

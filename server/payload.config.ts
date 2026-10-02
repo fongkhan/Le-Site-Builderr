@@ -19,52 +19,41 @@ if (!process.env.PAYLOAD_SECRET || process.env.PAYLOAD_SECRET.length < 16) {
 const dbUri = process.env.DATABASE_URI
 
 // Access Control Helpers
-const isAdmin = ({ req: { user } }: any) => {
-  return Boolean(user && user.roles && user.roles.includes('admin'))
-}
+const userIsAdmin = (user: any) => Boolean(user && user.roles && user.roles.includes('admin'))
+
+// Identifiants des sites rattachés à un compte (relation peuplée ou non)
+const siteIdsOf = (user: any): Array<string | number> =>
+  (user?.sites || []).map((s: any) => (typeof s === 'object' && s !== null ? s.id : s))
+
+const isAdmin = ({ req: { user } }: any) => userIsAdmin(user)
 
 const isAdminOrSiteClient: Access = ({ req: { user } }) => {
   if (!user) return false
-  if (user.roles && user.roles.includes('admin')) return true
-  if (user.sites && user.sites.length > 0) {
-    const siteIds = user.sites.map((s: any) => typeof s === 'object' && s !== null ? s.id : s)
-    return {
-      site: {
-        in: siteIds,
-      },
-    }
-  }
-  return false
+  if (userIsAdmin(user)) return true
+  const siteIds = siteIdsOf(user)
+  return siteIds.length > 0 ? { site: { in: siteIds } } : false
 }
 
 const isAdminOrOwnSite: Access = ({ req: { user } }) => {
   if (!user) return false
-  if (user.roles && user.roles.includes('admin')) return true
-  if (user.sites && user.sites.length > 0) {
-    const siteIds = user.sites.map((s: any) => typeof s === 'object' && s !== null ? s.id : s)
-    return {
-      id: {
-        in: siteIds,
-      },
-    }
-  }
-  return false
+  if (userIsAdmin(user)) return true
+  const siteIds = siteIdsOf(user)
+  return siteIds.length > 0 ? { id: { in: siteIds } } : false
 }
 
-const canCreatePage: Access = ({ req: { user, data } }: any) => {
+// Création d'un document rattaché à un site (page, article, thème, média) : admin, ou
+// client propriétaire du site cible.
+const canCreateForOwnSite: Access = ({ req: { user, data } }: any) => {
   if (!user) return false
-  if (user.roles && user.roles.includes('admin')) return true
-  if (user.sites && user.sites.length > 0 && data && data.site) {
-    const siteIds = user.sites.map((s: any) => typeof s === 'object' && s !== null ? s.id : s)
-    return siteIds.includes(Number(data.site))
-  }
-  return false
+  if (userIsAdmin(user)) return true
+  if (!data || !data.site) return false
+  return siteIdsOf(user).map(Number).includes(Number(data.site))
 }
 
 // Un admin accède à tous les comptes, un client uniquement au sien
 const isAdminOrSelf: Access = ({ req: { user } }) => {
   if (!user) return false
-  if (user.roles && user.roles.includes('admin')) return true
+  if (userIsAdmin(user)) return true
   return {
     id: {
       equals: user.id,
@@ -72,15 +61,17 @@ const isAdminOrSelf: Access = ({ req: { user } }) => {
   }
 }
 
-const canCreateTheme: Access = ({ req: { user, data } }: any) => {
-  if (!user) return false
-  if (user.roles && user.roles.includes('admin')) return true
-  if (user.sites && user.sites.length > 0 && data && data.site) {
-    const siteIds = user.sites.map((s: any) => typeof s === 'object' && s !== null ? s.id : s)
-    return siteIds.includes(Number(data.site))
-  }
-  return false
-}
+// Relation « site » d'un document de contenu. Seul un admin peut la modifier après
+// création : sinon un client pourrait déplacer un de ses documents vers le site d'un
+// autre client (injection de contenu chez un tiers).
+const siteRelationField = (extra: Record<string, unknown> = {}): any => ({
+  name: 'site',
+  type: 'relationship',
+  relationTo: 'payload_sites',
+  required: true,
+  access: { update: isAdmin },
+  ...extra,
+})
 
 const frontendOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:5173')
   .split(',')
@@ -246,7 +237,9 @@ export default buildConfig({
       },
       access: {
         read: isAdminOrOwnSite,
-        update: isAdminOrOwnSite,
+        // Écriture réservée aux admins : chemins (documentRoot), domaine, statut et mesure
+        // d'audience pilotent le déploiement. Les clients passent par les endpoints Express.
+        update: isAdmin,
         create: isAdmin,
         delete: isAdmin,
       },
@@ -351,7 +344,7 @@ export default buildConfig({
       },
       access: {
         read: isAdminOrSiteClient,
-        create: canCreatePage,
+        create: canCreateForOwnSite,
         update: isAdminOrSiteClient,
         delete: isAdminOrSiteClient,
       },
@@ -387,12 +380,7 @@ export default buildConfig({
           name: 'metaDescription',
           type: 'textarea',
         },
-        {
-          name: 'site',
-          type: 'relationship',
-          relationTo: 'payload_sites',
-          required: true,
-        },
+        siteRelationField(),
         {
           name: 'layout',
           type: 'blocks',
@@ -569,7 +557,7 @@ export default buildConfig({
       admin: { useAsTitle: 'title' },
       access: {
         read: isAdminOrSiteClient,
-        create: canCreatePage,
+        create: canCreateForOwnSite,
         update: isAdminOrSiteClient,
         delete: isAdminOrSiteClient,
       },
@@ -590,30 +578,19 @@ export default buildConfig({
           ],
           defaultValue: 'draft',
         },
-        {
-          name: 'site',
-          type: 'relationship',
-          relationTo: 'payload_sites',
-          required: true,
-        },
+        siteRelationField(),
       ],
     },
     {
       slug: 'themes',
       access: {
         read: isAdminOrSiteClient,
-        create: canCreateTheme,
+        create: canCreateForOwnSite,
         update: isAdminOrSiteClient,
         delete: isAdminOrSiteClient,
       },
       fields: [
-        {
-          name: 'site',
-          type: 'relationship',
-          relationTo: 'payload_sites',
-          required: true,
-          unique: true,
-        },
+        siteRelationField({ unique: true }),
         {
           name: 'colors',
           type: 'group',
@@ -674,18 +651,12 @@ export default buildConfig({
       },
       access: {
         read: isAdminOrSiteClient,
-        create: canCreatePage, // même règle que les pages : admin, ou client propriétaire du site cible
+        create: canCreateForOwnSite,
         update: isAdminOrSiteClient,
         delete: isAdminOrSiteClient,
       },
       fields: [
-        {
-          name: 'site',
-          type: 'relationship',
-          relationTo: 'payload_sites',
-          required: true,
-          index: true,
-        },
+        siteRelationField({ index: true }),
       ],
     },
     {

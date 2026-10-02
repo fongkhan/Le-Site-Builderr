@@ -1,19 +1,14 @@
-import { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
-import { useBuildStatus } from '../../hooks/useBuildStatus';
-import { fetchConfig } from '../../api/sites';
+import { useBuildStatus } from '../../state/BuildStatusContext';
+import { useConfig } from '../../state/ConfigContext';
 import { SparklesIcon, CPanelIcon, BlocksIcon } from '../ui/Icons';
 
 export function AppLayout() {
   const { user, isAdmin, logout } = useAuth();
   const navigate = useNavigate();
   const buildStatus = useBuildStatus();
-  const [devNoAuth, setDevNoAuth] = useState(false);
-
-  useEffect(() => {
-    fetchConfig().then((c) => setDevNoAuth(Boolean(c.devNoAuth))).catch(() => {});
-  }, []);
+  const devNoAuth = Boolean(useConfig().config?.devNoAuth);
 
   const handleLogout = async () => {
     await logout();

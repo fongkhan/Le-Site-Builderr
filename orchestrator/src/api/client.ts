@@ -15,12 +15,14 @@ export function setUnauthorizedHandler(handler: (() => void) | null) {
   onUnauthorized = handler;
 }
 
+// Un corps texte est du JSON ; FormData et Blob gardent leur propre Content-Type
+// (multipart, zip…) fixé par le navigateur ou par options.headers.
 export async function apiFetch<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
   const res = await fetch(path, {
     credentials: 'include',
     ...options,
     headers: {
-      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(typeof options.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
       ...(options.headers || {}),
     },
   });
@@ -44,4 +46,14 @@ export async function apiFetch<T = unknown>(path: string, options: RequestInit =
 
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
+}
+
+// Chemin d'API d'un site : le slug et chaque segment sont toujours encodés.
+export function sitePath(slug: string, ...segments: string[]): string {
+  return ['/api/sites', slug, ...segments].map((part, i) => (i === 0 ? part : encodeURIComponent(part))).join('/');
+}
+
+// Message lisible d'une erreur quelconque (ApiError, Error, autre).
+export function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback;
 }

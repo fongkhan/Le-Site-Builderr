@@ -41,3 +41,12 @@ test('collectMediaFilenames — neutralise les traversées de chemin et l’enco
     assert.ok(!n.includes('/') && !n.includes('..'), `nom non confiné : ${n}`);
   }
 });
+
+test('rewriteMediaUrls — préfixe de publication sous un sous-chemin', async () => {
+  const { rewriteMediaUrls, mediaPrefixFor } = require('../../lib/media.js');
+  assert.equal(mediaPrefixFor('/'), '/media/');
+  assert.equal(mediaPrefixFor('/preview/mon-site'), '/preview/mon-site/media/');
+  assert.equal(mediaPrefixFor('/preview/mon-site/'), '/preview/mon-site/media/');
+  const out = rewriteMediaUrls({ a: ['/api/media/file/x.png'] }, mediaPrefixFor('/draft/s'));
+  assert.deepEqual(out, { a: ['/draft/s/media/x.png'] });
+});

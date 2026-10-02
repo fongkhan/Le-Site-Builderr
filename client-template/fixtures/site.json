@@ -1,0 +1,205 @@
+{
+  "_comment": "Contenu de test du template (TEMPLATE_FIXTURE). Même forme que le canal interne /internal/site-pages et /internal/site-posts. Couvre les 11 types de blocs, 2 langues, des articles (dont un brouillon, ignoré) et des saisies hostiles (javascript:, CSS) qui doivent être neutralisées.",
+  "pages": {
+    "docs": [
+      {
+        "title": "Accueil",
+        "slug": "home",
+        "locale": "fr",
+        "metaTitle": "Atelier Démo — Céramique artisanale à Lyon",
+        "metaDescription": "Pièces uniques, cours de tournage et commandes sur mesure.",
+        "layout": [
+          {
+            "blockType": "hero",
+            "title": "Atelier Démo",
+            "subtitle": "Céramiques tournées à la main, cuites sur place.",
+            "ctaText": "Nous écrire",
+            "backgroundImage": "https://images.unsplash.com/photo-1565193566173-7a0ee3dbe261?auto=format&fit=crop&q=80&w=1200"
+          },
+          {
+            "blockType": "features",
+            "title": "Pourquoi nous choisir ?",
+            "items": [
+              { "title": "Fait main", "description": "Chaque pièce est tournée et émaillée à l'atelier." },
+              { "title": "Terres locales", "description": "Grès et porcelaine de fournisseurs de la région." },
+              { "title": "Sur mesure", "description": "Services de table, vasques, luminaires : parlons de votre projet." }
+            ]
+          },
+          {
+            "blockType": "product-grid",
+            "title": "Pièces en vedette",
+            "products": [
+              { "name": "Bol « Brume »", "price": "28 €", "image": "https://images.unsplash.com/photo-1578749556568-bc2c40e68b61?auto=format&fit=crop&q=80&w=400" },
+              { "name": "Tasse expresso", "price": "18 €", "image": "/api/media/file/tasse.jpg" },
+              { "name": "Vase (image refusée)", "price": "45 €", "image": "javascript:alert('produit')" }
+            ]
+          },
+          {
+            "blockType": "gallery",
+            "title": "L'atelier en images",
+            "images": [
+              "https://images.unsplash.com/photo-1493106641515-6b5631de4bb9?auto=format&fit=crop&q=80&w=600",
+              { "url": "https://images.unsplash.com/photo-1610701596007-11502861dcfa?auto=format&fit=crop&q=80&w=600" },
+              "/api/media/file/four.jpg",
+              "javascript:alert('galerie')"
+            ]
+          },
+          {
+            "blockType": "testimonials",
+            "title": "Ils nous font confiance",
+            "testimonials": [
+              { "quote": "Un service de table magnifique.\nLivré dans les temps, emballage soigné.", "author": "Camille R.", "role": "Restauratrice", "avatar": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=150", "rating": 5 },
+              { "quote": "Le cours d'initiation était passionnant.", "author": "Hugo P.", "role": "Élève", "avatar": "javascript:alert('avatar')", "rating": 4 }
+            ]
+          },
+          {
+            "blockType": "faq",
+            "title": "Questions fréquentes",
+            "items": [
+              { "question": "Proposez-vous des cours ?", "answer": "Oui : initiation le samedi matin.\nPerfectionnement le mercredi soir." },
+              { "question": "Les pièces passent-elles au lave-vaisselle ?", "answer": "Oui, sauf les pièces à décor or </script><script>alert('faq')</script>." }
+            ]
+          },
+          {
+            "blockType": "pricing",
+            "title": "Cours de tournage",
+            "plans": [
+              { "name": "Initiation", "price": "45 €", "description": "Une matinée pour découvrir le tour.", "features": [{ "feature": "3 h de cours" }, { "feature": "Terre et cuisson incluses" }], "ctaText": "Réserver une séance", "isPopular": false },
+              { "name": "Trimestre", "price": "390 €", "description": "Pour progresser à son rythme.", "features": [{ "feature": "10 séances" }, { "feature": "Accès libre à l'atelier" }, { "feature": "Émaux à volonté" }], "ctaText": "Nous contacter", "isPopular": true }
+            ]
+          },
+          {
+            "blockType": "contact",
+            "title": "Contactez-nous",
+            "subtitle": "Une commande sur mesure ? Écrivez-nous.",
+            "ctaText": "Envoyer"
+          },
+          {
+            "blockType": "appointment",
+            "title": "Prendre rendez-vous",
+            "subtitle": "Visite de l'atelier ou cours d'essai.",
+            "ctaText": "Demander un créneau",
+            "services": [{ "name": "Visite de l'atelier" }, { "name": "Cours d'essai" }]
+          },
+          {
+            "blockType": "info",
+            "title": "Infos pratiques",
+            "address": "12 rue des Potiers\n69001 Lyon",
+            "phone": "04 78 00 00 00",
+            "email": "bonjour@atelier-demo.example",
+            "hours": "Mar–Ven : 10h–18h\nSam : 9h–13h",
+            "googleBusinessUrl": "https://g.page/atelier-demo"
+          },
+          {
+            "blockType": "footer",
+            "text": "© Atelier Démo — Céramique artisanale",
+            "socials": {
+              "facebook": "https://www.facebook.com/atelier-demo",
+              "instagram": "www.instagram.com/atelier-demo",
+              "linkedin": "javascript:alert('linkedin')",
+              "x": "JaVaScRiPt:alert('x')"
+            }
+          }
+        ]
+      },
+      {
+        "title": "Cours",
+        "slug": "cours",
+        "locale": "fr",
+        "metaDescription": "Nos cours de tournage pour tous niveaux.",
+        "layout": [
+          {
+            "blockType": "hero",
+            "title": "Cours de tournage",
+            "subtitle": "Image de fond hostile : doit rester confinée dans url(\"…\").",
+            "ctaText": "Réserver un cours",
+            "backgroundImage": "https://images.example.com/fond.jpg?x=\");background:url(javascript:alert(1));color:red;--a:(\""
+          },
+          {
+            "blockType": "pricing",
+            "title": "Formules",
+            "plans": [
+              { "name": "Séance", "price": "45 €", "description": "Sans engagement.", "features": [{ "feature": "3 h" }], "ctaText": "Réserver", "isPopular": false },
+              { "name": "Sans bouton", "price": "0 €", "description": "Pas de libellé : pas de bouton.", "features": [], "ctaText": "", "isPopular": false }
+            ]
+          },
+          {
+            "blockType": "faq",
+            "title": "À savoir",
+            "items": [{ "question": "Faut-il apporter quelque chose ?", "answer": "Juste un tablier !" }]
+          },
+          { "blockType": "carrousel-3d", "title": "Bloc pas encore supporté par le template" },
+          { "blockType": "footer", "text": "© Atelier Démo" }
+        ]
+      },
+      {
+        "title": "Page en collision",
+        "slug": "blog",
+        "locale": "fr",
+        "layout": [{ "blockType": "hero", "title": "Ne doit jamais être générée (adresse réservée au blog)" }]
+      },
+      {
+        "title": "Home",
+        "slug": "home",
+        "locale": "en",
+        "metaTitle": "Atelier Démo — Handmade ceramics in Lyon",
+        "metaDescription": "Unique pieces, wheel-throwing classes and custom orders.",
+        "layout": [
+          { "blockType": "hero", "title": "Atelier Démo", "subtitle": "Hand-thrown ceramics, fired on site.", "ctaText": "Contact us" },
+          {
+            "blockType": "features",
+            "title": "Why us?",
+            "items": [
+              { "title": "Handmade", "description": "Every piece is thrown and glazed in our workshop." },
+              { "title": "Local clay", "description": "Stoneware and porcelain from regional suppliers." }
+            ]
+          },
+          { "blockType": "contact", "title": "Get in touch", "subtitle": "We usually answer within a day.", "ctaText": "Send" },
+          { "blockType": "info", "title": "Visit us", "address": "12 rue des Potiers, 69001 Lyon", "phone": "+33 4 78 00 00 00", "email": "hello@atelier-demo.example" },
+          { "blockType": "footer", "text": "© Atelier Démo", "socials": { "instagram": "https://www.instagram.com/atelier-demo" } }
+        ]
+      },
+      {
+        "title": "About",
+        "slug": "about",
+        "locale": "en",
+        "layout": [
+          { "blockType": "hero", "title": "About the workshop", "ctaText": "Get in touch" },
+          { "blockType": "gallery", "title": "", "images": ["https://images.unsplash.com/photo-1493106641515-6b5631de4bb9?auto=format&fit=crop&q=80&w=600"] },
+          { "blockType": "footer", "text": "© Atelier Démo" }
+        ]
+      }
+    ]
+  },
+  "posts": {
+    "docs": [
+      {
+        "title": "Ouverture de l'atelier",
+        "slug": "ouverture-atelier",
+        "excerpt": "Après six mois de travaux, l'atelier ouvre ses portes au public.",
+        "coverImage": "/api/media/file/atelier.jpg",
+        "tags": "atelier, nouveauté, Atelier",
+        "publishedAt": "2026-09-15T08:00:00.000Z",
+        "status": "published",
+        "body": "# Bienvenue !\n\nL'atelier ouvre **enfin** ses portes. Venez découvrir **nos pièces *uniques* et nos fours**.\n\n## Au programme\n\n- Démonstrations de tournage\n- Atelier *émaillage* pour les enfants\n- [Plan d'accès](https://maps.example.com/atelier?q=a*b*c&zoom=15)\n\nUn lien hostile reste du texte : [clic](javascript:alert(1)). Et 5 * 3 * 2 = 30.\n\nÉcrivez-nous : [bonjour@atelier-demo.example](mailto:bonjour@atelier-demo.example)"
+      },
+      {
+        "title": "Entretenir ses céramiques",
+        "slug": "entretien-ceramiques",
+        "excerpt": "Nos conseils pour garder vos pièces intactes.",
+        "tags": "conseils",
+        "publishedAt": "2026-08-01T08:00:00.000Z",
+        "status": "published",
+        "body": "Lavez à l'eau tiède et évitez les chocs thermiques."
+      },
+      {
+        "title": "Brouillon de Noël",
+        "slug": "brouillon-noel",
+        "excerpt": "Ne doit pas être publié.",
+        "publishedAt": null,
+        "status": "draft",
+        "body": "Brouillon."
+      }
+    ]
+  }
+}

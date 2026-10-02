@@ -1,10 +1,27 @@
-const dotenv = require('dotenv');
-dotenv.config();
+// Fournisseurs d'IA (OpenAI, Anthropic, Gemini) : onboarding d'un site complet et
+// assistant de rédaction du CMS. Un seul point d'appel réseau (délai maximal, erreurs
+// homogènes) et une seule construction de message par fournisseur.
+const { HEADING_FONTS, BODY_FONTS, validateTheme } = require('./lib/theme');
 
-// Helper to clean markdown codeblocks from JSON response
+const AI_TIMEOUT_MS = Number.parseInt(process.env.AI_TIMEOUT_MS ?? '', 10) || 90 * 1000;
+
+// Modèles surchargeables par variable d'environnement.
+const PROVIDERS = {
+  openai: { label: 'OpenAI', keyEnv: 'OPENAI_API_KEY', model: () => process.env.OPENAI_MODEL || 'gpt-4o-mini' },
+  anthropic: { label: 'Anthropic', keyEnv: 'ANTHROPIC_API_KEY', model: () => process.env.ANTHROPIC_MODEL || 'claude-opus-5-5' },
+  gemini: { label: 'Gemini', keyEnv: 'GEMINI_API_KEY', model: () => process.env.GEMINI_MODEL || 'gemini-2.5-flash' },
+};
+
+// Blocs que le template sait afficher (les autres sont écartés de la sortie IA).
+const KNOWN_BLOCK_TYPES = new Set(['hero', 'features', 'product-grid', 'gallery', 'testimonials', 'faq', 'pricing', 'contact', 'appointment', 'info', 'footer']);
+
+// Image d'inspiration acceptée : formats web courants, ~6 Mo de base64 au plus.
+const IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
+const MAX_IMAGE_BASE64_LENGTH = 8 * 1024 * 1024;
+
+// Extrait l'objet JSON d'une réponse (blocs ```json éventuels, texte autour).
 function cleanAndParseJSON(text) {
-  let cleanText = text.trim();
-  // Remove markdown code blocks if present
+  let cleanText = String(text || '').trim();
   if (cleanText.startsWith("```json")) {
     cleanText = cleanText.substring(7);
   } else if (cleanText.startsWith("```")) {
@@ -13,159 +30,135 @@ function cleanAndParseJSON(text) {
   if (cleanText.endsWith("```")) {
     cleanText = cleanText.substring(0, cleanText.length - 3);
   }
-  return JSON.parse(cleanText.trim());
+  cleanText = cleanText.trim();
+  try {
+    return JSON.parse(cleanText);
+  } catch (err) {
+    const first = cleanText.indexOf('{');
+    const last = cleanText.lastIndexOf('}');
+    if (first !== -1 && last > first) return JSON.parse(cleanText.slice(first, last + 1));
+    throw err;
+  }
 }
 
-// Helper to parse base64 Data URLs
+// Data URL base64 → { mimeType, base64Data }, ou null si le format est refusé.
 function parseBase64Image(dataUrl) {
-  if (!dataUrl) return null;
+  if (typeof dataUrl !== 'string' || !dataUrl) return null;
   const matches = dataUrl.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
-  if (!matches || matches.length !== 3) {
-    // If not a data URL but already raw base64
-    return {
-      mimeType: "image/jpeg",
-      base64Data: dataUrl
+  const mimeType = matches ? matches[1].toLowerCase() : 'image/jpeg'; // base64 brut : JPEG supposé
+  const base64Data = matches ? matches[2] : dataUrl;
+  if (!IMAGE_MIME_TYPES.has(mimeType) || base64Data.length > MAX_IMAGE_BASE64_LENGTH || !/^[A-Za-z0-9+/=\s]+$/.test(base64Data)) {
+    return null;
+  }
+  return { mimeType, base64Data };
+}
+
+// POST JSON vers un fournisseur, borné dans le temps, avec des erreurs explicites.
+async function postJson(provider, url, headers, body) {
+  const { label } = PROVIDERS[provider];
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(AI_TIMEOUT_MS),
+    });
+  } catch (err) {
+    if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      throw new Error(`${label} n'a pas répondu dans le délai imparti (${Math.round(AI_TIMEOUT_MS / 1000)} s).`);
+    }
+    throw new Error(`${label} est injoignable : ${err && err.message}`);
+  }
+  if (!res.ok) {
+    if (res.status === 429) {
+      throw new Error(`Quota ou limite de requêtes (429) dépassée chez ${label}. Veuillez patienter avant de réessayer.`);
+    }
+    const errText = await res.text();
+    throw new Error(`Erreur API ${label} (HTTP ${res.status}): ${errText.slice(0, 500)}`);
+  }
+  return res.json();
+}
+
+function apiKeyFor(provider) {
+  const { label, keyEnv } = PROVIDERS[provider];
+  const apiKey = process.env[keyEnv];
+  if (!apiKey) {
+    throw new Error(`Clé API ${label} manquante. Veuillez renseigner ${keyEnv} dans le fichier .env`);
+  }
+  return apiKey;
+}
+
+// Requête unique vers le fournisseur choisi : consigne système, message utilisateur,
+// image facultative, et json=true pour exiger un objet JSON. Renvoie le texte produit.
+const CALLERS = {
+  async openai({ system, user, image, json }) {
+    const apiKey = apiKeyFor('openai');
+    const content = image
+      ? [{ type: 'text', text: user }, { type: 'image_url', image_url: { url: `data:${image.mimeType};base64,${image.base64Data}` } }]
+      : user;
+    const body = {
+      model: PROVIDERS.openai.model(),
+      messages: [{ role: 'system', content: system }, { role: 'user', content }],
+      temperature: 0.2,
+      ...(json ? { response_format: { type: 'json_object' } } : {}),
     };
-  }
-  return {
-    mimeType: matches[1],
-    base64Data: matches[2]
-  };
-}
+    const data = await postJson('openai', 'https://api.openai.com/v1/chat/completions', { Authorization: `Bearer ${apiKey}` }, body);
+    const text = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+    if (!text) throw new Error('Aucune réponse reçue de OpenAI.');
+    return text;
+  },
 
-// API Callers
-async function callOpenAI(messages, responseFormat = null) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error("Clé API OpenAI manquante. Veuillez renseigner OPENAI_API_KEY dans le fichier .env");
-  }
-
-  const body = {
-    model: "gpt-4o-mini",
-    messages: messages,
-    temperature: 0.2
-  };
-  if (responseFormat) {
-    body.response_format = responseFormat;
-  }
-
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`
-    },
-    body: JSON.stringify(body)
-  });
-
-  if (!res.ok) {
-    if (res.status === 429) {
-      throw new Error("Quota ou limite de requêtes (429) dépassée chez OpenAI. Veuillez patienter avant de réessayer.");
-    }
-    const errText = await res.text();
-    throw new Error(`Erreur API OpenAI (HTTP ${res.status}): ${errText}`);
-  }
-
-  const data = await res.json();
-  return data.choices[0].message.content;
-}
-
-async function callAnthropic(messages, systemPrompt = "") {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new Error("Clé API Anthropic manquante. Veuillez renseigner ANTHROPIC_API_KEY dans le fichier .env");
-  }
-
-  // Anthropic messages requires text structure
-  const formattedMessages = messages.map(msg => {
-    if (typeof msg.content === 'string') {
-      return { role: msg.role, content: msg.content };
-    }
-    return { role: msg.role, content: msg.content };
-  });
-
-  const body = {
-    model: "claude-3-5-sonnet-20241022",
-    max_tokens: 4000,
-    system: systemPrompt,
-    messages: formattedMessages,
-    temperature: 0.2
-  };
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01"
-    },
-    body: JSON.stringify(body)
-  });
-
-  if (!res.ok) {
-    if (res.status === 429) {
-      throw new Error("Quota ou limite de requêtes (429) dépassée chez Anthropic. Veuillez patienter avant de réessayer.");
-    }
-    const errText = await res.text();
-    throw new Error(`Erreur API Anthropic (HTTP ${res.status}): ${errText}`);
-  }
-
-  const data = await res.json();
-  return data.content[0].text;
-}
-
-async function callGemini(contents, systemPrompt = "", jsonMode = false) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error("Clé API Gemini manquante. Veuillez renseigner GEMINI_API_KEY dans le fichier .env");
-  }
-
-  const config = {
-    temperature: 0.2
-  };
-  if (jsonMode) {
-    config.responseMimeType = "application/json";
-  }
-
-  const body = {
-    contents: contents,
-    generationConfig: config
-  };
-
-  if (systemPrompt) {
-    body.systemInstruction = {
-      parts: [{ text: systemPrompt }]
+  async anthropic({ system, user, image }) {
+    const apiKey = apiKeyFor('anthropic');
+    const content = image
+      ? [{ type: 'image', source: { type: 'base64', media_type: image.mimeType, data: image.base64Data } }, { type: 'text', text: user }]
+      : user;
+    const body = {
+      model: PROVIDERS.anthropic.model(),
+      max_tokens: 8000,
+      system,
+      messages: [{ role: 'user', content }],
     };
-  }
+    const data = await postJson('anthropic', 'https://api.anthropic.com/v1/messages', { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }, body);
+    if (data.stop_reason === 'refusal') throw new Error('Anthropic a refusé de traiter cette demande.');
+    // La réponse peut contenir plusieurs blocs : on concatène les blocs texte.
+    const text = (data.content || []).filter((b) => b && b.type === 'text').map((b) => b.text).join('');
+    if (!text) throw new Error('Aucune réponse reçue de Anthropic.');
+    return text;
+  },
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(body)
-  });
+  async gemini({ system, user, image, json }) {
+    const apiKey = apiKeyFor('gemini');
+    const parts = image ? [{ inlineData: { mimeType: image.mimeType, data: image.base64Data } }, { text: user }] : [{ text: user }];
+    const body = {
+      contents: [{ parts }],
+      generationConfig: { temperature: 0.2, ...(json ? { responseMimeType: 'application/json' } : {}) },
+      ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
+    };
+    // Clé en en-tête (jamais dans l'URL, qui finit dans les journaux des proxys)
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(PROVIDERS.gemini.model())}:generateContent`;
+    const data = await postJson('gemini', url, { 'x-goog-api-key': apiKey }, body);
+    const candidate = data.candidates && data.candidates[0];
+    const text = candidate && candidate.content && (candidate.content.parts || []).map((p) => p.text || '').join('');
+    if (!text) throw new Error('Aucune réponse reçue de Gemini.');
+    return text;
+  },
+};
 
-  if (!res.ok) {
-    if (res.status === 429) {
-      throw new Error("Quota ou limite de requêtes (429) dépassée chez Gemini. Veuillez patienter environ une minute avant de réessayer.");
-    }
-    const errText = await res.text();
-    throw new Error(`Erreur API Gemini (HTTP ${res.status}): ${errText}`);
-  }
-
-  const data = await res.json();
-  if (!data.candidates || data.candidates.length === 0) {
-    throw new Error("Aucune réponse reçue de Gemini.");
-  }
-  return data.candidates[0].content.parts[0].text;
-}
-
-// Unified orchestrator functions
-async function runOnboard(provider, { name, description, features, ambiance, image, inspirationUrl }) {
+async function complete(provider, request) {
   const selectedProvider = provider || process.env.DEFAULT_PROVIDER || 'openai';
-  const systemPrompt = `Vous êtes un architecte de solutions SaaS web composables, un concepteur de sites web et un expert en identité graphique de marque.
+  const caller = CALLERS[selectedProvider];
+  if (!caller) throw new Error(`Fournisseur d'IA inconnu : ${selectedProvider}`);
+  return caller(request);
+}
+
+// --- Onboarding ---------------------------------------------------------------
+
+const clip = (value, max) => String(value ?? '').trim().slice(0, max);
+
+function onboardSystemPrompt({ name, features, ambiance, image, inspirationUrl }) {
+  return `Vous êtes un architecte de solutions SaaS web composables, un concepteur de sites web et un expert en identité graphique de marque.
 Analysez le nom du site, l'activité de l'utilisateur, les fonctionnalités requises et l'inspiration graphique fournie (ambiance prédéfinie, image/logo de référence ou URL d'inspiration) pour en déduire les spécifications techniques de la stack, concevoir une ébauche de page d'accueil personnalisée et composer une charte graphique premium assortie.
 
 L'utilisateur souhaite s'inspirer de :
@@ -240,6 +233,24 @@ Vous devez impérativement retourner un objet JSON correspondant EXACTEMENT au s
               "https://images.unsplash.com/photo-1555507036-ab1f4038808a?auto=format&fit=crop&w=300",
               "https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=300"
             ]
+          },
+
+          // Bloc 5 (Recommandé) : faq (questions fréquentes réalistes sur l'activité : horaires, délais, tarifs, zone desservie…)
+          {
+            "blockType": "faq",
+            "title": "Questions fréquentes",
+            "items": [
+              { "question": "Question fréquente 1", "answer": "Réponse claire et utile." },
+              { "question": "Question fréquente 2", "answer": "Réponse..." }
+            ]
+          },
+
+          // Bloc 6 (Recommandé, en dernier) : contact (formulaire de contact)
+          {
+            "blockType": "contact",
+            "title": "Titre de la section contact (ex: 'Contactez-nous')",
+            "subtitle": "Phrase d'invitation à écrire",
+            "ctaText": "Texte du bouton d'envoi (ex: 'Envoyer')"
           }
         ]
       }
@@ -253,132 +264,93 @@ Vous devez impérativement retourner un objet JSON correspondant EXACTEMENT au s
       "text": "#couleur_texte_hex (couleur lisible sur le fond)"
     },
     "fonts": {
-      "heading": "Police de titre (choisir UNIQUEMENT parmi : 'Playfair Display', 'Outfit', 'Space Grotesk', 'Lora', 'Inter')",
-      "body": "Police de corps (choisir UNIQUEMENT parmi : 'Inter', 'DM Sans', 'Karla', 'Plus Jakarta Sans')"
+      "heading": "Police de titre (choisir UNIQUEMENT parmi : ${HEADING_FONTS.map((f) => `'${f}'`).join(', ')})",
+      "body": "Police de corps (choisir UNIQUEMENT parmi : ${BODY_FONTS.map((f) => `'${f}'`).join(', ')})"
     },
     "radius": "Arrondi général avec unité, ex: '8px', '12px', '0px', '20px'"
   }
 }
 
-Générez entre 2 et 4 blocs pertinents en français, avec des textes fictifs complets et réalistes (sans placeholders comme [Nom du produit]). Les liens Unsplash doivent être des liens d'images réelles d'Unsplash tirés de votre base de connaissances ou d'exemples typiques.
+Générez entre 3 et 5 blocs pertinents en français (le hero en premier, de préférence le contact en dernier), avec des textes complets et réalistes (sans placeholders comme [Nom du produit]). N'inventez jamais d'avis ni de témoignages de clients. Les liens Unsplash doivent être des liens d'images réelles d'Unsplash tirés de votre base de connaissances ou d'exemples typiques.
 Renvoyez UNIQUEMENT l'objet JSON. Pas d'exceptions, pas d'enrobage markdown autre que le format JSON strict.`;
+}
 
-  const userPrompt = `Détails du projet utilisateur :
+// Sortie IA normalisée : qualification complète (valeurs par défaut sûres), pages
+// limitées aux blocs connus, thème validé (sinon null → thème par défaut côté appelant).
+function normalizeOnboardResult(raw, { name, features } = {}) {
+  const q = (raw && typeof raw.qualification === 'object' && raw.qualification) || {};
+  const req = (q && typeof q.stack_requirements === 'object' && q.stack_requirements) || {};
+  const qualification = {
+    site_name: clip(q.site_name, 120) || clip(name, 120) || 'Nouveau Site',
+    features: {
+      blog_or_news: Boolean(features && features.blog_or_news),
+      e_commerce: Boolean(features && features.e_commerce),
+      multi_store: Boolean(features && features.multi_store),
+    },
+    stack_requirements: {
+      astro_mode: req.astro_mode === 'hybrid' ? 'hybrid' : 'ssg',
+      need_payload: Boolean(req.need_payload),
+      need_medusajs: Boolean(req.need_medusajs),
+      need_stripe: Boolean(req.need_stripe),
+    },
+  };
+
+  const rawDocs = raw && raw.pages && Array.isArray(raw.pages.docs) ? raw.pages.docs : [];
+  // Slugs uniques : deux pages « home » rendraient le contenu impossible à enregistrer
+  const taken = new Set();
+  const docs = rawDocs
+    .filter((p) => p && typeof p === 'object')
+    .map((p, i) => {
+      const base = typeof p.slug === 'string' && /^[a-z0-9][a-z0-9-]*$/.test(p.slug) ? p.slug : (i === 0 ? 'home' : `page-${i + 1}`);
+      let slug = base;
+      for (let n = 2; taken.has(slug); n++) slug = `${base}-${n}`;
+      taken.add(slug);
+      return {
+        title: clip(p.title, 120) || (i === 0 ? 'Accueil' : `Page ${i + 1}`),
+        slug,
+        layout: Array.isArray(p.layout) ? p.layout.filter((b) => b && typeof b === 'object' && KNOWN_BLOCK_TYPES.has(b.blockType)) : [],
+      };
+    })
+    .filter((p) => p.layout.length > 0);
+
+  const theme = raw && raw.theme && validateTheme(raw.theme).ok ? raw.theme : null;
+  return { qualification, pages: docs.length > 0 ? { docs } : null, theme };
+}
+
+async function runOnboard(provider, input) {
+  // Entrées bornées (coût et abus) : l'onboarding est accessible aux clients.
+  const name = clip(input.name, 120);
+  const description = clip(input.description, 2000);
+  const ambiance = clip(input.ambiance, 100);
+  const inspirationUrl = clip(input.inspirationUrl, 300);
+  const features = input.features || {};
+  let image = null;
+  if (input.image) {
+    image = parseBase64Image(input.image);
+    if (!image) throw new Error("Image d'inspiration refusée : utilisez un PNG, JPEG, WebP ou GIF de moins de 6 Mo.");
+  }
+
+  const system = onboardSystemPrompt({ name, features, ambiance, image, inspirationUrl });
+  const user = `Détails du projet utilisateur :
 - Nom du site : "${name || 'Mon Site'}"
 - Activité / Description : "${description || 'Activité non spécifiée'}"
 - Fonctionnalités souhaitées :
-  * Blog ou actualités : ${features?.blog_or_news ? "OUI" : "NON"}
-  * E-commerce / Vente en ligne : ${features?.e_commerce ? "OUI" : "NON"}
-  * Multi-boutique / Adresses physiques : ${features?.multi_store ? "OUI" : "NON"}
+  * Blog ou actualités : ${features.blog_or_news ? "OUI" : "NON"}
+  * E-commerce / Vente en ligne : ${features.e_commerce ? "OUI" : "NON"}
+  * Multi-boutique / Adresses physiques : ${features.multi_store ? "OUI" : "NON"}
 ${ambiance ? `- Ambiance graphique de départ demandée : "${ambiance}"` : ''}
 ${inspirationUrl ? `- Site d'inspiration de référence : "${inspirationUrl}"` : ''}`;
 
-  let responseText = "";
-
-  if (image) {
-    const parsedImg = parseBase64Image(image);
-    if (!parsedImg) {
-      throw new Error("Format de l'image Base64 de l'onboarding invalide.");
-    }
-
-    if (selectedProvider === 'openai') {
-      responseText = await callOpenAI([
-        { role: "system", content: systemPrompt },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: userPrompt },
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:${parsedImg.mimeType};base64,${parsedImg.base64Data}`
-              }
-            }
-          ]
-        }
-      ], { type: "json_object" });
-    } else if (selectedProvider === 'anthropic') {
-      responseText = await callAnthropic([
-        {
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: parsedImg.mimeType,
-                data: parsedImg.base64Data
-              }
-            },
-            {
-              type: "text",
-              text: userPrompt
-            }
-          ]
-        }
-      ], systemPrompt);
-    } else if (selectedProvider === 'gemini') {
-      responseText = await callGemini([
-        {
-          parts: [
-            {
-              inlineData: {
-                mimeType: parsedImg.mimeType,
-                data: parsedImg.base64Data
-              }
-            },
-            {
-              text: userPrompt
-            }
-          ]
-        }
-      ], systemPrompt, true);
-    } else {
-      throw new Error(`Fournisseur d'IA inconnu : ${selectedProvider}`);
-    }
-  } else {
-    // Si pas d'image, appel textuel standard
-    if (selectedProvider === 'openai') {
-      responseText = await callOpenAI([
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt }
-      ], { type: "json_object" });
-    } else if (selectedProvider === 'anthropic') {
-      responseText = await callAnthropic([
-        { role: "user", content: userPrompt }
-      ], systemPrompt);
-    } else if (selectedProvider === 'gemini') {
-      responseText = await callGemini([
-        { parts: [{ text: userPrompt }] }
-      ], systemPrompt, true);
-    } else {
-      throw new Error(`Fournisseur d'IA inconnu : ${selectedProvider}`);
-    }
-  }
-
-  return cleanAndParseJSON(responseText);
+  const responseText = await complete(provider, { system, user, image, json: true });
+  return normalizeOnboardResult(cleanAndParseJSON(responseText), { name, features });
 }
 
-// Complétion texte simple, mutualisée entre les fournisseurs. jsonMode=true attend
-// une réponse JSON (parsée), sinon renvoie le texte brut nettoyé.
-async function completeText(provider, systemPrompt, userPrompt, jsonMode = false) {
-  const selectedProvider = provider || process.env.DEFAULT_PROVIDER || 'openai';
-  let responseText;
-  if (selectedProvider === 'openai') {
-    responseText = await callOpenAI(
-      [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      jsonMode ? { type: 'json_object' } : null
-    );
-  } else if (selectedProvider === 'anthropic') {
-    responseText = await callAnthropic([{ role: 'user', content: userPrompt }], systemPrompt);
-  } else if (selectedProvider === 'gemini') {
-    responseText = await callGemini([{ parts: [{ text: userPrompt }] }], systemPrompt, jsonMode);
-  } else {
-    throw new Error(`Fournisseur d'IA inconnu : ${selectedProvider}`);
-  }
+// --- Assistant de rédaction --------------------------------------------------
+
+// Complétion texte : jsonMode=true attend une réponse JSON (parsée), sinon renvoie le
+// texte brut nettoyé.
+async function completeText(provider, system, user, jsonMode = false) {
+  const responseText = await complete(provider, { system, user, json: jsonMode });
   return jsonMode ? cleanAndParseJSON(responseText) : responseText.trim();
 }
 
@@ -430,4 +402,8 @@ async function runAssist(provider, { action, input, context }) {
 module.exports = {
   runOnboard,
   runAssist,
+  // Exportés pour les tests unitaires
+  cleanAndParseJSON,
+  parseBase64Image,
+  normalizeOnboardResult,
 };

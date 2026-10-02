@@ -33,4 +33,35 @@ function assertSafePath(p, base) {
   return resolved;
 }
 
-module.exports = { generateSlug, assertSafePath };
+// Comme assertSafePath, mais exige un chemin STRICTEMENT sous la base : la racine
+// elle-même est refusée. À utiliser pour tout dossier propre à un site (documentRoot,
+// dépôt…), qui sera un jour remplacé ou supprimé : viser la racine partagée effacerait
+// tous les sites d'un coup.
+function assertStrictlyInside(p, base) {
+  const resolved = assertSafePath(p, base);
+  if (resolved === path.resolve(base)) {
+    throw new Error(`Chemin non autorisé : "${p}" ne peut pas être la racine "${base}" elle-même.`);
+  }
+  return resolved;
+}
+
+// Slug canonique (tel que produit par generateSlug) : minuscules, chiffres, tirets.
+function isValidSlug(value) {
+  return typeof value === 'string' && value.length <= 200 && /^[a-z0-9][a-z0-9-]*$/.test(value);
+}
+
+// Chemin d'URL sous lequel l'orchestrateur sert un site publié en simulation : /preview
+// expose PUBLIC_HTML_DIR tel quel, l'URL suit donc le dossier RÉEL du site (dossier importé
+// « Site_Client », documentRoot modifié…), et non son slug. Repli sur le slug si le dossier
+// est hors de la racine.
+function previewPathFor(documentRoot, publicHtmlDir, slug) {
+  if (documentRoot) {
+    const rel = path.relative(path.resolve(publicHtmlDir), path.resolve(documentRoot));
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+      return `/preview/${rel.split(path.sep).map(encodeURIComponent).join('/')}`;
+    }
+  }
+  return `/preview/${encodeURIComponent(slug)}`;
+}
+
+module.exports = { generateSlug, assertSafePath, assertStrictlyInside, isValidSlug, previewPathFor };

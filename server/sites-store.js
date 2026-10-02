@@ -2,7 +2,7 @@
 // données est disponible ; sinon (mode dev sans DATABASE_URI), fallback sur sites.json.
 // Toutes les routes Express passent par ce module — aucune ne lit/écrit sites.json en direct.
 
-const fs = require('fs');
+const { readJsonStrict, writeJsonAtomic } = require('./lib/json-file');
 
 let getPayloadInstance = () => null;
 let SITES_FILE = null;
@@ -36,16 +36,15 @@ function toApiSite(doc) {
 }
 
 // ---- Fallback JSON (mode sans base de données) ----
+// Fichier corrompu → erreur (jamais traité comme une liste vide que la prochaine
+// écriture rendrait définitive) ; écriture atomique.
 function readJson() {
-  try {
-    return JSON.parse(fs.readFileSync(SITES_FILE, 'utf-8'));
-  } catch (e) {
-    return [];
-  }
+  const sites = readJsonStrict(SITES_FILE, []);
+  return Array.isArray(sites) ? sites : [];
 }
 
 function writeJson(sites) {
-  fs.writeFileSync(SITES_FILE, JSON.stringify(sites, null, 2), 'utf-8');
+  writeJsonAtomic(SITES_FILE, sites);
 }
 
 // ---- API publique (async, quelle que soit la branche) ----
@@ -144,9 +143,12 @@ async function deleteSite(slug) {
     });
     if (res.docs.length === 0) return false;
     const siteId = res.docs[0].id;
-    // Supprime d'abord les contenus rattachés (sinon docs orphelins)
-    await payload.delete({ collection: 'pages', where: { site: { equals: siteId } }, overrideAccess: true });
-    await payload.delete({ collection: 'themes', where: { site: { equals: siteId } }, overrideAccess: true });
+    // Supprime d'abord les contenus rattachés (sinon docs orphelins, hérités par un futur
+    // site recréé sous le même slug). Les médias sont conservés : un site dupliqué peut
+    // référencer les fichiers de son site source.
+    for (const collection of ['pages', 'themes', 'posts', 'builds']) {
+      await payload.delete({ collection, where: { site: { equals: siteId } }, overrideAccess: true });
+    }
     await payload.delete({ collection: 'payload_sites', id: siteId, overrideAccess: true });
     return true;
   }

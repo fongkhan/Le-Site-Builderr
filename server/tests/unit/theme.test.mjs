@@ -51,3 +51,11 @@ test('isHexColor / isCssDimension', () => {
   assert.equal(isCssDimension('12'), false);
   assert.equal(isCssDimension('calc(1px + 2px)'), false);
 });
+
+test('polices — chaque police autorisée est auto-hébergée par le template', async () => {
+  const { HEADING_FONTS, BODY_FONTS } = require('../../lib/theme.js');
+  const { FONT_PACKAGES } = await import('../../../client-template/integrations/theme-fonts.mjs');
+  for (const font of new Set([...HEADING_FONTS, ...BODY_FONTS])) {
+    assert.ok(FONT_PACKAGES[font], `police « ${font} » sans paquet @fontsource-variable dans le template`);
+  }
+});

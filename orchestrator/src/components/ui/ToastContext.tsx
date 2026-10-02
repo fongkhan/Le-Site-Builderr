@@ -32,6 +32,20 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     }, TOAST_DURATION_MS);
   }, []);
 
+  const renderToast = (t: Toast) => (
+    <div key={t.id} className={`toast toast-${t.kind} animate-slide`}>
+      <span className="toast-icon">{TOAST_ICONS[t.kind]}</span>
+      <span>{t.message}</span>
+      <button
+        className="toast-close"
+        aria-label="Fermer"
+        onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}
+      >
+        ✕
+      </button>
+    </div>
+  );
+
   const value = useMemo<ToastContextValue>(() => ({
     success: (m) => push('success', m),
     error: (m) => push('error', m),
@@ -41,20 +55,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div className="toast-stack" role="status" aria-live="polite">
-        {toasts.map((t) => (
-          <div key={t.id} className={`toast toast-${t.kind} animate-slide`}>
-            <span className="toast-icon">{TOAST_ICONS[t.kind]}</span>
-            <span>{t.message}</span>
-            <button
-              className="toast-close"
-              aria-label="Fermer"
-              onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}
-            >
-              ✕
-            </button>
-          </div>
-        ))}
+      {/* Erreurs annoncées immédiatement (alert), le reste poliment (status) */}
+      <div className="toast-stack">
+        <div role="alert" aria-live="assertive" style={{ display: 'contents' }}>
+          {toasts.filter((t) => t.kind === 'error').map(renderToast)}
+        </div>
+        <div role="status" aria-live="polite" style={{ display: 'contents' }}>
+          {toasts.filter((t) => t.kind !== 'error').map(renderToast)}
+        </div>
       </div>
     </ToastContext.Provider>
   );

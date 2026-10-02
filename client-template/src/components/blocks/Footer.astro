@@ -1,4 +1,6 @@
 ---
+import { safeHttpUrl } from '../../lib/url';
+
 interface Props {
   data: {
     text?: string;
@@ -8,7 +10,12 @@ interface Props {
 
 const { data } = Astro.props;
 const LABELS: Record<string, string> = { facebook: 'Facebook', instagram: 'Instagram', linkedin: 'LinkedIn', x: 'X' };
-const socials = Object.entries(data.socials || {}).filter(([, url]) => Boolean(url));
+// URLs saisies par le client : http(s) uniquement (un « javascript: » serait une XSS
+// stockée). Une URL refusée est simplement ignorée.
+const socials = Object.entries(data.socials || {})
+  .filter(([network]) => Object.hasOwn(LABELS, network))
+  .map(([network, url]) => [network, safeHttpUrl(url, { relative: false })] as const)
+  .filter(([, url]) => Boolean(url));
 ---
 
 <footer class="site-footer">

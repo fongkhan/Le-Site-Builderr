@@ -11,33 +11,20 @@ interface Props {
   };
 }
 
+// Les données structurées FAQPage sont émises une seule fois par la page (toutes les
+// FAQ regroupées, voir lib/jsonld.ts) et non par chaque bloc.
 const { data } = Astro.props;
-
-// Données structurées FAQPage (schema.org) : aide les moteurs à afficher les
-// questions/réponses en résultat enrichi. Sérialisation sûre (échappe « < »).
-const faqEntities = (data.items || [])
-  .filter((i) => i && i.question && i.answer)
-  .map((i) => ({
-    '@type': 'Question',
-    name: i.question,
-    acceptedAnswer: { '@type': 'Answer', text: i.answer },
-  }));
-const faqLd = faqEntities.length
-  ? JSON.stringify({ '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: faqEntities }).replace(/</g, '\\u003c')
-  : null;
 ---
-
-{faqLd && <script type="application/ld+json" set:html={faqLd} />}
 
 <section class="faq-section">
   <div class="container">
-    <h2>{data.title}</h2>
+    {data.title && <h2 class="section-title">{data.title}</h2>}
     <div class="faq-list">
       {data.items && data.items.map((item) => (
         <details class="faq-item">
           <summary class="faq-question">
             <span>{item.question}</span>
-            <span class="chevron">▼</span>
+            <span class="chevron" aria-hidden="true">▼</span>
           </summary>
           <div class="faq-answer">
             <p>{item.answer}</p>
@@ -60,24 +47,6 @@ const faqLd = faqEntities.length
     text-align: center;
   }
 
-  .faq-section h2 {
-    font-size: 2.5rem;
-    margin-bottom: 50px;
-    position: relative;
-    padding-bottom: 15px;
-  }
-
-  .faq-section h2::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 60px;
-    height: 4px;
-    background-color: var(--color-primary);
-    border-radius: 2px;
-  }
 
   .faq-list {
     display: flex;
@@ -138,6 +107,7 @@ const faqLd = faqEntities.length
   }
 
   .faq-answer p {
+    white-space: pre-line;
     color: #4b5563;
     font-size: 0.95rem;
     line-height: 1.6;

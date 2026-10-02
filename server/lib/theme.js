@@ -3,7 +3,7 @@
 // sans validation, une couleur ou un radius arbitraire permet une injection CSS
 // (fermeture de bloc, @import, url(...)) et une police hors-liste casse le rendu.
 // L'allowlist de polices est la source de vérité partagée avec l'IA (ai.js) et le
-// front (DesignPage.tsx) : la garder synchronisée.
+// front (orchestrator/src/features/design/themeOptions.ts, vérifiée par un test) : la garder synchronisée.
 
 const HEADING_FONTS = ['Playfair Display', 'Outfit', 'Space Grotesk', 'Lora', 'Inter'];
 const BODY_FONTS = ['Inter', 'DM Sans', 'Karla', 'Plus Jakarta Sans'];

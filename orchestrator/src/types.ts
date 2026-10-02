@@ -74,8 +74,16 @@ export interface PageDoc {
   layout: Block[];
 }
 
+/** Page identifiée par son adresse (slug) et sa langue */
+export interface PageRef {
+  slug: string;
+  locale?: string;
+}
+
 export interface PagesData {
   docs: PageDoc[];
+  /** Pages supprimées dans l'éditeur (envoi uniquement) : seules celles-ci sont retirées en base */
+  deleted?: PageRef[];
 }
 
 export interface Site {
@@ -83,6 +91,8 @@ export interface Site {
   name: string;
   domain: string;
   documentRoot: string;
+  /** Adresse de la copie servie par l'orchestrateur (/preview/<dossier>/) */
+  previewPath?: string;
   repositoryPath: string;
   stack: string;
   createdWithTool: boolean;
@@ -145,8 +155,12 @@ export interface AiQuotaInfo {
   remaining: number;
 }
 
+export type HostingMode = 'simulation' | 'cpanel';
+
 export interface AppConfig {
   availableProviders: Record<AiProvider, boolean>;
+  /** cpanel : sites publiés sur leur vrai domaine ; simulation : copie locale (/preview) */
+  hostingMode?: HostingMode;
   defaultProvider: AiProvider;
   devNoAuth?: boolean;
   /** null = illimité (admin) */

@@ -12,6 +12,17 @@ Le projet est conçu en trois couches :
 2. **Le Serveur (Backend)** — Node.js / Express + Next.js 15 + Payload CMS v3 (port 4000). Gère les données (PostgreSQL via Drizzle), l'**authentification et les rôles**, l'API sites/pages/thèmes, les appels IA et le webhook de build avec verrou.
 3. **Le Template Client (Astro)** — Projet Astro (SSG) injectant les tokens de design et les blocs de contenu au moment du build.
 
+Organisation du serveur (`server/`) :
+
+| Dossier / fichier | Rôle |
+| --- | --- |
+| `index.js` | Point d'entrée : chargement de l'environnement, garde-fous de démarrage, Next + Payload, écoute du port |
+| `express-app.js` | Assemblage d'Express dans l'ordre de montage (CORS, en-têtes, limiteurs, JSON, statiques, routes, Next, erreurs) |
+| `core/` | Socle transverse : configuration et chemins, instance Payload et comptes initiaux, driver d'hébergement, HTTP (erreurs, limiteurs, routeurs protégés), audit, email, journal de build |
+| `services/` | Règles métier sans Express : contenu (pages, articles, thème), sites (domaine, confinement, propriétaires), pipeline de build (verrou, file, déploiement atomique), sauvegardes |
+| `routes/` | Endpoints HTTP par domaine : `sites`, `admin`, `content`, `domains`, `public` (contact, statistiques), `ai`, `build` |
+| `lib/` | Fonctions pures testées unitairement (slugs, chemins, thème, SEO, i18n, médias, domaines, offres…) |
+
 ---
 
 ## 🔐 Sécurité par compte
@@ -134,12 +145,14 @@ Par défaut, tout est **simulé localement** (`HOSTING_DRIVER=simulation`) : dom
    CPANEL_USER=votre-identifiant
    CPANEL_API_TOKEN=le-jeton-créé-en-1
    CPANEL_ROOT_DOMAIN=mondomaine.fr         # parent des sous-domaines créés
+   PUBLIC_API_URL=https://api.mondomaine.fr # adresse publique de CE serveur
    ```
+   `PUBLIC_API_URL` est indispensable : les sites publiés l'utilisent pour le formulaire de contact, la prise de rendez-vous et les statistiques de visites.
 3. **Redémarrez, puis testez** : Panel Admin ▸ encart **« Hébergement »** ▸ *Tester la connexion*.
 
 Ce que fait le mode cPanel :
 * à la **création d'un site** : le sous-domaine `<slug>.mondomaine.fr` est créé automatiquement (document root `public_html/<slug>`), et AutoSSL prend le relais pour le certificat (`sslStatus` passe de « pending » à « actif » après le premier déploiement couvert) ;
-* au **déploiement** : le build Astro est publié sur l'hébergement (archive → upload → extraction) *en plus* de l'aperçu local `/preview` qui continue de fonctionner ;
+* au **déploiement** : le build Astro est publié sur l'hébergement (archive → upload → extraction), compilé pour la racine de son domaine ; les liens « Voir le site » de l'orchestrateur pointent alors vers le vrai domaine ;
 * le jeton API n'apparaît **jamais** dans les logs, les erreurs ni les réponses HTTP.
 
 ---
@@ -188,7 +201,10 @@ Ce que fait le mode cPanel :
 * **Confinement des chemins** : `documentRoot`/`repositoryPath` sont validés (jamais hors `public_html`/`repositories`) et les slugs vides sont rejetés — impossible de viser un dossier arbitraire au déploiement/suppression.
 * **Déploiement atomique** (copie vers dossier temporaire puis `rename` + rollback) et **verrou anti-concurrence** en mémoire fermant la fenêtre TOCTOU entre deux builds.
 * **Validation de thème** (couleurs hexadécimales, dimensions, polices en allowlist) avant écriture du CSS — anti-injection.
-* Les réponses `500` ne divulguent pas les détails internes ; une exception non-capturée arrête le process en production (relance par le superviseur).
+* Les réponses `500` ne divulguent pas les détails internes ; toute exception d'une route est rendue en JSON (jamais de requête pendante) ; une exception non-capturée arrête le process en production (relance par le superviseur).
+* **API REST Payload verrouillée** : un client lit son site mais ne peut modifier ni ses paramètres de déploiement (chemins, domaine, statut) ni le site de rattachement d'une page, d'un article, d'un thème ou d'un média.
+* **Endpoints publics** (formulaire de contact, beacon de statistiques) : CORS ouvert à toute origine sans cookie, corps limité à 32 Ko, limiteurs dédiés ; mot de passe oublié / réinitialisation également limités.
+* **Garde-fous de production** (`NODE_ENV=production`) : refus de démarrer avec `DEV_NO_AUTH`, aucun compte « password123 » (admin créé seulement avec un `SEED_ADMIN_PASSWORD` d'au moins 12 caractères), arrêt si la base est injoignable, secrets du serveur jamais transmis au build.
 
 ### Note dépendances — version de Next.js
 `@payloadcms/next@3.86` contraint Next à `>=15.4.11 <15.5.0` (puis `>=16.2.6`). Le projet est donc **épinglé à la dernière 15.4 disponible (`~15.4.11`)**, qui inclut déjà les correctifs de sécurité de la branche 15.4 (bien au-delà de CVE-2025-29927). Passer à Next 15.5/16 nécessiterait une montée coordonnée de Payload et de `@payloadcms/next` : migration majeure, hors périmètre de ce durcissement.

@@ -1,22 +1,22 @@
 import { useState } from 'react';
-import { updateSite, attachCustomDomain, verifyCustomDomain, detachCustomDomain } from '../../api/sites';
-import type { CustomDomainRecord } from '../../api/sites';
+import { updateSite } from '../../api/sites';
+import { attachCustomDomain, verifyCustomDomain, detachCustomDomain } from '../../api/domains';
+import type { CustomDomainRecord } from '../../api/domains';
+import { errorMessage } from '../../api/client';
 import { Modal } from '../../components/ui/Modal';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../components/ui/ToastContext';
+import { DOMAIN_STATUS_DISPLAY } from './constants';
+import { StackSelect } from './StackSelect';
 import type { Site } from '../../types';
-
-const DOMAIN_STATUS: Record<string, { label: string; color: string }> = {
-  none: { label: 'Sous-domaine par défaut', color: 'var(--text-muted)' },
-  pending: { label: 'En attente de vérification', color: 'var(--amber-400)' },
-  active: { label: '🔒 Domaine actif', color: 'var(--accent-emerald)' },
-  error: { label: '⚠ Erreur de rattachement', color: 'var(--accent-rose)' },
-};
 
 export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose: () => void; onSaved: () => void }) {
   const toast = useToast();
   const [name, setName] = useState(site.name);
   const [domain, setDomain] = useState(site.domain);
+  // Domaine servi tel que connu du serveur (change après activation/détachement d'un
+  // domaine personnalisé) : référence pour savoir si l'utilisateur l'a modifié.
+  const [serverDomain, setServerDomain] = useState(site.domain);
   const [documentRoot, setDocumentRoot] = useState(site.documentRoot);
   const [repositoryPath, setRepositoryPath] = useState(site.repositoryPath || '');
   const [stack, setStack] = useState(site.stack);
@@ -27,8 +27,10 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
   const [analyticsId, setAnalyticsId] = useState(site.analyticsId || '');
   const [analyticsHost, setAnalyticsHost] = useState(site.analyticsHost || '');
 
-  // --- Domaine personnalisé ---
+  // --- Domaine personnalisé (état local : la prop `site` n'est pas rafraîchie pendant
+  // que la modale est ouverte) ---
   const [customInput, setCustomInput] = useState(site.customDomain || '');
+  const [customDomain, setCustomDomain] = useState(site.customDomain || '');
   const [domainStatus, setDomainStatus] = useState<string>(site.domainStatus || 'none');
   const [record, setRecord] = useState<CustomDomainRecord | null>(null);
   const [pointingHint, setPointingHint] = useState('');
@@ -40,14 +42,28 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
       toast.error('Le nom du site est requis.');
       return;
     }
+    // Seuls les champs réellement modifiés sont envoyés : jamais d'écrasement d'une
+    // valeur changée côté serveur entre-temps (ex. domaine servi après activation).
+    const initial: Partial<Site> = {
+      name: site.name, domain: serverDomain, documentRoot: site.documentRoot, repositoryPath: site.repositoryPath || '',
+      stack: site.stack, analyticsProvider: site.analyticsProvider || '', analyticsId: site.analyticsId || '', analyticsHost: site.analyticsHost || '',
+    };
+    const edited: Partial<Site> = { name: name.trim(), domain, documentRoot, repositoryPath, stack, analyticsProvider, analyticsId, analyticsHost };
+    const changes = Object.fromEntries(
+      Object.entries(edited).filter(([key, value]) => value !== initial[key as keyof Site]),
+    ) as Partial<Site>;
+    if (Object.keys(changes).length === 0) {
+      onClose();
+      return;
+    }
     setSaving(true);
     try {
-      await updateSite(site.slug, { name, domain, documentRoot, repositoryPath, stack, analyticsProvider, analyticsId, analyticsHost });
+      await updateSite(site.slug, changes);
       toast.success('Configuration du site mise à jour.');
       onSaved();
       onClose();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Erreur de mise à jour.');
+      toast.error(errorMessage(err, 'Erreur de mise à jour.'));
     } finally {
       setSaving(false);
     }
@@ -65,10 +81,11 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
       setPointingHint(res.pointingHint);
       setDomainStatus(res.domainStatus);
       setCustomInput(res.customDomain);
+      setCustomDomain(res.customDomain);
       toast.success('Domaine enregistré. Publiez l’enregistrement TXT puis vérifiez.');
       onSaved();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Impossible d’enregistrer le domaine.');
+      toast.error(errorMessage(err, 'Impossible d’enregistrer le domaine.'));
     } finally {
       setDomainBusy(false);
     }
@@ -82,12 +99,17 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
       if (res.verified) {
         toast.success('Domaine vérifié et activé ! Le certificat SSL sera émis une fois le DNS propagé.');
         setRecord(null);
+        // Le domaine servi est désormais le domaine du client
+        if (res.domain) {
+          setDomain(res.domain);
+          setServerDomain(res.domain);
+        }
         onSaved();
       } else {
         toast.info(res.message || 'Enregistrement TXT introuvable pour le moment.');
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Échec de la vérification.');
+      toast.error(errorMessage(err, 'Échec de la vérification.'));
     } finally {
       setDomainBusy(false);
     }
@@ -100,11 +122,13 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
       setDomainStatus('none');
       setRecord(null);
       setCustomInput('');
+      setCustomDomain('');
       setDomain(res.domain);
+      setServerDomain(res.domain);
       toast.success('Domaine personnalisé détaché. Le site repasse sur son sous-domaine.');
       onSaved();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Impossible de détacher le domaine.');
+      toast.error(errorMessage(err, 'Impossible de détacher le domaine.'));
     } finally {
       setDomainBusy(false);
       setConfirmDetach(false);
@@ -118,7 +142,8 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
     );
   };
 
-  const st = DOMAIN_STATUS[domainStatus] ?? DOMAIN_STATUS.none;
+  const st = DOMAIN_STATUS_DISPLAY[domainStatus] ?? DOMAIN_STATUS_DISPLAY.none;
+  const servedByCustomDomain = domainStatus === 'active';
 
   return (
     <Modal
@@ -138,8 +163,18 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
         <input type="text" className="input-text" value={name} onChange={(e) => setName(e.target.value)} />
       </div>
       <div>
-        <label className="field-label">Domaine servi (sous-domaine généré)</label>
-        <input type="text" className="input-text" value={domain} onChange={(e) => setDomain(e.target.value)} />
+        <label className="field-label" htmlFor="edit-site-domain">
+          {servedByCustomDomain ? 'Domaine servi (domaine personnalisé actif)' : 'Domaine servi (sous-domaine généré)'}
+        </label>
+        <input
+          id="edit-site-domain"
+          type="text"
+          className="input-text"
+          value={domain}
+          onChange={(e) => setDomain(e.target.value)}
+          readOnly={servedByCustomDomain}
+          title={servedByCustomDomain ? 'Géré par le domaine personnalisé : détachez-le pour revenir au sous-domaine.' : undefined}
+        />
       </div>
       <div>
         <label className="field-label">Document Root (dossier web public)</label>
@@ -151,11 +186,7 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
       </div>
       <div>
         <label className="field-label">Stack technique</label>
-        <select className="select-dark" value={stack} onChange={(e) => setStack(e.target.value)} style={{ padding: 10, fontSize: '0.9rem' }}>
-          <option value="Astro SSG">Astro SSG</option>
-          <option value="Astro Hybride + Payload + Medusa">Astro Hybride + CMS</option>
-          <option value="Static HTML">HTML/CSS Statique</option>
-        </select>
+        <StackSelect value={stack} onChange={setStack} />
       </div>
 
       {/* --- Mesure d'audience (RGPD) --- */}
@@ -202,7 +233,7 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
         {domainStatus === 'active' ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
             <span style={{ fontSize: '0.9rem' }}>
-              Domaine actif : <strong style={{ color: 'var(--accent-emerald)' }}>{site.customDomain || customInput}</strong>
+              Domaine actif : <strong style={{ color: 'var(--accent-emerald)' }}>{customDomain || customInput}</strong>
             </span>
             <button className="btn btn-secondary" style={{ borderColor: 'var(--accent-rose)', color: 'var(--accent-rose)' }} onClick={() => setConfirmDetach(true)} disabled={domainBusy}>
               Détacher
@@ -256,7 +287,7 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
             {!record && domainStatus === 'pending' && (
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '0.82rem', color: 'var(--amber-400)' }}>
-                  Vérification en attente pour <strong>{site.customDomain || customInput}</strong>.
+                  Vérification en attente pour <strong>{customDomain || customInput}</strong>.
                 </span>
                 <button className="btn btn-primary" onClick={handleVerify} disabled={domainBusy}>
                   {domainBusy ? 'Vérification…' : 'Vérifier & activer'}

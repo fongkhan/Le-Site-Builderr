@@ -1,4 +1,6 @@
 ---
+import { safeHttpUrl } from '../../lib/url';
+
 interface TestimonialItem {
   quote: string;
   author: string;
@@ -19,41 +21,19 @@ const { data } = Astro.props;
 // Note bornée 0-5 (0 ou absente = pas d'étoiles affichées)
 const ratingOf = (t: TestimonialItem) => Math.max(0, Math.min(5, Math.round(Number(t.rating) || 0)));
 
-// Données structurées : note moyenne (AggregateRating) + avis (Review) rattachés au
-// commerce — le motif « étoiles dans les résultats Google » des avis clients.
-// N'est émis que si au moins un témoignage porte une note. Sérialisation sûre.
-const siteName = process.env.PUBLIC_SITE_NAME || '';
-const rated = (data.testimonials || []).filter((t) => t && t.quote && ratingOf(t) > 0);
-const reviewLd = (siteName && rated.length > 0)
-  ? JSON.stringify({
-      '@context': 'https://schema.org',
-      '@type': 'LocalBusiness',
-      name: siteName,
-      aggregateRating: {
-        '@type': 'AggregateRating',
-        ratingValue: Math.round((rated.reduce((s, t) => s + ratingOf(t), 0) / rated.length) * 10) / 10,
-        reviewCount: rated.length,
-        bestRating: 5,
-      },
-      review: rated.map((t) => ({
-        '@type': 'Review',
-        author: { '@type': 'Person', name: t.author || 'Client' },
-        reviewBody: t.quote,
-        reviewRating: { '@type': 'Rating', ratingValue: ratingOf(t), bestRating: 5 },
-      })),
-    }).replace(/</g, '\\u003c')
-  : null;
+// Pas de données structurées ici : des avis saisis par le site lui-même
+// (AggregateRating / Review « auto-déclarés ») sont inéligibles aux étoiles Google et
+// exposent le site à une action manuelle. Les étoiles restent affichées sur la page.
+const testimonials = (data.testimonials || []).filter(Boolean).map((t) => ({ ...t, avatar: safeHttpUrl(t.avatar) }));
 ---
-
-{reviewLd && <script type="application/ld+json" set:html={reviewLd} />}
 
 <section class="testimonials-section">
   <div class="container">
-    <h2>{data.title}</h2>
+    {data.title && <h2 class="section-title">{data.title}</h2>}
     <div class="testimonials-grid">
-      {data.testimonials && data.testimonials.map((testi) => (
+      {testimonials.map((testi) => (
         <div class="testimonial-card">
-          <div class="quote-mark">“</div>
+          <div class="quote-mark" aria-hidden="true">“</div>
           {ratingOf(testi) > 0 && (
             <div class="stars" role="img" aria-label={`Note : ${ratingOf(testi)} sur 5`}>
               {'★'.repeat(ratingOf(testi))}<span class="stars-empty">{'★'.repeat(5 - ratingOf(testi))}</span>
@@ -62,7 +42,7 @@ const reviewLd = (siteName && rated.length > 0)
           <p class="quote-text">{testi.quote}</p>
           <div class="author-info">
             {testi.avatar && (
-              <img class="avatar" src={testi.avatar} alt={testi.author} />
+              <img class="avatar" src={testi.avatar} alt="" loading="lazy" decoding="async" />
             )}
             <div class="author-meta">
               <h3>{testi.author}</h3>
@@ -87,24 +67,6 @@ const reviewLd = (siteName && rated.length > 0)
     text-align: center;
   }
 
-  .testimonials-section h2 {
-    font-size: 2.5rem;
-    margin-bottom: 50px;
-    position: relative;
-    padding-bottom: 15px;
-  }
-
-  .testimonials-section h2::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 60px;
-    height: 4px;
-    background-color: var(--color-primary);
-    border-radius: 2px;
-  }
 
   .testimonials-grid {
     display: grid;
@@ -155,6 +117,7 @@ const reviewLd = (siteName && rated.length > 0)
   }
 
   .quote-text {
+    white-space: pre-line;
     color: #4b5563;
     font-size: 1rem;
     line-height: 1.6;
