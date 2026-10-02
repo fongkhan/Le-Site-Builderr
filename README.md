@@ -187,9 +187,15 @@ Ce que fait le mode cPanel :
 * Application automatique dans `client-template/src/styles/theme.css` au build.
 
 ### 3. CMS par blocs
-* Éditeur de sections (Hero, Features, ProductGrid, Gallery, Témoignages, FAQ, Tarifs) : ajout, réordonnancement, édition, suppression.
-* Aperçu WYSIWYG en temps réel avec les tokens du thème.
+* Éditeur de sections (Hero, Features, ProductGrid, Gallery, Témoignages, FAQ, Tarifs) : ajout, réordonnancement, duplication, édition, suppression (avec « Annuler » dans la notification).
+* **Annuler / rétablir** (boutons ou `Ctrl/Cmd+Z`, `Maj+Ctrl/Cmd+Z`) pendant la session d'édition.
+* **Menu du site** : ordre des pages réglable (monter / descendre) et page masquable du menu (toujours publiée, par ex. mentions légales).
+* Aperçu WYSIWYG en temps réel avec les tokens du thème ; sauvegarde automatique ciblée (seules les pages modifiées sont écrites).
+* **Médiathèque** : images PNG, JPEG, WebP, GIF et AVIF (SVG refusé), `MEDIA_MAX_MB` (8 Mo par défaut), redimensionnées à 2400 px quand `sharp` est disponible.
 * Persistance dans Payload CMS (PostgreSQL) + fichiers JSON de fallback.
+
+### Messages reçus
+* Chaque envoi du formulaire de contact ou de prise de rendez-vous d'un site publié est conservé (12 mois, 500 messages maximum par site) et consultable par son propriétaire dans l'onglet **Messages** : non lus, marquer comme lu, répondre par email, supprimer. Un email de notification en échec ne fait plus perdre le message.
 
 ### 4. Pipeline de déploiement avec file d'attente
 * Webhook de build authentifié, verrou physique `build.lock` (nettoyé au boot si orphelin).
@@ -202,7 +208,7 @@ Ce que fait le mode cPanel :
 ### Supervision : endpoints de santé
 Publics, sans authentification, sans secret, version ni chemin dans la réponse :
 * `GET /api/health` — vivacité : `200 { "status": "ok", "uptimeS": 42 }` dès que le process répond.
-* `GET /api/health/ready` — disponibilité : `200` (`ok` ou `degraded`) ou `503` (`down`) avec `{ "status", "checks": { "database", "storage", "build": { "inProgress", "queueLength" } } }`. `database` exécute un `select 1` borné à 2 s ; `storage` vérifie l'accès en écriture aux données, à la production et à la médiathèque ; `build` est informatif. Limité à 120 requêtes / 15 min par IP. À utiliser pour une sonde de disponibilité, un `HEALTHCHECK` Docker ou l'attente de démarrage en CI (`curl -fsS http://localhost:4000/api/health/ready`).
+* `GET /api/health/ready` — disponibilité : `200` (`ok` ou `degraded`) ou `503` (`down`) avec `{ "status", "checks": { "database", "storage", "build": { "inProgress", "queueLength" } } }`. `database` exécute un `select 1` borné à 2 s ; `storage` vérifie l'accès en écriture aux données, à la production et à la médiathèque ; `build` est informatif. Le résultat est mis en cache 2 s : une sonde fréquente ne sollicite jamais la base à chaque appel et ne reçoit jamais de 429. À utiliser pour une sonde de disponibilité, un `HEALTHCHECK` Docker ou l'attente de démarrage en CI (`curl -fsS http://localhost:4000/api/health/ready`).
 
 ### 5. Payload CMS v3 multi-tenant
 * Collections `users` (auth + rôles + quota IA), `payload_sites` (source de vérité), `pages` (blocs), `themes`, avec access control par rôle et ownership.
@@ -220,7 +226,7 @@ Publics, sans authentification, sans secret, version ni chemin dans la réponse 
 * Les réponses `500` ne divulguent pas les détails internes ; toute exception d'une route est rendue en JSON (jamais de requête pendante) ; une exception non-capturée arrête le process en production (relance par le superviseur).
 * **API REST Payload verrouillée** : un client lit son site mais ne peut modifier ni ses paramètres de déploiement (chemins, domaine, statut) ni le site de rattachement d'une page, d'un article, d'un thème ou d'un média.
 * **Endpoints publics** (formulaire de contact, beacon de statistiques) : CORS ouvert à toute origine sans cookie, corps limité à 32 Ko (ailleurs : 10 Mo pour l'onboarding, 2 Mo pour pages, articles et thème, 256 Ko pour le reste), limiteurs dédiés ; mot de passe oublié / réinitialisation également limités.
-* **Garde-fous de production** (`NODE_ENV=production`) : refus de démarrer avec `DEV_NO_AUTH`, aucun compte « password123 » (admin créé seulement avec un `SEED_ADMIN_PASSWORD` d'au moins 12 caractères), arrêt si la base est injoignable, secrets du serveur jamais transmis au build.
+* **Garde-fous de production** (`NODE_ENV=production`) : refus de démarrer avec `DEV_NO_AUTH`, aucun compte « password123 » (admin créé seulement avec un `SEED_ADMIN_PASSWORD` d'au moins 12 caractères), refus de démarrer sans compte admin (`SEED_ADMIN_EMAIL` et `SEED_ADMIN_PASSWORD` requis au premier démarrage), création anonyme de compte refusée, arrêt si la base est injoignable, secrets du serveur jamais transmis au build.
 
 ### Note dépendances — version de Next.js
 `@payloadcms/next@3.86` contraint Next à `>=15.4.11 <15.5.0` (puis `>=16.2.6`). Le projet est donc **épinglé à la dernière 15.4 disponible (`~15.4.11`)**, qui inclut déjà les correctifs de sécurité de la branche 15.4 (bien au-delà de CVE-2025-29927). Passer à Next 15.5/16 nécessiterait une montée coordonnée de Payload et de `@payloadcms/next` : migration majeure, hors périmètre de ce durcissement.
