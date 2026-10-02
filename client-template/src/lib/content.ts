@@ -36,6 +36,8 @@ export interface PageDoc {
   locale?: string;
   metaTitle?: string;
   metaDescription?: string;
+  /** Page publiée mais absente du menu de navigation */
+  hideFromNav?: boolean;
   layout: Block[];
 }
 
@@ -214,6 +216,8 @@ async function loadSiteContent(): Promise<SiteContent> {
   // n'apparaît que s'il contient au moins un article publié.
   const navByLocale: Record<string, NavPage[]> = {};
   for (const p of pages) {
+    // Page masquée du menu : générée et présente dans le sitemap, mais sans lien de menu
+    if (p.hideFromNav === true) continue;
     (navByLocale[normalizeLocale(p.locale)] ||= []).push({ title: p.title, slug: p.slug });
   }
   if (posts.length > 0) (navByLocale[DEFAULT_LOCALE] ||= []).push({ title: 'Actualités', slug: 'blog' });

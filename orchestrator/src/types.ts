@@ -71,6 +71,8 @@ export interface PageDoc {
   locale?: string;
   metaTitle?: string;
   metaDescription?: string;
+  /** Page publiée mais absente du menu de navigation (reste dans le sitemap) */
+  hideFromNav?: boolean;
   layout: Block[];
 }
 

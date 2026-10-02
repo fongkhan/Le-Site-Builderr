@@ -4,7 +4,8 @@ import { errorMessage } from '../../../api/client';
 import { useToast } from '../../../components/ui/ToastContext';
 import type { Block, PageRef } from '../../../types';
 import type { UpdateOptions } from '../blocks/types';
-import { pageKey, removedPages, toEditorPages, toServerPages, updateBlock, type EditorPage } from '../lib/editorModel';
+import { editGroupKey, pageKey, removedPages, toEditorPages, toServerPages, updateBlock, type EditorPage } from '../lib/editorModel';
+import { createHistory } from '../lib/history';
 import type { AutosaveState } from './autosaveController';
 import { useAutosave } from './useAutosave';
 
@@ -23,6 +24,11 @@ export interface SitePages {
    */
   commit: (change: (prev: EditorPage[]) => EditorPage[], immediate?: boolean) => void;
   updateBlockById: (blockId: string, recipe: (draft: Block) => void, options?: UpdateOptions) => void;
+  /** Annule / rétablit la dernière modification (historique de la session, perdu au rechargement) */
+  undo: () => boolean;
+  redo: () => boolean;
+  canUndo: boolean;
+  canRedo: boolean;
   saveState: AutosaveState;
   retrySave: () => void;
 }
@@ -40,6 +46,13 @@ export function useSitePages(siteSlug: string): SitePages {
   // Pages supprimées pas encore confirmées par le serveur : renvoyées à chaque sauvegarde
   // jusqu'à son succès (une sauvegarde plus récente remplace la précédente en attente).
   const pendingDeletes = useRef(new Map<string, PageRef>());
+  // Historique annuler/rétablir : instantanés immuables des pages (session seulement)
+  const [history] = useState(() => createHistory<EditorPage[]>());
+  const [historyFlags, setHistoryFlags] = useState({ canUndo: false, canRedo: false });
+  const syncHistoryFlags = useCallback(() => {
+    const flags = { canUndo: history.canUndo(), canRedo: history.canRedo() };
+    setHistoryFlags((prev) => (prev.canUndo === flags.canUndo && prev.canRedo === flags.canRedo ? prev : flags));
+  }, [history]);
 
   const { state: saveState, schedule, saveNow, retry } = useAutosave<EditorPage[]>(
     async (data) => {
@@ -68,6 +81,8 @@ export function useSitePages(siteSlug: string): SitePages {
         if (cancelled) return;
         if (!data || !Array.isArray(data.docs)) throw new Error('Réponse inattendue du serveur.');
         const loaded = toEditorPages(data);
+        history.clear();
+        setHistoryFlags({ canUndo: false, canRedo: false });
         pagesRef.current = loaded;
         setPages(loaded);
         setLoad({ status: 'ready' });
@@ -78,14 +93,15 @@ export function useSitePages(siteSlug: string): SitePages {
     return () => {
       cancelled = true;
     };
-  }, [siteSlug, loadAttempt]);
+  }, [siteSlug, loadAttempt, history]);
 
-  const commit = useCallback(
-    (change: (prev: EditorPage[]) => EditorPage[], immediate = false) => {
-      const prev = pagesRef.current;
-      const next = change(prev);
-      if (next === prev) return;
+  // Remplace les pages par `next` et l'enregistre. Les pages disparues sont à supprimer
+  // en base ; une page présente (réapparue après une annulation) n'est plus à supprimer :
+  // elle est renvoyée dans docs et recréée par (langue, adresse), sans identifiant serveur.
+  const apply = useCallback(
+    (prev: EditorPage[], next: EditorPage[], immediate: boolean) => {
       for (const ref of removedPages(prev, next)) pendingDeletes.current.set(pageKey(ref), ref);
+      for (const page of next) pendingDeletes.current.delete(pageKey(page));
       pagesRef.current = next;
       setPages(next);
       if (immediate) saveNow(next);
@@ -93,6 +109,33 @@ export function useSitePages(siteSlug: string): SitePages {
     },
     [saveNow, schedule],
   );
+
+  const commit = useCallback(
+    (change: (prev: EditorPage[]) => EditorPage[], immediate = false) => {
+      const prev = pagesRef.current;
+      const next = change(prev);
+      if (next === prev) return;
+      // Frappe (débouncée) regroupée par champ ; un changement de structure est une étape
+      history.push(prev, immediate ? undefined : editGroupKey(prev, next));
+      syncHistoryFlags();
+      apply(prev, next, immediate);
+    },
+    [apply, history, syncHistoryFlags],
+  );
+
+  const travel = useCallback(
+    (direction: 'undo' | 'redo') => {
+      const prev = pagesRef.current;
+      const target = direction === 'undo' ? history.undo(prev) : history.redo(prev);
+      syncHistoryFlags();
+      if (!target) return false;
+      apply(prev, target, true);
+      return true;
+    },
+    [apply, history, syncHistoryFlags],
+  );
+  const undo = useCallback(() => travel('undo'), [travel]);
+  const redo = useCallback(() => travel('redo'), [travel]);
 
   const updateBlockById = useCallback(
     (blockId: string, recipe: (draft: Block) => void, options?: UpdateOptions) => {
@@ -104,5 +147,9 @@ export function useSitePages(siteSlug: string): SitePages {
   const latest = useCallback(() => pagesRef.current, []);
   const reload = useCallback(() => setLoadAttempt((n) => n + 1), []);
 
-  return { load, reload, pages, latest, commit, updateBlockById, saveState, retrySave: retry };
+  return {
+    load, reload, pages, latest, commit, updateBlockById,
+    undo, redo, canUndo: historyFlags.canUndo, canRedo: historyFlags.canRedo,
+    saveState, retrySave: retry,
+  };
 }

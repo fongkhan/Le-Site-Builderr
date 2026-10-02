@@ -79,6 +79,22 @@ check(/<meta name="robots" content="noindex/.test(notFound), '404.html : meta ro
 check(notFound.includes(`href="${base}/"`), `404.html : lien vers l'accueil (${base}/) absent`);
 check(!fs.existsSync(path.join(dist, '404', 'index.html')), 'route 404/index.html générée par la route attrape-tout');
 
+// ---- Lot 5 ----
+// Page masquée du menu (hideFromNav) : générée, mais aucun lien du menu ne la cible ;
+// le menu commence par l'accueil.
+{
+  check(fs.existsSync(path.join(dist, 'mentions-legales/index.html')), 'page masquée du menu absente : mentions-legales/index.html');
+  for (const file of htmlFiles) {
+    const rel = path.relative(dist, file);
+    const html = fs.readFileSync(file, 'utf-8');
+    const nav = html.match(/<nav class="site-nav"[^>]*>([\s\S]*?)<\/nav>/);
+    if (!nav) continue;
+    const hrefs = [...nav[1].matchAll(/<a[^>]+href="([^"]*)"/g)].map(([, href]) => href);
+    check(!hrefs.some((href) => href.includes('/mentions-legales')), `${rel} : la page masquée figure dans le menu`);
+    if (!rel.startsWith('en/')) check(hrefs[0] === `${base}/`, `${rel} : le premier lien du menu n'est pas l'accueil (${hrefs[0]})`);
+  }
+}
+
 if (failures.length) {
   console.error(`✖ ${failures.length} problème(s) dans le site généré :\n- ${failures.join('\n- ')}`);
   process.exit(1);

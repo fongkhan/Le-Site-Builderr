@@ -1,0 +1,61 @@
+/* Styles propres à l'éditeur de contenu (index.css reste le socle global) */
+
+/* Texte réservé aux lecteurs d'écran (annonces de déplacement…) */
+.cms-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Bouton « Dupliquer » d'une section, à côté des flèches */
+.cms-duplicate {
+  padding: 2px 6px;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.cms-duplicate:hover,
+.cms-duplicate:focus-visible {
+  color: var(--text-main);
+  background: var(--accent-blue-soft);
+}
+
+/* Annuler / Rétablir, à côté de l'indicateur d'enregistrement */
+.cms-history {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.cms-history button,
+.cms-page-order button {
+  padding: 4px 10px;
+  font-size: 0.8rem;
+}
+
+/* Position de la page dans le menu */
+.cms-page-order {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.cms-page-order label {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 0.85rem;
+  cursor: pointer;
+}

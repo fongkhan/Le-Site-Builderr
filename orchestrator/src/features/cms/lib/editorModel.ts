@@ -167,3 +167,94 @@ export function pageDeletionBlocker(page: EditorPage, pages: EditorPage[]): stri
   if (pages.length <= 1) return 'Le site doit garder au moins une page.';
   return null;
 }
+
+// --- Ordre du menu, duplication, annonces ---
+
+// Position cible d'une page dans le menu de SA langue : la page voisine de même langue
+// dans la direction demandée (les autres langues ne bougent pas), ou -1.
+function menuNeighbor(pages: EditorPage[], index: number, delta: -1 | 1): number {
+  const locale = pageLocale(pages[index]);
+  for (let i = index + delta; i >= 0 && i < pages.length; i += delta) {
+    if (pageLocale(pages[i]) === locale) return i;
+  }
+  return -1;
+}
+
+/** La page peut-elle monter (-1) ou descendre (+1) dans le menu de sa langue ? */
+export function canMovePage(pages: EditorPage[], pageId: string, delta: -1 | 1): boolean {
+  const index = pages.findIndex((p) => p.id === pageId);
+  return index !== -1 && menuNeighbor(pages, index, delta) !== -1;
+}
+
+// Monte (-1) ou descend (+1) une page dans le menu : l'ordre de la liste envoyée devient
+// l'ordre du menu (navOrder côté serveur).
+export function movePage(pages: EditorPage[], pageId: string, delta: -1 | 1): EditorPage[] {
+  const index = pages.findIndex((p) => p.id === pageId);
+  if (index === -1) return pages;
+  const target = menuNeighbor(pages, index, delta);
+  if (target === -1) return pages;
+  const next = pages.slice();
+  [next[index], next[target]] = [next[target], next[index]];
+  return next;
+}
+
+// Copie profonde d'un bloc (nouvel identifiant client), insérée juste après l'original.
+export function duplicateBlock(pages: EditorPage[], blockId: string): EditorPage[] {
+  return mapLayoutOf(pages, blockId, (layout, index) => {
+    const copy: EditorBlock = { ...structuredClone(layout[index]), id: newClientId() };
+    const next = layout.slice();
+    next.splice(index + 1, 0, copy);
+    return next;
+  });
+}
+
+// Réinsère un bloc à sa place (annulation d'une suppression) : position bornée à la
+// longueur actuelle ; sans effet si la page a disparu ou si le bloc est déjà présent.
+export function insertBlockAt(pages: EditorPage[], pageId: string, block: EditorBlock, index: number): EditorPage[] {
+  if (findBlock(pages, block.id)) return pages;
+  if (!pages.some((p) => p.id === pageId)) return pages;
+  return pages.map((p) => (p.id === pageId ? { ...p, layout: restoreItem(p.layout, index, block) } : p));
+}
+
+// Liste avec `item` réinséré à `index` (borné à la longueur actuelle de la liste).
+export function restoreItem<T>(list: readonly T[], index: number, item: T): T[] {
+  const next = list.slice();
+  next.splice(Math.max(0, Math.min(index, next.length)), 0, item);
+  return next;
+}
+
+/** Annonce lecteur d'écran après un déplacement (newIndex à partir de 0). */
+export function moveAnnouncement(label: string, newIndex: number, total: number): string {
+  return `Section ${label} déplacée en position ${newIndex + 1} sur ${total}.`;
+}
+
+const sameValue = (a: unknown, b: unknown) => a === b || JSON.stringify(a) === JSON.stringify(b);
+
+function changedKeys(a: object, b: object): string[] {
+  const ra = a as Record<string, unknown>;
+  const rb = b as Record<string, unknown>;
+  return [...new Set([...Object.keys(ra), ...Object.keys(rb)])].filter((k) => !sameValue(ra[k], rb[k]));
+}
+
+// Clé de regroupement de l'historique (annuler/rétablir) : page + bloc + champ quand une
+// modification ne touche qu'un champ, sinon undefined (étape d'historique à part).
+export function editGroupKey(prev: EditorPage[], next: EditorPage[]): string | undefined {
+  if (prev.length !== next.length) return undefined;
+  const changed = next.filter((p, i) => p !== prev[i]);
+  if (changed.length !== 1) return undefined;
+  const after = changed[0];
+  const before = prev[next.indexOf(after)];
+  if (before.id !== after.id) return undefined;
+  if (before.layout === after.layout) {
+    const keys = changedKeys(before, after).filter((k) => k !== 'layout');
+    return keys.length === 1 ? `${after.id}::${keys[0]}` : undefined;
+  }
+  if (before.layout.length !== after.layout.length) return undefined;
+  const blocks = after.layout.filter((b, i) => b !== before.layout[i]);
+  if (blocks.length !== 1) return undefined;
+  const block = blocks[0];
+  const old = before.layout[after.layout.indexOf(block)];
+  if (old.id !== block.id) return undefined;
+  const keys = changedKeys(old, block);
+  return keys.length === 1 ? `${after.id}:${block.id}:${keys[0]}` : undefined;
+}

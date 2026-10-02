@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useToast } from '../../../components/ui/ToastContext';
+import { restoreItem } from '../lib/editorModel';
 import type { ListUpdater } from './blockFields';
 import type { UpdateOptions } from './types';
 
@@ -37,6 +39,7 @@ const REMOVE_STYLE = { background: 'none', border: 'none', color: 'var(--accent-
 // (téléversement d'image) vise l'élément qui l'a lancé, même si un autre a été supprimé
 // entre-temps, et il est ignoré si cet élément a lui-même été supprimé.
 export function ItemListEditor<T>({ items, onUpdate, newItem, itemLabel, addLabel, renderItem, variant = 'card', title }: ItemListEditorProps<T>) {
+  const toast = useToast();
   const list = items ?? [];
   const [keys, setKeys] = useState<string[]>(() => list.map(newItemKey));
   const keysRef = useRef(keys);
@@ -59,13 +62,31 @@ export function ItemListEditor<T>({ items, onUpdate, newItem, itemLabel, addLabe
     }, { immediate: true });
   };
 
-  const remove = (key: string) => {
+  // Suppression annulable : l'élément et sa position sont mémorisés, « Annuler » le
+  // réinsère (position bornée à la longueur actuelle) avec une clé neuve au même rang.
+  const remove = (key: string, label: string) => {
     const index = keysRef.current.indexOf(key);
     if (index === -1) return;
+    let removed: { item: T } | null = null;
     setKeysNow(keysRef.current.filter((k) => k !== key));
     onUpdate((draft) => {
-      if (index < draft.length) draft.splice(index, 1);
+      if (index < draft.length) removed = { item: draft.splice(index, 1)[0] };
     }, { immediate: true });
+    toast.info(`Élément « ${label} » supprimé.`, {
+      action: {
+        label: 'Annuler',
+        onClick: () => {
+          if (!removed) return;
+          const { item } = removed;
+          onUpdate((draft) => {
+            const at = Math.min(index, draft.length);
+            const restored = restoreItem(draft, at, structuredClone(item));
+            draft.splice(0, draft.length, ...restored);
+            setKeysNow(restoreItem(keysRef.current, at, newItemKey()));
+          }, { immediate: true });
+        },
+      },
+    });
   };
 
   // Position ACTUELLE de l'élément (ou -1 s'il a été supprimé)
@@ -94,7 +115,7 @@ export function ItemListEditor<T>({ items, onUpdate, newItem, itemLabel, addLabe
         const key = keys[index] ?? `pending-${index}`;
         const label = `${itemLabel} ${index + 1}`;
         const removeButton = (
-          <button type="button" onClick={() => remove(key)} aria-label={`Supprimer : ${label}`} title={`Supprimer : ${label}`} style={REMOVE_STYLE}>
+          <button type="button" onClick={() => remove(key, label)} aria-label={`Supprimer : ${label}`} title={`Supprimer : ${label}`} style={REMOVE_STYLE}>
             ✕
           </button>
         );

@@ -173,6 +173,7 @@
         "title": "Mentions légales",
         "slug": "mentions-legales",
         "locale": "fr",
+        "hideFromNav": true,
         "layout": [
           { "blockType": "features", "title": "Éditeur du site", "items": [{ "title": "Atelier Démo", "description": "12 rue des Potiers, 69001 Lyon." }] },
           { "blockType": "footer", "text": "© Atelier Démo" }

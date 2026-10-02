@@ -920,6 +920,49 @@ if (admin.token) {
   check('Santé : réponses sans numéro de version', !/version/i.test(bodies));
 }
 
+// ---- Lot 5 ----
+// Ordre du menu (navOrder) : contrôle distinct du tri alphabétique ci-dessus. Sauvegarde
+// ciblée : renvoyer tel quel ce que l'éditeur a lu ne réécrit aucune page.
+if (admin.token) {
+  const created = await req('/api/sites', { method: 'POST', body: { name: 'Ordre menu SC' }, token: admin.token });
+  const slug = created.json?.site?.slug;
+  if (slug) {
+    const url = `/api/site-pages?site=${slug}`;
+    const pg = (s, extra = {}) => ({ title: s, slug: s, layout: [], ...extra });
+    const order = async () => ((await req(url, { token: admin.token })).json?.docs || []).map((p) => p.slug).join(',');
+    await req(url, { method: 'POST', body: { docs: [pg('home'), pg('tarifs'), pg('equipe')] }, token: admin.token });
+    check('Pages : ordre du menu conservé (home, tarifs, equipe)', (await order()) === 'home,tarifs,equipe', await order());
+    await req(url, { method: 'POST', body: { docs: [pg('equipe'), pg('tarifs'), pg('home')] }, token: admin.token });
+    check("Pages : ordre du menu inversé à l'enregistrement", (await order()) === 'equipe,tarifs,home', await order());
+
+    const badNav = await req(url, { method: 'POST', body: { docs: [pg('home', { hideFromNav: 'oui' })] }, token: admin.token });
+    check('Pages : hideFromNav non booléen -> 400', badNav.status === 400, `HTTP ${badNav.status}`);
+
+    // Contenu varié (listes, cases, groupe, galerie), masqué du menu, puis aller-retour
+    const layout = [
+      { blockType: 'hero', title: 'Bienvenue', subtitle: '', ctaText: 'Voir' },
+      { blockType: 'gallery', title: 'Photos', images: ['https://exemple.fr/a.jpg'] },
+      { blockType: 'pricing', title: 'Tarifs', plans: [{ name: 'Base', price: '0 €', isPopular: false, features: [{ feature: 'x' }] }] },
+      { blockType: 'testimonials', title: 'Avis', testimonials: [{ quote: 'Super', author: 'A', rating: 5 }] },
+      { blockType: 'footer', text: '©', socials: { instagram: 'https://instagram.com/x' } },
+    ];
+    await req(url, { method: 'POST', body: { docs: [pg('home', { layout }), pg('tarifs', { hideFromNav: true }), pg('equipe')] }, token: admin.token });
+    const read = await req(url, { token: admin.token });
+    const tarifs = read.json?.docs?.find((p) => p.slug === 'tarifs');
+    check('Pages : hideFromNav enregistré et relu', tarifs?.hideFromNav === true, JSON.stringify(tarifs?.hideFromNav));
+    const siteDoc = await req(`/api/payload_sites?where[slug][equals]=${slug}&depth=0`, { token: admin.token });
+    const siteId = siteDoc.json?.docs?.[0]?.id;
+    const stamps = async () => ((await req(`/api/pages?where[site][equals]=${siteId}&depth=0&limit=50&sort=slug`, { token: admin.token })).json?.docs || []).map((p) => `${p.slug}@${p.updatedAt}`).join(',');
+    if (siteId && Array.isArray(read.json?.docs)) {
+      const before = await stamps();
+      const resave = await req(url, { method: 'POST', body: { docs: read.json.docs }, token: admin.token });
+      const after = await stamps();
+      check("Pages : renvoyer le contenu lu n'écrit aucune page (sauvegarde ciblée)", resave.status === 200 && before !== '' && before === after, `${before} → ${after}`);
+    }
+    await req(`/api/sites/${slug}`, { method: 'DELETE', token: admin.token });
+  }
+}
+
 // ---- Rate-limit login (EN DERNIER : consomme le budget d'échecs de l'IP) ----
 // Les connexions réussies ne comptent pas (skipSuccessfulRequests) : seules les
 // tentatives ratées ci-dessous épuisent le quota jusqu'au 429. On cible un email

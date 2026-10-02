@@ -47,3 +47,99 @@ test('normalizePost — champs par défaut et statut borné', () => {
     title: 'T', slug: 't', excerpt: '', coverImage: '', body: '', tags: '', publishedAt: null, status: 'draft',
   });
 });
+
+// ---- Sauvegarde ciblée : seules les pages modifiées sont réécrites ----
+const { planPageWrites, canonicalPage, toEditorPage } = require('../../services/content.js');
+
+// Page telle que Payload la renvoie en depth 0 : identifiants de lignes, blockName, null.
+const dbPage = (extra = {}) => ({
+  id: 11,
+  title: 'Accueil',
+  slug: 'home',
+  locale: 'fr',
+  metaTitle: null,
+  metaDescription: 'Bienvenue',
+  navOrder: 0,
+  hideFromNav: false,
+  site: 4,
+  createdAt: '2024-01-01T00:00:00.000Z',
+  updatedAt: '2024-01-02T00:00:00.000Z',
+  layout: [
+    { id: 'b1', blockName: null, blockType: 'hero', title: 'Bonjour', subtitle: '', ctaText: null, backgroundImage: null },
+    { id: 'b2', blockName: null, blockType: 'gallery', title: 'Photos', images: [{ id: 'i1', url: 'https://img/a.jpg' }] },
+    { id: 'b3', blockName: null, blockType: 'pricing', title: null, plans: [{ id: 'p1', name: 'Base', price: '0', isPopular: false, features: [{ id: 'f1', feature: 'x' }] }] },
+  ],
+  ...extra,
+});
+const input = (extra = {}) => ({
+  title: 'Accueil',
+  slug: 'home',
+  metaDescription: 'Bienvenue',
+  layout: [
+    { blockType: 'hero', title: 'Bonjour', subtitle: '' },
+    { blockType: 'gallery', title: 'Photos', images: ['https://img/a.jpg'] },
+    { blockType: 'pricing', plans: [{ name: 'Base', price: '0', isPopular: false, features: [{ feature: 'x' }] }] },
+  ],
+  ...extra,
+});
+const sizes = (plan) => [plan.creates.length, plan.updates.length, plan.deletes.length];
+
+test('planPageWrites (a) — page inchangée : aucune écriture', () => {
+  assert.deepEqual(sizes(planPageWrites([dbPage()], [input()], new Set())), [0, 0, 0]);
+});
+
+test('planPageWrites (b) — page nouvelle : création avec navOrder = position', () => {
+  const plan = planPageWrites([dbPage()], [input(), input({ slug: 'contact', title: 'Contact', locale: 'en' })], new Set());
+  assert.deepEqual(sizes(plan), [1, 0, 0]);
+  assert.equal(plan.creates[0].navOrder, 1);
+  assert.equal(plan.creates[0].locale, 'en');
+  assert.equal(plan.creates[0].hideFromNav, false);
+});
+
+test('planPageWrites (c) — texte, visibilité ou position modifiés : mise à jour', () => {
+  assert.equal(planPageWrites([dbPage()], [input({ layout: [{ blockType: 'hero', title: 'Salut' }] })], []).updates.length, 1);
+  const hidden = planPageWrites([dbPage()], [input({ hideFromNav: true })], []);
+  assert.equal(hidden.updates[0].id, 11);
+  assert.equal(hidden.updates[0].data.hideFromNav, true);
+  const moved = planPageWrites([dbPage()], [input({ slug: 'a' }), input()], []);
+  assert.equal(moved.updates[0].data.navOrder, 1);
+  // '', 0 et false sont des valeurs : false → absent est une modification
+  const [hero, gallery] = input().layout;
+  const noFlag = { blockType: 'pricing', plans: [{ name: 'Base', price: '0', features: [{ feature: 'x' }] }] };
+  assert.equal(planPageWrites([dbPage()], [input({ layout: [hero, gallery, noFlag] })], []).updates.length, 1);
+});
+
+test('planPageWrites (d) — galerie et identifiants : même forme canonique', () => {
+  const [hero, , pricing] = input().layout;
+  const asObjects = input({ layout: [hero, { blockType: 'gallery', title: 'Photos', images: [{ url: 'https://img/a.jpg' }] }, pricing] });
+  assert.equal(canonicalPage(dbPage()), canonicalPage({ ...asObjects, navOrder: 0 }));
+  // Ordre des clés indifférent
+  assert.equal(canonicalPage({ navOrder: 0, ...input() }), canonicalPage({ ...input(), navOrder: 0 }));
+});
+
+test('planPageWrites (e) — suppressions : listées seulement, jamais une page renvoyée', () => {
+  const other = dbPage({ id: 12, slug: 'equipe', navOrder: 1 });
+  // Absente du corps (autre onglet) : conservée, à sa place
+  assert.deepEqual(sizes(planPageWrites([dbPage(), other], [input()], new Set())), [0, 0, 0]);
+  const listed = planPageWrites([dbPage(), other], [input()], new Set(['fr:equipe']));
+  assert.deepEqual(listed.deletes.map((p) => p.id), [12]);
+  assert.deepEqual(planPageWrites([dbPage(), other], [input()], ['fr:home']).deletes, []);
+});
+
+test('planPageWrites (f) — doublon en base : le plus ancien est supprimé', () => {
+  const old = dbPage({ id: 5, updatedAt: '2023-01-01T00:00:00.000Z', title: 'Vieux' });
+  const plan = planPageWrites([old, dbPage()], [input()], new Set());
+  assert.deepEqual(sizes(plan), [0, 0, 1]);
+  assert.equal(plan.deletes[0].id, 5);
+});
+
+test('planPageWrites — inchangé après aller-retour par readSitePages', () => {
+  const docs = [dbPage(), dbPage({ id: 12, slug: 'en-home', locale: 'en', navOrder: 1, hideFromNav: true, metaDescription: null, layout: [] })];
+  const roundTrip = JSON.parse(JSON.stringify(docs.map(toEditorPage)));
+  assert.deepEqual(sizes(planPageWrites(docs, roundTrip, new Set())), [0, 0, 0]);
+});
+
+test('validatePagesBody — hideFromNav doit être un booléen', () => {
+  assert.equal(validatePagesBody({ docs: [page({ hideFromNav: true })] }), null);
+  assert.match(validatePagesBody({ docs: [page({ hideFromNav: 'oui' })] }), /hideFromNav/);
+});

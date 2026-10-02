@@ -519,6 +519,18 @@ export default buildConfig({
           name: 'metaDescription',
           type: 'textarea',
         },
+        {
+          // Position dans le menu (écrite par le CMS) ; sans valeur : en fin de menu
+          name: 'navOrder',
+          type: 'number',
+          index: true,
+        },
+        {
+          // Page publiée mais absente du menu de navigation (reste dans le sitemap)
+          name: 'hideFromNav',
+          type: 'checkbox',
+          defaultValue: false,
+        },
         siteRelationField(),
         {
           name: 'layout',
