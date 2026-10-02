@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { exec } = require('child_process');
+const { runCommand } = require('../lib/run-command');
 const sitesStore = require('../sites-store');
 const hosting = require('../core/hosting');
 const releases = require('../lib/releases');
@@ -12,7 +12,7 @@ const seo = require('../lib/seo');
 const media = require('../lib/media');
 const i18n = require('../lib/i18n');
 const { assertSafePath, assertStrictlyInside, previewPathFor } = require('../lib/paths');
-const { replaceDirAtomically } = require('../lib/fs-swap');
+const { replaceDirAtomically, recoverInterruptedSwaps } = require('../lib/fs-swap');
 const { getPayloadInstance } = require('../core/payload');
 const { sendMail } = require('../core/mail');
 const { appendBuildLog, appendRawBuildLog, resetBuildLog } = require('../core/build-log');
@@ -69,13 +69,30 @@ let buildLockHeld = false;
 let activeBuildingSite = null;
 let activeBasePath = '/';
 
-// Vider les logs + nettoyer un verrou orphelin laissé par un crash
+// Vider les logs + reprise après crash : verrou orphelin, bascules de dossiers
+// interrompues (site écarté en .old restauré, copies .tmp supprimées) et releases
+// partielles.
 function resetOnBoot() {
   resetBuildLog('Initialisation du système de build...\n');
   buildLockHeld = false;
   if (fs.existsSync(LOCK_FILE)) {
     fs.unlinkSync(LOCK_FILE);
     appendRawBuildLog('Verrou de build orphelin détecté et nettoyé au démarrage.\n');
+  }
+  // Détail (noms de dossiers d'autres sites) dans le journal du serveur seulement : le
+  // journal de build est lisible par tout client tant qu'aucun build n'a eu lieu.
+  const actions = [];
+  for (const [label, root] of [['production', PUBLIC_HTML_DIR], ['brouillons', DRAFTS_DIR]]) {
+    for (const action of recoverInterruptedSwaps(root)) actions.push(`${label} : ${action}`);
+  }
+  try {
+    for (const removed of releases.removePartialReleases(RELEASES_DIR)) actions.push(`releases : partielle supprimée : ${removed}`);
+  } catch (err) {
+    actions.push(`releases : échec du nettoyage : ${err.message}`);
+  }
+  for (const action of actions) console.warn(`♻️ [Reprise] ${action}`);
+  if (actions.length > 0) {
+    appendRawBuildLog(`Reprise après un arrêt brutal : ${actions.length} dossier(s) de déploiement remis en ordre.\n`);
   }
 }
 
@@ -168,8 +185,9 @@ function drainQueue() {
 }
 
 // Variables du serveur jamais transmises au build (npm install exécute des scripts
-// tiers) : base de données, secrets, clés d'API, identifiants SMTP/cPanel.
-const SECRET_ENV = /(SECRET|PASSWORD|PASSWD|PASS$|TOKEN|API_KEY|_KEY$|DATABASE_URI|^CPANEL_|^SMTP_|^SEED_)/i;
+// tiers) : base de données (DATABASE_URI/URL, POSTGRES_*, PG*, DB_*), secrets, clés
+// d'API, identifiants SMTP/cPanel.
+const SECRET_ENV = /(SECRET|PASSWORD|PASSWD|PASS$|TOKEN|API_KEY|_KEY$|DATABASE_UR[IL]|^POSTGRES_|^PG|^DB_|^CPANEL_|^SMTP_|^SEED_)/i;
 
 function sanitizedEnv(env = process.env) {
   const out = {};
@@ -244,16 +262,67 @@ async function notifyBuildResult(siteSlug, siteName, status, durationMs) {
   await sendMail(emails, subject, text);
 }
 
-// Exécute la commande de build dans le template (callback (error, stdout, stderr)).
-// Borné dans le temps (un npm install bloqué ne garde pas le verrou indéfiniment) et
-// avec un tampon de sortie large (le maxBuffer par défaut, 1 Mo, tue les gros builds).
-function runAstroBuild(command, env, callback) {
-  exec(command, { cwd: ASTRO_PROJECT_DIR, env, timeout: BUILD_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024, killSignal: 'SIGKILL' }, (error, stdout, stderr) => {
-    if (error && error.killed) {
-      error.message = `Build interrompu après ${Math.round(BUILD_TIMEOUT_MS / 1000)} s (délai maximal BUILD_TIMEOUT_MS dépassé).`;
+// Plafond de la sortie recopiée dans le journal pour un build (le fichier est sondé par
+// l'orchestrateur pendant tout le build).
+const MAX_BUILD_OUTPUT_BYTES = 5 * 1024 * 1024;
+
+// Commande en cours (build ou brouillon) : arrêt gracieux du serveur (abortCurrent).
+let currentRun = null;
+
+// Exécute la commande de build dans le template (callback (error, stdout, stderr) ; stdout
+// et stderr valent tous deux la fin de la sortie entrelacée). Borné dans le temps : au
+// délai maximal, TOUT l'arbre de processus est tué (npm, astro…) et le callback n'est
+// appelé qu'une fois tous les descripteurs fermés, avant que le build suivant ne reprenne
+// le dist. log=true : la sortie est recopiée en direct dans le journal (plafonnée) ; un
+// brouillon ne l'écrit pas (journal lisible par les propriétaires du dernier build).
+function runAstroBuild(command, env, callback, { log = true } = {}) {
+  let written = 0;
+  let capped = false;
+  const onOutput = log
+    ? (text) => {
+        if (capped) return;
+        const bytes = Buffer.byteLength(text);
+        if (written + bytes > MAX_BUILD_OUTPUT_BYTES) {
+          capped = true;
+          appendRawBuildLog('\n[… sortie tronquée …]\n');
+          return;
+        }
+        written += bytes;
+        appendRawBuildLog(text);
+      }
+    : undefined;
+
+  let run;
+  try {
+    run = runCommand(command, { cwd: ASTRO_PROJECT_DIR, env, timeoutMs: BUILD_TIMEOUT_MS, onOutput });
+  } catch (err) {
+    return callback(err, '', '');
+  }
+  currentRun = run;
+  run.promise.then(
+    ({ code, signal, timedOut, tail }) => {
+      if (currentRun === run) currentRun = null;
+      let error = null;
+      if (timedOut) {
+        error = new Error(`Build interrompu après ${Math.round(BUILD_TIMEOUT_MS / 1000)} s (délai maximal BUILD_TIMEOUT_MS dépassé).`);
+      } else if (code !== 0) {
+        error = new Error(signal ? `Build interrompu (signal ${signal}).` : `Build échoué (code de sortie ${code}).`);
+      }
+      callback(error, tail, tail);
+    },
+    (err) => {
+      if (currentRun === run) currentRun = null;
+      callback(err, '', '');
     }
-    callback(error, stdout, stderr);
-  });
+  );
+}
+
+// Arrêt gracieux : tue l'arbre de processus du build en cours (s'il y en a un). Le build
+// se termine alors en erreur par son chemin normal (verrou libéré dans le finally).
+function abortCurrent() {
+  if (!currentRun) return false;
+  currentRun.kill();
+  return true;
 }
 
 // Commande de build : installe les dépendances du template au premier build, et à
@@ -290,9 +359,9 @@ async function startDraftBuild(siteSlug) {
 
     await new Promise((resolve, reject) => {
       runAstroBuild(buildCommand(), buildEnvFor(site, siteSlug, { draft: true }), (error, stdout, stderr) => {
-        if (error) return reject(new Error(`Build brouillon échoué : ${String(stderr || stdout).slice(-500)}`));
+        if (error) return reject(new Error(`Build brouillon échoué : ${error.message}\n${String(stderr || stdout).slice(-500)}`));
         resolve();
-      });
+      }, { log: false });
     });
 
     if (!fs.existsSync(path.join(DIST_DIR, 'index.html'))) {
@@ -450,12 +519,12 @@ async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
 
   if (error) {
     console.error(`Erreur de build : ${error.message}`);
-    appendBuildLog(`ERREUR DE BUILD :\n${error.message}\n${stderr}`, { gap: true });
+    // La sortie a déjà été recopiée en direct dans le journal
+    appendBuildLog(`ERREUR DE BUILD :\n${error.message}`, { gap: true });
     failBuild(siteSlug, site, error.message, `${error.message}\n${stderr || ''}`);
     return;
   }
 
-  appendBuildLog(`RÉSULTAT DU BUILD ASTRO :\n${stdout}`, { gap: true });
   appendBuildLog(`Astro compilé. Déploiement atomique vers ${site.documentRoot}...`);
 
   // Déploiement atomique LOCAL : sert l'aperçu (/preview) et constitue la publication
@@ -556,4 +625,5 @@ module.exports = {
   launch,
   runDraftPreview,
   sanitizedEnv,
+  abortCurrent,
 };

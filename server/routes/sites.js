@@ -254,8 +254,9 @@ router.post('/api/sites/scan', auth.authenticate, auth.requireAdmin, async (req,
       return res.status(400).json({ error: `Le chemin spécifié n'existe pas : ${targetDir}` });
     }
 
+    // Copies de bascule (X.tmp-…, X.old-…) jamais proposées à l'import
     const dirs = fs.readdirSync(targetDir, { withFileTypes: true })
-      .filter(dirent => dirent.isDirectory())
+      .filter(dirent => dirent.isDirectory() && !/\.(tmp|old)-/.test(dirent.name))
       .map(dirent => dirent.name);
 
     const scanned = [];

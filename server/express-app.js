@@ -10,6 +10,7 @@ const auth = require('./auth');
 const { isValidSlug } = require('./lib/paths');
 
 const ROUTERS = [
+  require('./routes/health'),
   require('./routes/sites'),
   require('./routes/admin'),
   require('./routes/content'),

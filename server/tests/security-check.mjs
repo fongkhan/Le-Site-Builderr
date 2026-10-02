@@ -904,6 +904,22 @@ if (admin.token) {
   }
 }
 
+// ---- Lot 3 : santé ----
+{
+  const live = await req('/api/health');
+  check('Santé : GET /api/health anonyme -> 200 status ok', live.status === 200 && live.json?.status === 'ok' && Number.isFinite(live.json?.uptimeS), `HTTP ${live.status}`);
+  const ready = await req('/api/health/ready');
+  check('Santé : GET /api/health/ready -> 200 avec database ok', ready.status === 200 && ready.json?.checks?.database === 'ok', `HTTP ${ready.status} ${JSON.stringify(ready.json)}`);
+  check('Santé : ready détaille storage et build', ready.json?.checks?.storage === 'ok' && typeof ready.json?.checks?.build?.inProgress === 'boolean' && Number.isInteger(ready.json?.checks?.build?.queueLength));
+  // Aucune fuite : ni chaîne de connexion, ni secret, ni chemin absolu, ni version
+  const bodies = `${JSON.stringify(live.json)}${JSON.stringify(ready.json)}`;
+  const secret = process.env.PAYLOAD_SECRET;
+  check('Santé : réponses sans chaîne de connexion postgres://', !bodies.includes('postgres://'));
+  check('Santé : réponses sans PAYLOAD_SECRET', !secret || !bodies.includes(secret));
+  check('Santé : réponses sans chemin absolu', !/"(\/[A-Za-z0-9._-]+){2,}|[A-Za-z]:\\\\/.test(bodies), bodies);
+  check('Santé : réponses sans numéro de version', !/version/i.test(bodies));
+}
+
 // ---- Rate-limit login (EN DERNIER : consomme le budget d'échecs de l'IP) ----
 // Les connexions réussies ne comptent pas (skipSuccessfulRequests) : seules les
 // tentatives ratées ci-dessous épuisent le quota jusqu'au 429. On cible un email

@@ -51,3 +51,52 @@ test('replaceDirAtomically — échec de copie : version en ligne intacte, erreu
   assert.equal(fs.readFileSync(path.join(dest, 'index.html'), 'utf-8'), 'en ligne');
   assert.deepEqual(fs.readdirSync(root), ['site']);
 });
+
+const { recoverInterruptedSwaps } = require('../../lib/fs-swap.js');
+
+test('recoverInterruptedSwaps — (a) site écarté en .old, cible absente : restauré', () => {
+  const root = tmpRoot();
+  fs.mkdirSync(path.join(root, 'site.old-site'));
+  fs.writeFileSync(path.join(root, 'site.old-site', 'index.html'), 'en ligne');
+  fs.mkdirSync(path.join(root, 'site.tmp-site'));
+  fs.writeFileSync(path.join(root, 'site.tmp-site', 'index.html'), 'partiel');
+
+  const actions = recoverInterruptedSwaps(root);
+
+  assert.equal(fs.readFileSync(path.join(root, 'site', 'index.html'), 'utf-8'), 'en ligne');
+  assert.deepEqual(fs.readdirSync(root), ['site']);
+  assert.equal(actions.length, 2);
+});
+
+test('recoverInterruptedSwaps — (b) site + copie .tmp : le .tmp est supprimé, le site intact', () => {
+  const root = tmpRoot();
+  fs.mkdirSync(path.join(root, 'site'));
+  fs.writeFileSync(path.join(root, 'site', 'index.html'), 'en ligne');
+  fs.mkdirSync(path.join(root, 'site.tmp-site'));
+  fs.writeFileSync(path.join(root, 'site.tmp-site', 'index.html'), 'partiel');
+
+  recoverInterruptedSwaps(root);
+
+  assert.equal(fs.readFileSync(path.join(root, 'site', 'index.html'), 'utf-8'), 'en ligne');
+  assert.deepEqual(fs.readdirSync(root), ['site']);
+});
+
+test('recoverInterruptedSwaps — un .old n’écrase jamais une cible existante ; suffixes draft/rollback', () => {
+  const root = tmpRoot();
+  fs.mkdirSync(path.join(root, 'site'));
+  fs.writeFileSync(path.join(root, 'site', 'index.html'), 'nouveau');
+  fs.mkdirSync(path.join(root, 'site.old-rollback'));
+  fs.writeFileSync(path.join(root, 'site.old-rollback', 'index.html'), 'ancien');
+  fs.mkdirSync(path.join(root, 'autre.old-draft'));
+  fs.mkdirSync(path.join(root, 'autre2.tmp-draft'));
+  fs.mkdirSync(path.join(root, 'pas.une.bascule'));
+
+  recoverInterruptedSwaps(root);
+
+  assert.equal(fs.readFileSync(path.join(root, 'site', 'index.html'), 'utf-8'), 'nouveau');
+  assert.deepEqual(fs.readdirSync(root).sort(), ['autre', 'pas.une.bascule', 'site']);
+});
+
+test('recoverInterruptedSwaps — racine absente : aucune action', () => {
+  assert.deepEqual(recoverInterruptedSwaps(path.join(os.tmpdir(), `introuvable-${Date.now()}`)), []);
+});

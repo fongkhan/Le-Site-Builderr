@@ -194,8 +194,15 @@ Ce que fait le mode cPanel :
 ### 4. Pipeline de déploiement avec file d'attente
 * Webhook de build authentifié, verrou physique `build.lock` (nettoyé au boot si orphelin).
 * **File d'attente** : un déploiement demandé pendant un build en cours est mis en file et lancé automatiquement à la fin du build courant (plus de rejet). Position visible dans l'interface.
-* Logs de build en direct dans l'interface (filtrés : un client ne voit pas les logs des builds d'autres sites).
+* Logs de build en direct dans l'interface (filtrés : un client ne voit pas les logs des builds d'autres sites) : la sortie de `npm`/`astro` est recopiée au fil de l'eau (plafonnée à ~5 Mo par build) et l'interface n'en lit que les 200 derniers Ko.
+* **Délai maximal** (`BUILD_TIMEOUT_MS`, 10 min par défaut) : au dépassement, tout l'arbre de processus du build est tué (groupe de processus POSIX, `taskkill /T` sous Windows) avant que le build suivant ne reprenne le dossier `dist`.
+* **Reprise après crash** : au démarrage, un site écarté par une bascule interrompue (`<dossier>.old-…`) est restauré s'il manque, les copies partielles (`.tmp-…`) et les releases inachevées (`<id>.partial`) sont supprimées ; le scan d'import ignore ces dossiers.
 * Copie du bundle statique vers le `documentRoot` du site (simulation o2switch).
+
+### Supervision : endpoints de santé
+Publics, sans authentification, sans secret, version ni chemin dans la réponse :
+* `GET /api/health` — vivacité : `200 { "status": "ok", "uptimeS": 42 }` dès que le process répond.
+* `GET /api/health/ready` — disponibilité : `200` (`ok` ou `degraded`) ou `503` (`down`) avec `{ "status", "checks": { "database", "storage", "build": { "inProgress", "queueLength" } } }`. `database` exécute un `select 1` borné à 2 s ; `storage` vérifie l'accès en écriture aux données, à la production et à la médiathèque ; `build` est informatif. Limité à 120 requêtes / 15 min par IP. À utiliser pour une sonde de disponibilité, un `HEALTHCHECK` Docker ou l'attente de démarrage en CI (`curl -fsS http://localhost:4000/api/health/ready`).
 
 ### 5. Payload CMS v3 multi-tenant
 * Collections `users` (auth + rôles + quota IA), `payload_sites` (source de vérité), `pages` (blocs), `themes`, avec access control par rôle et ownership.

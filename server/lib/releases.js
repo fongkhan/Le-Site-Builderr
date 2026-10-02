@@ -13,13 +13,49 @@ function releaseDirFor(baseDir, slug, releaseId) {
   return path.join(baseDir, slug, String(releaseId));
 }
 
-// Copie le build dans une nouvelle release et renvoie son identifiant.
+// Suffixe d'une release en cours de copie : jamais listée ni restaurable (RELEASE_ID ne
+// l'accepte pas), supprimée au boot si un crash l'a interrompue.
+const PARTIAL_SUFFIX = '.partial';
+
+// Copie le build dans une nouvelle release et renvoie son identifiant. Copie complète
+// dans `<id>.partial` puis renommage : une release interrompue n'est jamais prise pour
+// valide au rollback ni comptée dans la rétention.
 function saveRelease(baseDir, slug, distDir, now = Date.now()) {
   const releaseId = String(now);
   const dest = releaseDirFor(baseDir, slug, releaseId);
-  fs.mkdirSync(dest, { recursive: true });
-  fs.cpSync(distDir, dest, { recursive: true, force: true });
+  const partial = dest + PARTIAL_SUFFIX;
+  fs.rmSync(partial, { recursive: true, force: true });
+  fs.mkdirSync(partial, { recursive: true });
+  try {
+    fs.cpSync(distDir, partial, { recursive: true, force: true });
+    fs.renameSync(partial, dest);
+  } catch (err) {
+    fs.rmSync(partial, { recursive: true, force: true });
+    throw err;
+  }
   return releaseId;
+}
+
+// Reprise au boot : supprime les releases partielles (`<slug>/<id>.partial`) laissées par
+// un crash pendant la copie. Renvoie les chemins relatifs supprimés.
+function removePartialReleases(baseDir) {
+  const removed = [];
+  let slugs;
+  try {
+    slugs = fs.readdirSync(baseDir, { withFileTypes: true }).filter((e) => e.isDirectory());
+  } catch {
+    return removed; // aucune release encore
+  }
+  for (const slugEntry of slugs) {
+    const dir = path.join(baseDir, slugEntry.name);
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.isDirectory() && e.name.endsWith(PARTIAL_SUFFIX)) {
+        fs.rmSync(path.join(dir, e.name), { recursive: true, force: true });
+        removed.push(`${slugEntry.name}/${e.name}`);
+      }
+    }
+  }
+  return removed;
 }
 
 // Liste les releases d'un site, plus récentes d'abord.
@@ -51,4 +87,4 @@ function resolveRelease(baseDir, slug, releaseId) {
   return fs.existsSync(path.join(dir, 'index.html')) ? dir : null;
 }
 
-module.exports = { saveRelease, listReleases, pruneReleases, resolveRelease, RELEASE_ID };
+module.exports = { saveRelease, listReleases, pruneReleases, resolveRelease, removePartialReleases, RELEASE_ID };
