@@ -168,6 +168,26 @@
           { "blockType": "gallery", "title": "", "images": ["https://images.unsplash.com/photo-1493106641515-6b5631de4bb9?auto=format&fit=crop&q=80&w=600"] },
           { "blockType": "footer", "text": "© Atelier Démo" }
         ]
+      },
+      {
+        "title": "Mentions légales",
+        "slug": "mentions-legales",
+        "locale": "fr",
+        "layout": [
+          { "blockType": "features", "title": "Éditeur du site", "items": [{ "title": "Atelier Démo", "description": "12 rue des Potiers, 69001 Lyon." }] },
+          { "blockType": "footer", "text": "© Atelier Démo" }
+        ]
+      },
+      {
+        "title": "Ateliers",
+        "slug": "ateliers",
+        "locale": "fr",
+        "layout": [
+          { "blockType": "hero", "title": "Nos ateliers", "subtitle": "Initiation et perfectionnement." },
+          { "blockType": "footer", "text": "© Atelier Démo" },
+          { "blockType": "hero", "title": "Atelier enfants", "subtitle": "Le mercredi après-midi.", "ctaText": "Prendre rendez-vous" },
+          { "blockType": "appointment", "title": "Réserver un atelier", "services": [{ "name": "Initiation" }] }
+        ]
       }
     ]
   },

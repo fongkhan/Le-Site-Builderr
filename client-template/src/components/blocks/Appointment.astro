@@ -4,6 +4,7 @@
 // propriétaires du site par email. Balisage, styles et envoi communs : LeadForm.astro.
 // Ancre stable #rendez-vous : cible des CTA de la page.
 import LeadForm from '../forms/LeadForm.astro';
+import { t } from '../../lib/ui-strings.mjs';
 
 interface Props {
   data: {
@@ -14,17 +15,20 @@ interface Props {
   };
   /** id d'ancre attribué par la page (unique : « rendez-vous », « rendez-vous-2 »…). */
   anchorId?: string;
+  /** Langue de la page (libellés d'interface, lib/ui-strings.mjs). */
+  locale?: string;
 }
 
-const { data, anchorId = 'rendez-vous' } = Astro.props;
+const { data, anchorId = 'rendez-vous', locale } = Astro.props;
 const services = (data.services || []).map((s) => s?.name).filter(Boolean) as string[];
 ---
 
 <LeadForm
   kind="appointment"
   anchorId={anchorId}
-  title={data.title || 'Prendre rendez-vous'}
+  title={data.title || t(locale, 'appointmentTitle')}
   subtitle={data.subtitle}
-  ctaText={data.ctaText || 'Demander un rendez-vous'}
+  ctaText={data.ctaText || t(locale, 'appointmentCta')}
+  locale={locale}
   services={services}
 />

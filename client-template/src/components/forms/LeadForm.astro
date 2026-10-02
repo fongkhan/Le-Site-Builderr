@@ -2,7 +2,10 @@
 // Section de formulaire commune aux blocs Contact et Appointment (prise de RDV) :
 // titre, introduction et formulaire accessible (libellés associés, masqués visuellement
 // pour garder le design à placeholders). Les deux formulaires postent vers l'API de
-// contact du site ; l'envoi en fetch est géré par lead-form.ts.
+// contact du site ; l'envoi en fetch est géré par lead-form.ts (messages d'état traduits
+// transmis par les attributs data-msg-*).
+import { t } from '../../lib/ui-strings.mjs';
+
 interface Props {
   kind: 'contact' | 'appointment';
   /** id d'ancre de la section (#contact, #rendez-vous), unique sur la page. */
@@ -12,10 +15,13 @@ interface Props {
   ctaText: string;
   /** Prestations proposées (prise de RDV uniquement). */
   services?: string[];
+  /** Langue de la page (libellés d'interface, lib/ui-strings.mjs). */
+  locale?: string;
 }
 
-const { kind, anchorId, title, subtitle, ctaText, services = [] } = Astro.props;
+const { kind, anchorId, title, subtitle, ctaText, services = [], locale } = Astro.props;
 const isAppointment = kind === 'appointment';
+const tr = (key: string) => t(locale, key);
 const fid = (name: string) => `${anchorId}-${name}`;
 
 // Slug injecté au build ; l'API de contact est servie par l'orchestrateur.
@@ -32,42 +38,50 @@ const action = `${apiBase}/api/contact/${encodeURIComponent(slug)}`;
     <h2 id={fid('title')}>{title}</h2>
     {subtitle && <p class="lead-intro">{subtitle}</p>}
 
-    <form class="lead-form" method="post" action={action} data-kind={kind}>
-      <label class="visually-hidden" for={fid('name')}>Votre nom</label>
-      <input id={fid('name')} type="text" name="name" placeholder="Votre nom" required maxlength="120" autocomplete="name" />
+    <form
+      class="lead-form"
+      method="post"
+      action={action}
+      data-kind={kind}
+      data-msg-sending={tr('formSending')}
+      data-msg-ok={tr(isAppointment ? 'appointmentOk' : 'contactOk')}
+      data-msg-error={tr(isAppointment ? 'appointmentError' : 'contactError')}
+    >
+      <label class="visually-hidden" for={fid('name')}>{tr('formName')}</label>
+      <input id={fid('name')} type="text" name="name" placeholder={tr('formName')} required maxlength="120" autocomplete="name" />
 
-      <label class="visually-hidden" for={fid('email')}>Votre email</label>
-      <input id={fid('email')} type="email" name="email" placeholder="Votre email" required maxlength="200" autocomplete="email" />
+      <label class="visually-hidden" for={fid('email')}>{tr('formEmail')}</label>
+      <input id={fid('email')} type="email" name="email" placeholder={tr('formEmail')} required maxlength="200" autocomplete="email" />
 
       {isAppointment && (
         <>
           <input type="hidden" name="kind" value="appointment" />
-          <label class="visually-hidden" for={fid('phone')}>Votre téléphone</label>
-          <input id={fid('phone')} type="tel" name="phone" placeholder="Votre téléphone" maxlength="40" autocomplete="tel" />
+          <label class="visually-hidden" for={fid('phone')}>{tr('formPhone')}</label>
+          <input id={fid('phone')} type="tel" name="phone" placeholder={tr('formPhone')} maxlength="40" autocomplete="tel" />
 
           {services.length > 0 && (
             <>
-              <label class="visually-hidden" for={fid('service')}>Prestation souhaitée</label>
+              <label class="visually-hidden" for={fid('service')}>{tr('formService')}</label>
               <select id={fid('service')} name="service">
-                <option value="">Prestation souhaitée…</option>
+                <option value="">{tr('formServicePlaceholder')}</option>
                 {services.map((s) => <option value={s}>{s}</option>)}
               </select>
             </>
           )}
 
-          <label class="visually-hidden" for={fid('slot')}>Créneau souhaité</label>
-          <input id={fid('slot')} type="text" name="slot" placeholder="Créneau souhaité (ex. mardi après-midi)" maxlength="120" />
+          <label class="visually-hidden" for={fid('slot')}>{tr('formSlot')}</label>
+          <input id={fid('slot')} type="text" name="slot" placeholder={tr('formSlotPlaceholder')} maxlength="120" />
         </>
       )}
 
-      <label class="visually-hidden" for={fid('message')}>{isAppointment ? 'Précisions (facultatif)' : 'Votre message'}</label>
+      <label class="visually-hidden" for={fid('message')}>{tr(isAppointment ? 'formDetails' : 'formMessage')}</label>
       {isAppointment
-        ? <textarea id={fid('message')} name="message" placeholder="Précisions (facultatif)…" rows="3" maxlength="4000"></textarea>
-        : <textarea id={fid('message')} name="message" placeholder="Votre message…" required rows="4" maxlength="5000"></textarea>}
+        ? <textarea id={fid('message')} name="message" placeholder={tr('formDetailsPlaceholder')} rows="3" maxlength="4000"></textarea>
+        : <textarea id={fid('message')} name="message" placeholder={tr('formMessagePlaceholder')} required rows="4" maxlength="5000"></textarea>}
 
       <!-- Champ anti-robot : caché aux humains (et aux lecteurs d'écran), rempli seulement par les bots -->
       <div class="hp-field" aria-hidden="true">
-        <label for={fid('company')}>Société (ne pas remplir)</label>
+        <label for={fid('company')}>{tr('formHoneypot')}</label>
         <input id={fid('company')} type="text" name="company" tabindex="-1" autocomplete="off" />
       </div>
 

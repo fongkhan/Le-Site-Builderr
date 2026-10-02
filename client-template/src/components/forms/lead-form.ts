@@ -5,6 +5,8 @@
 // (method="post", jamais en GET : les données ne doivent pas finir dans une URL, des
 // journaux ou l'historique). Avec JavaScript, l'envoi se fait en fetch (JSON) et le
 // résultat s'affiche sans quitter la page. Échoue en douceur : ne casse jamais la page.
+// Messages d'état dans la langue de la page : attributs data-msg-sending, data-msg-ok et
+// data-msg-error du formulaire (posés par LeadForm.astro), repli sur le français.
 
 type LeadKind = 'contact' | 'appointment';
 
@@ -44,7 +46,12 @@ function enhance(form: HTMLFormElement) {
   if (form.dataset.enhanced === '1') return;
   form.dataset.enhanced = '1';
   const kind: LeadKind = form.dataset.kind === 'appointment' ? 'appointment' : 'contact';
-  const texts = MESSAGES[kind];
+  const fallback = MESSAGES[kind];
+  const texts = {
+    sending: form.dataset.msgSending || fallback.sending,
+    ok: form.dataset.msgOk || fallback.ok,
+    failed: form.dataset.msgError || fallback.failed,
+  };
   const status = form.querySelector<HTMLElement>('.lead-status');
   const button = form.querySelector<HTMLButtonElement>('button[type="submit"]');
   const say = (text: string) => { if (status) status.textContent = text; };
@@ -64,7 +71,8 @@ function enhance(form: HTMLFormElement) {
         say(texts.ok);
       } else {
         const data = await res.json().catch(() => ({}));
-        say((data && typeof data.error === 'string' && data.error) || 'Une erreur est survenue. Réessayez plus tard.');
+        // Message d'erreur du serveur s'il en fournit un, sinon message traduit de la page
+        say((data && typeof data.error === 'string' && data.error) || texts.failed);
       }
     } catch {
       say(texts.failed);

@@ -1,4 +1,6 @@
 ---
+import { t } from '../../lib/ui-strings.mjs';
+
 interface FeatureItem {
   feature: string;
 }
@@ -19,9 +21,11 @@ interface Props {
   };
   /** Cible d'un bouton selon son libellé (ancre du formulaire de la page) ; sans cible, pas de bouton. */
   ctaTarget?: (label?: string) => string | null;
+  /** Langue de la page (libellés d'interface, lib/ui-strings.mjs). */
+  locale?: string;
 }
 
-const { data, ctaTarget } = Astro.props;
+const { data, ctaTarget, locale } = Astro.props;
 const ctaHrefFor = (label?: string) => (label && ctaTarget ? ctaTarget(label) : null);
 ---
 
@@ -32,7 +36,7 @@ const ctaHrefFor = (label?: string) => (label && ctaTarget ? ctaTarget(label) : 
       {data.plans && data.plans.map((plan) => (
         <div class={`pricing-card ${plan.isPopular ? 'popular' : ''}`}>
           {plan.isPopular && (
-            <span class="popular-badge">Populaire</span>
+            <span class="popular-badge">{t(locale, 'popular')}</span>
           )}
           <div class="card-header">
             <h3>{plan.name}</h3>

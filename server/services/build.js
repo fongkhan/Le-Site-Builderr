@@ -465,12 +465,20 @@ function failBuild(siteSlug, site, publicError, excerpt) {
 // SEO : sitemap.xml + robots.txt générés dans le dist avant publication.
 // Chemins localisés : la langue par défaut est à la racine, les autres préfixées
 // (/en/…). '' (accueil de la langue par défaut) est représenté par « home ».
+// En mode cPanel (site à la racine de son domaine), .htaccess : page 404, cache,
+// compression. Jamais en publication simulée : la base /preview/<dossier>/ rendrait
+// « ErrorDocument 404 /404.html » faux, et Express n'utilise pas ce fichier.
 function writeSeoFiles(site, pagesData, postsData) {
-  // Exactement les routes générées par le template : jamais d'URL en 404 dans le sitemap
-  const slugs = i18n.publishedRoutes(pagesData.docs, postsData.docs);
+  const htaccess = require('../lib/htaccess');
+  // Exactement les routes générées par le template : jamais d'URL en 404 dans le sitemap.
+  // Une page CMS d'adresse « 404 » est masquée par la page d'erreur du template.
+  const slugs = i18n.publishedRoutes(pagesData.docs, postsData.docs).filter((r) => r !== htaccess.ERROR_PAGE_ROUTE);
   if (slugs.length > 0) {
     fs.writeFileSync(path.join(DIST_DIR, 'sitemap.xml'), seo.generateSitemap(site.domain, slugs), 'utf-8');
     fs.writeFileSync(path.join(DIST_DIR, 'robots.txt'), seo.generateRobots(site.domain), 'utf-8');
+  }
+  if (hosting.isRemote && basePathFor(site, site && site.slug) === '/') {
+    fs.writeFileSync(path.join(DIST_DIR, '.htaccess'), htaccess.generateHtaccess(), 'utf-8');
   }
 }
 

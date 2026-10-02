@@ -10,9 +10,12 @@ interface Props {
   };
   /** Cible du bouton selon son libellé (ancre du formulaire de la page) ; sans cible, pas de bouton. */
   ctaTarget?: (label?: string) => string | null;
+  /** Niveau du titre : 1 pour le premier Hero de la page (son unique h1), 2 ensuite. */
+  headingLevel?: 1 | 2;
 }
 
-const { data, ctaTarget } = Astro.props;
+const { data, ctaTarget, headingLevel = 1 } = Astro.props;
+const Heading = headingLevel === 1 ? 'h1' : 'h2';
 const ctaHref = data.ctaText && ctaTarget ? ctaTarget(data.ctaText) : null;
 
 // Image de fond saisie par le client : filtrée (http(s) ou média du site) et placée
@@ -24,7 +27,7 @@ const style = bg ? `background-image: linear-gradient(rgba(0, 0, 0, 0.5), rgba(0
 
 <section class:list={['hero-section', { 'has-bg': Boolean(bg) }]} style={style}>
   <div class="hero-content">
-    <h1>{data.title}</h1>
+    <Heading class="hero-title">{data.title}</Heading>
     {data.subtitle && <p>{data.subtitle}</p>}
     {ctaHref && (
       <a href={ctaHref} class="cta-button">
@@ -60,7 +63,7 @@ const style = bg ? `background-image: linear-gradient(rgba(0, 0, 0, 0.5), rgba(0
     z-index: 2;
   }
 
-  .hero-content h1 {
+  .hero-title {
     font-size: clamp(2.5rem, 5vw, 4rem);
     margin-bottom: 20px;
     color: #ffffff; /* Le titre sur le Hero est forcé en blanc pour lisibilité sur fond sombre */
