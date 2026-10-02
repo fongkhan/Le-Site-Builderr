@@ -41,9 +41,18 @@ Règles clés :
 - Tous les endpoints Express vérifient le rôle et l'ownership du site (`?site=<slug>` obligatoire sur les routes scopées).
 - Le build Astro accède aux données via un canal interne authentifié par jeton (`BUILD_TOKEN`, régénéré à chaque boot).
 
-**Comptes de démonstration** (seedés au premier boot, mots de passe personnalisables via `SEED_ADMIN_PASSWORD` / `SEED_CLIENT_PASSWORD`) :
+**Comptes de démonstration** (seedés au premier boot hors production, mots de passe personnalisables via `SEED_ADMIN_PASSWORD` / `SEED_CLIENT_PASSWORD`) :
 - `admin@admin.com` / `password123` — Super Admin
 - `client@client.com` / `password123` — Client (rattaché au site « boulangerie-artisanale »)
+
+En production, l'email de l'admin initial est **obligatoire** (`SEED_ADMIN_EMAIL`) : sans lui, aucun admin n'est créé et le serveur le signale au démarrage. Un email non devinable limite le verrouillage volontaire du compte admin par des échecs de connexion répétés ; ce risque est seulement **atténué** (verrouillage temporaire de Payload après 5 échecs, limiteur par IP), pas supprimé. Le déverrouillage d'un compte (`POST /api/users/unlock`) est réservé aux admins.
+
+**Comptes et sessions** :
+- Mots de passe de 12 à 256 caractères, différents de l'email et absents d'une liste de mots de passe courants (création, modification, réinitialisation via l'API ; le seed de développement en est exempté).
+- Un échec de connexion renvoie toujours le même message, que le compte existe, que le mot de passe soit faux ou que le compte soit verrouillé.
+- Changer de mot de passe révoque les autres sessions ouvertes (la session courante est conservée si l'utilisateur modifie son propre compte) ; une réinitialisation les révoque toutes.
+- Cookie de session `Secure` en production (`COOKIE_SECURE=true|false` pour forcer).
+- Les chemins serveur d'un site (`documentRoot`, `repositoryPath`) et le jeton de vérification de domaine ne sont lisibles que par un admin.
 
 ---
 
@@ -203,7 +212,7 @@ Ce que fait le mode cPanel :
 * **Validation de thème** (couleurs hexadécimales, dimensions, polices en allowlist) avant écriture du CSS — anti-injection.
 * Les réponses `500` ne divulguent pas les détails internes ; toute exception d'une route est rendue en JSON (jamais de requête pendante) ; une exception non-capturée arrête le process en production (relance par le superviseur).
 * **API REST Payload verrouillée** : un client lit son site mais ne peut modifier ni ses paramètres de déploiement (chemins, domaine, statut) ni le site de rattachement d'une page, d'un article, d'un thème ou d'un média.
-* **Endpoints publics** (formulaire de contact, beacon de statistiques) : CORS ouvert à toute origine sans cookie, corps limité à 32 Ko, limiteurs dédiés ; mot de passe oublié / réinitialisation également limités.
+* **Endpoints publics** (formulaire de contact, beacon de statistiques) : CORS ouvert à toute origine sans cookie, corps limité à 32 Ko (ailleurs : 10 Mo pour l'onboarding, 2 Mo pour pages, articles et thème, 256 Ko pour le reste), limiteurs dédiés ; mot de passe oublié / réinitialisation également limités.
 * **Garde-fous de production** (`NODE_ENV=production`) : refus de démarrer avec `DEV_NO_AUTH`, aucun compte « password123 » (admin créé seulement avec un `SEED_ADMIN_PASSWORD` d'au moins 12 caractères), arrêt si la base est injoignable, secrets du serveur jamais transmis au build.
 
 ### Note dépendances — version de Next.js

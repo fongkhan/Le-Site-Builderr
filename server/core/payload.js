@@ -3,6 +3,7 @@
 const { getPayload } = require('payload');
 const sitesStore = require('../sites-store');
 const { IS_PRODUCTION } = require('./config');
+const { resolveSeedAdmin } = require('../lib/seed');
 
 let payloadInstance = null;
 
@@ -17,25 +18,31 @@ const DEFAULT_SEED_PASSWORD = 'password123';
 // uniquement avec un SEED_ADMIN_PASSWORD explicite et robuste — jamais « password123 ».
 async function seedUsers(payload) {
   try {
-    // 1. Super Admin
-    const adminRes = await payload.find({
-      collection: 'users',
-      where: { email: { equals: 'admin@admin.com' } }
-    });
-    if (adminRes.docs.length === 0) {
+    // 1. Super Admin (email : SEED_ADMIN_EMAIL, obligatoire en production)
+    const adminEmail = resolveSeedAdmin(process.env);
+    const adminRes = adminEmail
+      ? await payload.find({ collection: 'users', where: { email: { equals: adminEmail } } })
+      : null;
+    if (!adminEmail) {
+      // Production sans SEED_ADMIN_EMAIL : aucun admin créé (signalé tant qu'il n'en existe aucun)
+      const anyAdmin = await payload.find({ collection: 'users', where: { roles: { in: ['admin'] } }, limit: 1, depth: 0 });
+      if (anyAdmin.docs.length === 0) {
+        console.error("❌ [Seeding] Seed de l'administrateur refusé : définissez SEED_ADMIN_EMAIL (et SEED_ADMIN_PASSWORD) dans le .env puis redémarrez. Aucun compte admin@admin.com n'est créé en production.");
+      }
+    } else if (adminRes.docs.length === 0) {
       const adminPassword = process.env.SEED_ADMIN_PASSWORD || (IS_PRODUCTION ? '' : DEFAULT_SEED_PASSWORD);
       if (IS_PRODUCTION && (adminPassword.length < 12 || adminPassword === DEFAULT_SEED_PASSWORD)) {
-        console.error("❌ [Seeding] Aucun administrateur : définissez SEED_ADMIN_PASSWORD (12 caractères minimum) dans le .env puis redémarrez pour créer admin@admin.com.");
+        console.error(`❌ [Seeding] Aucun administrateur : définissez SEED_ADMIN_PASSWORD (12 caractères minimum) dans le .env puis redémarrez pour créer ${adminEmail}.`);
       } else {
         await payload.create({
           collection: 'users',
           data: {
-            email: 'admin@admin.com',
+            email: adminEmail,
             roles: ['admin'],
             password: adminPassword
           }
         });
-        console.log("✔ [Seeding] admin@admin.com créé.");
+        console.log(`✔ [Seeding] ${adminEmail} créé.`);
       }
     }
 

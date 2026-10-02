@@ -19,8 +19,8 @@ export function ResetPasswordPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (password.length < 8) {
-      setError('Le mot de passe doit contenir au moins 8 caractères.');
+    if (password.length < 12) {
+      setError('Le mot de passe doit contenir au moins 12 caractères.');
       return;
     }
     if (password !== confirm) {
@@ -72,7 +72,7 @@ export function ResetPasswordPage() {
                 className="input-text"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="8 caractères minimum"
+                placeholder="12 caractères minimum"
                 autoComplete="new-password"
                 required
                 autoFocus

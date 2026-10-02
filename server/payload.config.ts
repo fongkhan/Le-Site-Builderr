@@ -80,6 +80,35 @@ const frontendOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:5173')
 // Lien de réinitialisation pointant vers le front (première origine configurée)
 const resetPasswordUrl = (token: string) => `${frontendOrigins[0]}/reset-password?token=${token}`
 
+// --- Comptes : politique de mot de passe, sessions, login (collection users) ---
+// Imports regroupés ici (hissés par ESM) pour isoler les modifications de la collection users.
+// Modules CommonJS du serveur : import par défaut (interop tsx et Next).
+import { ValidationError } from 'payload'
+import passwordPolicy from './lib/password-policy.js'
+import sessionOptions from './lib/session.js'
+
+// Message unique pour tout échec de login (mauvais identifiants OU compte verrouillé) :
+// ne révèle ni l'existence d'un compte ni son verrouillage.
+const LOGIN_FAILED_MESSAGE = 'Email ou mot de passe incorrect, ou compte temporairement verrouillé.'
+
+// Email servant à la politique de mot de passe : celui envoyé, sinon celui du compte visé.
+async function passwordPolicyEmail({ args, operation, req }: any): Promise<string> {
+  if (typeof args.data?.email === 'string') return args.data.email
+  try {
+    if (operation === 'update' && args.id !== undefined) {
+      const doc = await req.payload.findByID({ collection: 'users', id: args.id, depth: 0, overrideAccess: true, req })
+      return doc?.email || ''
+    }
+    if (operation === 'resetPassword' && typeof args.data?.token === 'string') {
+      const doc = await req.payload.db.findOne({ collection: 'users', where: { resetPasswordToken: { equals: args.data.token } }, req })
+      return doc?.email || ''
+    }
+  } catch {
+    // compte introuvable : l'opération échouera ensuite d'elle-même
+  }
+  return ''
+}
+
 export default buildConfig({
   secret: process.env.PAYLOAD_SECRET,
   cors: frontendOrigins,
@@ -112,6 +141,8 @@ export default buildConfig({
     {
       slug: 'users',
       auth: {
+        // Cookie Secure en production (surchargeable par COOKIE_SECURE)
+        cookies: sessionOptions.authCookieOptions(process.env),
         forgotPassword: {
           generateEmailSubject: () => 'Réinitialisation de votre mot de passe — MetaSite Builder',
           generateEmailHTML: (args) => {
@@ -146,9 +177,58 @@ export default buildConfig({
         delete: isAdmin,
         read: isAdminOrSelf,
         update: isAdminOrSelf,
+        // Déverrouillage réservé aux admins. L'accès est vérifié avant la recherche du
+        // compte : 403 identique que l'email existe ou non (pas d'énumération).
+        unlock: isAdmin,
       },
       hooks: {
+        beforeOperation: [
+          // Politique de mot de passe sur les appels HTTP (REST, GraphQL). L'API locale
+          // (seed de développement) n'est pas concernée.
+          async ({ args, operation, req }: any) => {
+            if (!['create', 'update', 'resetPassword'].includes(operation)) return args
+            if (operation === 'resetPassword') req.context.resetPassword = true
+            if (req.payloadAPI === 'local') return args
+            const password = args.data?.password
+            if (password === undefined || password === null || password === '') return args
+            // Opération que le contrôle d'accès refusera de toute façon : on le laisse
+            // répondre (403) sans rien révéler du compte visé.
+            const user = req.user
+            const admin = userIsAdmin(user)
+            if (operation === 'create' && !admin) return args
+            if (operation === 'update' && !admin) {
+              if (!user || (args.id !== undefined && String(args.id) !== String(user.id))) return args
+            }
+            // Mise à jour groupée (sans id) par un client : seul son propre compte est visé
+            const email = operation === 'update' && args.id === undefined && !admin && typeof args.data?.email !== 'string'
+              ? user.email
+              : await passwordPolicyEmail({ args, operation, req })
+            const message = passwordPolicy.checkPassword(password, { email })
+            if (message) {
+              const err = new ValidationError({ collection: 'users', errors: [{ message, path: 'password' }] }, req.t)
+              // Message principal en français (affiché tel quel par l'orchestrateur)
+              err.message = message
+              throw err
+            }
+            return args
+          },
+        ],
+        beforeValidate: [
+          // Réinitialisation du mot de passe : toutes les sessions existantes sont
+          // révoquées (Payload ajoute ensuite la session de la réinitialisation).
+          ({ data, req }: any) => {
+            if (req?.context?.resetPassword && data) data.sessions = []
+            return data
+          },
+        ],
         beforeChange: [
+          // Changement de mot de passe : les autres sessions seront révoquées après écriture
+          ({ data, operation, context }: any) => {
+            if (operation === 'update' && typeof data?.password === 'string' && data.password) {
+              context.passwordChanged = true
+            }
+            return data
+          },
           // Empêche un client de s'auto-promouvoir, de s'attribuer des sites ou de modifier
           // son quota IA : seuls les admins (ou les appels système sans user) le peuvent.
           ({ req, data, originalDoc, operation }) => {
@@ -181,6 +261,36 @@ export default buildConfig({
                 .catch(() => {}) // l'audit n'est jamais bloquant
             }
             return doc
+          },
+          // Mot de passe modifié : révoque les sessions ouvertes. Seule la session courante
+          // est conservée quand l'utilisateur modifie son propre compte.
+          async ({ req, doc, operation, context }: any) => {
+            if (operation !== 'update' || !context?.passwordChanged) return doc
+            context.passwordChanged = false
+            try {
+              const self = req?.user && String(req.user.id) === String(doc.id)
+              const current = self && req.user._sid
+              // Document complet relu en base, comme le fait Payload (logout) : une écriture
+              // partielle { sessions } effacerait les champs select multiples (roles).
+              const stored = await req.payload.db.findOne({ collection: 'users', where: { id: { equals: doc.id } }, req })
+              if (!stored) return doc
+              stored.sessions = current ? (stored.sessions || []).filter((s: any) => s?.id === current) : []
+              stored.updatedAt = null // date de modification déjà posée par la mise à jour
+              await req.payload.db.updateOne({ collection: 'users', id: doc.id, data: stored, req, returning: false })
+            } catch (err: any) {
+              console.error('❌ [Comptes] Révocation des sessions impossible :', err?.message || err)
+            }
+            return doc
+          },
+        ],
+        // Login : même réponse pour identifiants invalides et compte verrouillé
+        afterError: [
+          ({ error, req }: any) => {
+            const where = String(req?.pathname || req?.url || '').split('?')[0]
+            if (!where.endsWith('/users/login')) return
+            const name = error?.name || error?.constructor?.name
+            if (name !== 'LockedAuth' && name !== 'AuthenticationError') return
+            return { status: 401, response: { errors: [{ message: LOGIN_FAILED_MESSAGE }] } }
           },
         ],
       },
@@ -262,10 +372,14 @@ export default buildConfig({
         {
           name: 'documentRoot',
           type: 'text',
+          // Chemin serveur : jamais exposé aux clients par l'API REST
+          access: { read: isAdmin },
         },
         {
           name: 'repositoryPath',
           type: 'text',
+          // Chemin serveur : jamais exposé aux clients par l'API REST
+          access: { read: isAdmin },
         },
         {
           name: 'stack',
@@ -312,6 +426,7 @@ export default buildConfig({
         {
           name: 'domainVerifyToken',
           type: 'text',
+          access: { read: isAdmin },
           admin: { description: 'Jeton de vérification TXT (généré automatiquement).' },
         },
         // --- Mesure d'audience (analytics) : chargée après consentement RGPD ---

@@ -9,6 +9,7 @@ const hosting = require('../core/hosting');
 const releases = require('../lib/releases');
 const analytics = require('../lib/analytics');
 const { generateSlug, assertSafePath, assertStrictlyInside, previewPathFor } = require('../lib/paths');
+const { publicSiteView } = require('../lib/sites-view');
 const { validateTheme } = require('../lib/theme');
 const { replaceDirAtomically } = require('../lib/fs-swap');
 const { sendError, createRouter } = require('../core/http');
@@ -50,8 +51,13 @@ router.get('/api/sites', auth.authenticate, auth.requireAuth, async (req, res) =
     if (!auth.isAdmin(req.user)) {
       sites = sites.filter(s => req.userSiteSlugs.has(s.slug));
     }
-    // Adresse de la copie servie par l'orchestrateur (publication simulée)
-    res.json(sites.map((s) => ({ ...s, previewPath: `${previewPathFor(s.documentRoot, PUBLIC_HTML_DIR, s.slug)}/` })));
+    // Adresse de la copie servie par l'orchestrateur (publication simulée), calculée
+    // avant le retrait des chemins serveur pour un client
+    const isAdmin = auth.isAdmin(req.user);
+    res.json(sites.map((s) => publicSiteView(
+      { ...s, previewPath: `${previewPathFor(s.documentRoot, PUBLIC_HTML_DIR, s.slug)}/` },
+      { isAdmin }
+    )));
   } catch (e) {
     sendError(res, "Impossible de lire la liste des sites.", e);
   }

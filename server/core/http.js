@@ -113,16 +113,41 @@ function isPublicRoute(reqPath) {
   return PUBLIC_ROUTE_PREFIXES.some((p) => reqPath === p || reqPath.startsWith(p + '/'));
 }
 
-// 10 Mo pour l'orchestrateur (images base64 de l'onboarding, pages) ; 32 Ko suffisent
-// largement aux endpoints publics non authentifiés.
-// Les endpoints publics acceptent aussi un formulaire HTML classique (sans JavaScript).
-const jsonParser = express.json({ limit: '10mb' });
+// Limite du corps JSON selon la route (routes Express non publiques). null : méthode sans
+// corps attendu (aucun handler GET/HEAD/DELETE/OPTIONS ne lit req.body).
+//  - 10 Mo : onboarding (image d'inspiration en base64) ;
+//  - 2 Mo : contenu éditorial (pages, articles, thème) ;
+//  - 256 Ko : le reste (formulaires d'administration, IA, domaines…).
+const BODYLESS_METHODS = new Set(['GET', 'HEAD', 'DELETE', 'OPTIONS']);
+const ROUTE_JSON_LIMITS = [
+  { prefixes: ['/api/onboard'], limit: '10mb' },
+  { prefixes: ['/api/site-pages', '/api/site-posts', '/api/theme'], limit: '2mb' },
+];
+const DEFAULT_JSON_LIMIT = '256kb';
+
+const matchesPrefix = (reqPath, p) => reqPath === p || reqPath.startsWith(p + '/');
+
+function jsonLimitFor(method, reqPath) {
+  if (BODYLESS_METHODS.has(String(method || '').toUpperCase())) return null;
+  const rule = ROUTE_JSON_LIMITS.find((r) => r.prefixes.some((p) => matchesPrefix(reqPath, p)));
+  return rule ? rule.limit : DEFAULT_JSON_LIMIT;
+}
+
+// Un parser par limite, créé une seule fois au chargement du module. Les endpoints
+// publics (32 Ko) acceptent aussi un formulaire HTML classique (sans JavaScript).
+const jsonParsers = new Map(
+  [DEFAULT_JSON_LIMIT, ...ROUTE_JSON_LIMITS.map((r) => r.limit)].map((limit) => [limit, express.json({ limit })])
+);
 const publicJsonParser = express.json({ limit: '32kb' });
 const publicFormParser = express.urlencoded({ extended: false, limit: '32kb' });
 function jsonBodyForExpressRoutes(req, res, next) {
   if (!isExpressRoute(req.path)) return next();
-  if (!isPublicRoute(req.path)) return jsonParser(req, res, next);
-  publicJsonParser(req, res, (err) => (err ? next(err) : publicFormParser(req, res, next)));
+  if (isPublicRoute(req.path)) {
+    return publicJsonParser(req, res, (err) => (err ? next(err) : publicFormParser(req, res, next)));
+  }
+  const limit = jsonLimitFor(req.method, req.path);
+  if (!limit) return next();
+  jsonParsers.get(limit)(req, res, next);
 }
 
 // Dernier middleware : erreurs non gérées rendues en JSON (jamais la page HTML par
@@ -183,6 +208,7 @@ module.exports = {
   EXPRESS_ROUTE_PREFIXES,
   isExpressRoute,
   isPublicRoute,
+  jsonLimitFor,
   jsonBodyForExpressRoutes,
   jsonErrorHandler,
   asyncHandler,

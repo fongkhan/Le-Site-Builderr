@@ -24,8 +24,8 @@ export function CreateClientModal({ sites, onClose, onCreated }: { sites: Site[]
       toast.error('Un email valide est requis.');
       return;
     }
-    if (password.length < 8) {
-      toast.error('Le mot de passe doit contenir au moins 8 caractères.');
+    if (password.length < 12) {
+      toast.error('Le mot de passe doit contenir au moins 12 caractères.');
       return;
     }
     let aiDailyQuota: number | null = null;
@@ -69,7 +69,7 @@ export function CreateClientModal({ sites, onClose, onCreated }: { sites: Site[]
         <input id="cc-email" type="email" className="input-text" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="client@exemple.com" />
       </div>
       <div>
-        <label className="field-label" htmlFor="cc-password">Mot de passe * (8 caractères min.)</label>
+        <label className="field-label" htmlFor="cc-password">Mot de passe * (12 caractères min.)</label>
         <input id="cc-password" type="password" className="input-text" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
       </div>
       <div>

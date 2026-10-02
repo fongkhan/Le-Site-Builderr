@@ -342,11 +342,11 @@ if (admin.token) {
 
   const created = await req('/api/users', {
     method: 'POST',
-    body: { email, password: 'password123', roles: ['client'], plan: 'free', sites: siteId ? [siteId] : [] },
+    body: { email, password: 'Cheval-Correct-42!', roles: ['client'], plan: 'free', sites: siteId ? [siteId] : [] },
     token: admin.token,
   });
   const freeId = created.json?.doc?.id;
-  const freeLogin = await login(email, 'password123');
+  const freeLogin = await login(email, 'Cheval-Correct-42!');
   if (freeLogin.token && siteId) {
     const refused = await req('/api/onboard', { method: 'POST', body: { description: 'un site de test' }, token: freeLogin.token });
     check("Offre : client Découverte au maximum -> 403 (avant tout appel IA)", refused.status === 403 && /offre/i.test(refused.json?.error || ''), `HTTP ${refused.status} ${JSON.stringify(refused.json?.error)}`);
@@ -382,10 +382,10 @@ if (admin.token && client.token) {
   const existingId = existing.json?.docs?.[0]?.id;
   if (existingId) await req(`/api/users/${existingId}`, { method: 'DELETE', token: admin.token });
 
-  const adminCreate = await req('/api/users', { method: 'POST', body: { email: testEmail, password: 'password123', roles: ['client'] }, token: admin.token });
+  const adminCreate = await req('/api/users', { method: 'POST', body: { email: testEmail, password: 'Cheval-Correct-42!', roles: ['client'] }, token: admin.token });
   check('Users : POST /api/users par un admin -> crée le compte', adminCreate.status === 200 || adminCreate.status === 201, `HTTP ${adminCreate.status}`);
 
-  const newLogin = await req('/api/users/login', { method: 'POST', body: { email: testEmail, password: 'password123' } });
+  const newLogin = await req('/api/users/login', { method: 'POST', body: { email: testEmail, password: 'Cheval-Correct-42!' } });
   check('Users : le client créé peut se connecter', newLogin.status === 200, `HTTP ${newLogin.status}`);
 
   // Nettoyage
@@ -605,6 +605,112 @@ if (admin.token) {
 {
   const r = await req('/api/config');
   check('Helmet : en-tête X-Content-Type-Options=nosniff présent', r.res.headers.get('x-content-type-options') === 'nosniff', r.res.headers.get('x-content-type-options') || 'absent');
+}
+
+// ---- Lot 1 : comptes et sessions ----
+// Un seul échec de login ici (email inconnu) : le budget du limiteur par IP reste
+// disponible pour le contrôle final de rate-limit.
+{
+  const STRONG = 'Cheval-Correct-42!';
+  const LOGIN_FAILED = 'Email ou mot de passe incorrect, ou compte temporairement verrouillé.';
+
+  // Échec de login : message unifié (aucune distinction compte inconnu / verrouillé)
+  const unknownLogin = await req('/api/users/login', { method: 'POST', body: { email: 'lot1-inconnu@nulle-part.example', password: 'mauvais-mot-de-passe' } });
+  check('Login : email inconnu -> 401 + message unifié', unknownLogin.status === 401 && unknownLogin.json?.errors?.[0]?.message === LOGIN_FAILED, `HTTP ${unknownLogin.status} ${JSON.stringify(unknownLogin.json?.errors?.[0]?.message)}`);
+
+  // Déverrouillage : admin only, 403 identique que le compte existe ou non
+  if (client.token) {
+    const u1 = await req('/api/users/unlock', { method: 'POST', body: { email: 'admin@admin.com' }, token: client.token });
+    const u2 = await req('/api/users/unlock', { method: 'POST', body: { email: 'lot1-inconnu@nulle-part.example' }, token: client.token });
+    check('Unlock : client sur un compte existant -> 403', u1.status === 403, `HTTP ${u1.status}`);
+    check('Unlock : client sur un email inexistant -> même 403', u2.status === 403 && JSON.stringify(u2.json) === JSON.stringify(u1.json), `HTTP ${u2.status}`);
+  }
+  const anonUnlock = await req('/api/users/unlock', { method: 'POST', body: { email: 'admin@admin.com' } });
+  check('Unlock : anonyme -> 403', anonUnlock.status === 403, `HTTP ${anonUnlock.status}`);
+
+  // Chemins serveur des sites : lisibles par un admin seulement
+  if (client.token) {
+    const list = await req('/api/sites', { token: client.token });
+    const s = Array.isArray(list.json) ? list.json[0] : null;
+    check('Sites : client GET /api/sites sans documentRoot/repositoryPath, avec previewPath', Boolean(s) && !('documentRoot' in s) && !('repositoryPath' in s) && !('domainVerifyToken' in s) && typeof s.previewPath === 'string', JSON.stringify(s && Object.keys(s)));
+    const rest = await req('/api/payload_sites?depth=0', { token: client.token });
+    const d = rest.json?.docs?.[0];
+    check('Sites : client GET /api/payload_sites sans chemins serveur', Boolean(d) && d.documentRoot === undefined && d.repositoryPath === undefined && d.domainVerifyToken === undefined, JSON.stringify(d && Object.keys(d)));
+    const me = await req('/api/users/me', { token: client.token });
+    const populated = (me.json?.user?.sites || []).find((x) => x && typeof x === 'object');
+    check('Sites : client /api/users/me, sites peuplés sans chemins serveur', Boolean(populated) && populated.documentRoot === undefined && populated.repositoryPath === undefined, JSON.stringify(populated && Object.keys(populated)));
+  }
+  if (admin.token) {
+    const list = await req('/api/sites', { token: admin.token });
+    const s = Array.isArray(list.json) ? list.json.find((x) => x.slug === 'boulangerie-artisanale') : null;
+    check('Sites : admin GET /api/sites avec documentRoot', Boolean(s?.documentRoot) && 'repositoryPath' in s, JSON.stringify(s && Object.keys(s)));
+    const rest = await req('/api/payload_sites?depth=0&where[slug][equals]=boulangerie-artisanale', { token: admin.token });
+    const d = rest.json?.docs?.[0];
+    check('Sites : admin GET /api/payload_sites avec documentRoot', Boolean(d?.documentRoot), JSON.stringify(d && Object.keys(d)));
+  }
+
+  // Corps JSON : limite par route (256 Ko hors contenu/onboarding), avant toute auth
+  {
+    const big = { name: 'x'.repeat(3 * 1024 * 1024) };
+    const r = await req('/api/sites', { method: 'POST', body: big });
+    check('Corps : POST /api/sites anonyme avec 3 Mo de JSON -> 413', r.status === 413, `HTTP ${r.status}`);
+  }
+
+  // Politique de mot de passe (API REST)
+  if (client.token) {
+    const me = await req('/api/users/me', { token: client.token });
+    const myId = me.json?.user?.id;
+    if (myId) {
+      const weak = await req(`/api/users/${myId}`, { method: 'PATCH', body: { password: 'abc' }, token: client.token });
+      check('Mot de passe : client PATCH de son mot de passe à « abc » -> 400', weak.status === 400, `HTTP ${weak.status}`);
+      const weakBulk = await req(`/api/users?where[id][equals]=${myId}`, { method: 'PATCH', body: { password: 'abc' }, token: client.token });
+      check('Mot de passe : client PATCH groupé (where) à « abc » -> 400', weakBulk.status === 400, `HTTP ${weakBulk.status}`);
+      const still = await login('client@client.com', CLIENT_PASSWORD);
+      check('Mot de passe : refus sans effet (ancien mot de passe valide)', still.status === 200, `HTTP ${still.status}`);
+    }
+  }
+
+  if (admin.token) {
+    const email = 'lot1-sessions@nulle-part.example';
+    const purge = async () => {
+      const existing = await req(`/api/users?where[email][equals]=${encodeURIComponent(email)}`, { token: admin.token });
+      const id = existing.json?.docs?.[0]?.id;
+      if (id) await req(`/api/users/${id}`, { method: 'DELETE', token: admin.token });
+    };
+    await purge();
+
+    const weakCreate = await req('/api/users', { method: 'POST', body: { email, password: 'abc', roles: ['client'] }, token: admin.token });
+    check('Mot de passe : admin crée un compte avec « abc » -> 400', weakCreate.status === 400, `HTTP ${weakCreate.status}`);
+    const sameAsEmail = await req('/api/users', { method: 'POST', body: { email, password: email, roles: ['client'] }, token: admin.token });
+    check("Mot de passe : identique à l'email -> 400", sameAsEmail.status === 400, `HTTP ${sameAsEmail.status}`);
+
+    // Révocation des sessions au changement de mot de passe
+    const created = await req('/api/users', { method: 'POST', body: { email, password: STRONG, roles: ['client'] }, token: admin.token });
+    const id = created.json?.doc?.id;
+    check('Sessions : compte jetable créé (mot de passe robuste)', Boolean(id), `HTTP ${created.status}`);
+    if (id) {
+      const a = await login(email, STRONG);
+      const b = await login(email, STRONG);
+      const changed = await req(`/api/users/${id}`, { method: 'PATCH', body: { password: 'Nouveau-Cheval-43?' }, token: a.token });
+      check('Sessions : changement de son mot de passe -> 200', changed.status === 200, `HTTP ${changed.status}`);
+      const meB = await req('/api/users/me', { token: b.token });
+      check('Sessions : autre session (B) révoquée après changement', meB.status === 200 && meB.json?.user === null, `user=${JSON.stringify(meB.json?.user?.email ?? null)}`);
+      const meA = await req('/api/users/me', { token: a.token });
+      check('Sessions : session courante (A) conservée', meA.json?.user?.email === email, `user=${JSON.stringify(meA.json?.user?.email ?? null)}`);
+      check('Sessions : rôles du compte intacts après révocation', JSON.stringify(meA.json?.user?.roles) === '["client"]', JSON.stringify(meA.json?.user?.roles));
+
+      // Changement par un admin : toutes les sessions du compte sont révoquées
+      await req(`/api/users/${id}`, { method: 'PATCH', body: { password: 'Encore-Cheval-44!' }, token: admin.token });
+      const meA2 = await req('/api/users/me', { token: a.token });
+      check('Sessions : changement par un admin -> session du compte révoquée', meA2.json?.user === null, `user=${JSON.stringify(meA2.json?.user?.email ?? null)}`);
+      const meAdmin = await req('/api/users/me', { token: admin.token });
+      check("Sessions : la session de l'admin reste valide", meAdmin.json?.user?.email === 'admin@admin.com');
+
+      const unlocked = await req('/api/users/unlock', { method: 'POST', body: { email }, token: admin.token });
+      check('Unlock : admin -> 200', unlocked.status === 200, `HTTP ${unlocked.status}`);
+    }
+    await purge();
+  }
 }
 
 // ---- Rate-limit login (EN DERNIER : consomme le budget d'échecs de l'IP) ----
