@@ -56,4 +56,35 @@ function collectMediaFilenames(value, found = new Set()) {
   return [...found];
 }
 
-module.exports = { rewriteMediaUrls, mediaPrefixFor, collectMediaFilenames, MEDIA_API_PREFIX, MEDIA_STATIC_PREFIX };
+// Renomme les fichiers médias cités (formes /api/media/file/<nom> et /media/<nom>, noms
+// encodés compris) selon `map` ({ ancien: nouveau } ou Map) : utilisé par la duplication
+// d'un site, dont les images sont copiées sous de nouveaux noms. Un nom absent de la table
+// est laissé tel quel. Renvoie une copie : l'entrée n'est jamais mutée.
+function remapMediaFilenames(value, map) {
+  const lookup = map instanceof Map ? map : new Map(Object.entries(map || {}));
+  if (lookup.size === 0) return value;
+  const walk = (v) => {
+    if (typeof v === 'string') {
+      return v.replace(/\/(api\/media\/file|media)\/([^"'\s?#)]+)/g, (match, prefix, raw) => {
+        let name;
+        try {
+          name = decodeURIComponent(raw);
+        } catch {
+          name = raw;
+        }
+        const target = lookup.get(name);
+        return typeof target === 'string' && target ? `/${prefix}/${encodeURIComponent(target)}` : match;
+      });
+    }
+    if (Array.isArray(v)) return v.map(walk);
+    if (v && typeof v === 'object') {
+      const out = {};
+      for (const [k, item] of Object.entries(v)) out[k] = walk(item);
+      return out;
+    }
+    return v;
+  };
+  return walk(value);
+}
+
+module.exports = { rewriteMediaUrls, mediaPrefixFor, collectMediaFilenames, remapMediaFilenames, MEDIA_API_PREFIX, MEDIA_STATIC_PREFIX };

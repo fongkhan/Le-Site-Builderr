@@ -424,9 +424,11 @@ async function ownedMediaFilenames(siteSlug, filenames) {
 
 // Médiathèque : copie dans le dist les images du site référencées par les pages et les
 // articles publiés (couvertures, images du corps) — URLs /media/… réécrites par le canal
-// interne : le site publié est autonome. Renvoie { copied, ignored }.
+// interne : le site publié est autonome. Seules les images matricielles sont publiées
+// (jamais un SVG hérité d'avant la restriction des formats). Renvoie { copied, ignored }.
 async function copyReferencedMedia(siteSlug, pagesData, postsData) {
-  const filenames = media.collectMediaFilenames({ pages: pagesData, posts: postsData });
+  const { isPublishableMediaName } = require('../lib/media-policy');
+  const filenames = media.collectMediaFilenames({ pages: pagesData, posts: postsData }).filter(isPublishableMediaName);
   if (filenames.length === 0) return { copied: 0, ignored: 0 };
   const owned = await ownedMediaFilenames(siteSlug, filenames);
   const mediaOut = path.join(DIST_DIR, 'media');

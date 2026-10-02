@@ -144,12 +144,27 @@ async function deleteSite(slug) {
     if (res.docs.length === 0) return false;
     const siteId = res.docs[0].id;
     // Supprime d'abord les contenus rattachés (sinon docs orphelins, hérités par un futur
-    // site recréé sous le même slug). Les médias sont conservés : un site dupliqué peut
-    // référencer les fichiers de son site source.
-    for (const collection of ['pages', 'themes', 'posts', 'builds']) {
-      await payload.delete({ collection, where: { site: { equals: siteId } }, overrideAccess: true });
+    // site recréé sous le même slug), médias compris : Payload efface alors leurs fichiers
+    // (un site dupliqué possède ses propres copies). Le tout dans une transaction : un échec
+    // en cours de route n'en laisse pas la moitié. Les fichiers déjà effacés ne sont pas
+    // restaurés par un rollback (effacement disque immédiat) ; la fiche du site, si.
+    const { createLocalReq, initTransaction, commitTransaction, killTransaction } = require('payload');
+    const req = await createLocalReq({}, payload);
+    const ownsTransaction = await initTransaction(req);
+    try {
+      for (const collection of ['media', 'pages', 'themes', 'posts', 'builds']) {
+        // Suppression groupée : les échecs par document sont renvoyés, pas levés
+        const { errors } = await payload.delete({ collection, where: { site: { equals: siteId } }, overrideAccess: true, req });
+        if (errors && errors.length > 0) {
+          throw new Error(`Suppression de ${collection} incomplète : ${errors.map((e) => e.message).join(' ; ')}`);
+        }
+      }
+      await payload.delete({ collection: 'payload_sites', id: siteId, overrideAccess: true, req });
+      if (ownsTransaction) await commitTransaction(req);
+    } catch (err) {
+      if (ownsTransaction) await killTransaction(req);
+      throw err;
     }
-    await payload.delete({ collection: 'payload_sites', id: siteId, overrideAccess: true });
     return true;
   }
 

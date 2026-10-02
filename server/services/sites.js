@@ -7,12 +7,14 @@ const hosting = require('../core/hosting');
 const { getPayloadInstance } = require('../core/payload');
 const { appendBuildLog } = require('../core/build-log');
 const { assertStrictlyInside, isValidSlug } = require('../lib/paths');
+const { collectMediaFilenames } = require('../lib/media');
 const {
   ASTRO_PROJECT_DIR,
   PUBLIC_HTML_DIR,
   REPOSITORIES_DIR,
   RELEASES_DIR,
   DRAFTS_DIR,
+  UPLOADS_DIR,
   getSitePagesFile,
   getSiteThemeFile,
   getSitePostsFile,
@@ -190,7 +192,54 @@ async function attachSiteToUser(userId, siteId) {
   }
 }
 
+// Duplication : copie dans la médiathèque du site cible (id Payload) les images du site
+// source citées par `content` (pages et articles, brouillons compris). Seuls les fichiers
+// appartenant au site source sont copiés (jamais celui d'un autre client cité par erreur).
+// Renvoie la table { ancienNom: nouveauNom } à appliquer au contenu copié (remapMediaFilenames).
+// Une image impossible à copier est ignorée : le jumeau garde alors l'ancienne référence.
+async function copySiteMedia(sourceSlug, targetSiteId, content) {
+  const payloadInstance = getPayloadInstance();
+  const map = {};
+  if (!payloadInstance || !targetSiteId) return map;
+  const names = collectMediaFilenames(content);
+  if (names.length === 0) return map;
+  const sourceRes = await payloadInstance.find({
+    collection: 'payload_sites',
+    where: { slug: { equals: sourceSlug } },
+    limit: 1,
+    depth: 0,
+    overrideAccess: true,
+  });
+  const sourceId = sourceRes.docs[0]?.id;
+  if (!sourceId) return map;
+  const owned = await payloadInstance.find({
+    collection: 'media',
+    where: { and: [{ site: { equals: sourceId } }, { filename: { in: names } }] },
+    pagination: false,
+    depth: 0,
+    overrideAccess: true,
+  });
+  for (const doc of owned.docs) {
+    if (!doc.filename) continue;
+    const filePath = path.join(UPLOADS_DIR, path.basename(doc.filename));
+    if (!fs.existsSync(filePath)) continue;
+    try {
+      const created = await payloadInstance.create({
+        collection: 'media',
+        data: { site: targetSiteId },
+        filePath,
+        overrideAccess: true,
+      });
+      if (created && created.filename) map[doc.filename] = created.filename;
+    } catch (e) {
+      console.error(`[Duplication] Image ${doc.filename} non copiée :`, e.message);
+    }
+  }
+  return map;
+}
+
 module.exports = {
+  copySiteMedia,
   purgeSiteData,
   toPosixPath,
   defaultDocumentRoot,

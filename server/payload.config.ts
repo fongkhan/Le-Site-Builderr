@@ -3,6 +3,8 @@ import { postgresAdapter } from '@payloadcms/db-postgres'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
 import { nodemailerAdapter } from '@payloadcms/email-nodemailer'
 import path from 'path'
+import os from 'os'
+import { createRequire } from 'module'
 import { fileURLToPath } from 'url'
 import { Access } from 'payload'
 
@@ -17,6 +19,18 @@ if (!process.env.PAYLOAD_SECRET || process.env.PAYLOAD_SECRET.length < 16) {
 }
 
 const dbUri = process.env.DATABASE_URI
+
+// Médiathèque : taille maximale d'un fichier téléversé (Mo, défaut 8).
+const MEDIA_MAX_MB = Number.parseInt(process.env.MEDIA_MAX_MB ?? '', 10) || 8
+
+// sharp (redimensionnement des images) est optionnel : sans lui, les fichiers sont
+// conservés tels quels.
+let sharp: any = null
+try {
+  sharp = createRequire(import.meta.url)('sharp')
+} catch {
+  console.warn('⚠️ [Médias] sharp indisponible : les images téléversées ne seront pas redimensionnées.')
+}
 
 // Access Control Helpers
 const userIsAdmin = (user: any) => Boolean(user && user.roles && user.roles.includes('admin'))
@@ -130,6 +144,16 @@ export default buildConfig({
         }),
       }
     : {}),
+  // Téléversements : taille bornée (413 au-delà), fichiers en transit écrits sur disque
+  // plutôt qu'en mémoire.
+  upload: {
+    limits: { fileSize: MEDIA_MAX_MB * 1024 * 1024 },
+    abortOnLimit: true,
+    responseOnLimit: `Image trop volumineuse (${MEDIA_MAX_MB} Mo maximum).`,
+    useTempFiles: true,
+    tempFileDir: path.join(os.tmpdir(), 'metabuilder-uploads'),
+  },
+  ...(sharp ? { sharp } : {}),
   editor: lexicalEditor({}),
   db: postgresAdapter({
     pool: {
@@ -759,7 +783,16 @@ export default buildConfig({
       slug: 'media',
       upload: {
         staticDir: path.resolve(dirname, 'uploads'),
-        mimeTypes: ['image/*'],
+        // Images matricielles uniquement : un SVG peut embarquer du script (XSS sur le
+        // domaine du site publié).
+        mimeTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+        // Grandes photos ramenées à 2400 px maximum (jamais agrandies), si sharp est là.
+        ...(sharp ? { resizeOptions: { width: 2400, height: 2400, fit: 'inside', withoutEnlargement: true } } : {}),
+        // Fichiers servis à des comptes authentifiés : cache navigateur seulement.
+        modifyResponseHeaders: ({ headers }: { headers: Headers }) => {
+          headers.set('Cache-Control', 'private, max-age=86400')
+          return headers
+        },
       },
       admin: {
         useAsTitle: 'filename',

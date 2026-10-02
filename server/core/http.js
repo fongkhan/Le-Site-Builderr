@@ -41,6 +41,14 @@ function sendFormPage(req, res, status, title, text) {
   res.status(status).type('html').send(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>${escapeHtml(title)}</title><style>body{font-family:system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 20px;text-align:center;color:#222}a{color:#2563eb}</style></head><body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p>${back ? `<p><a href="${escapeHtml(back)}">← Revenir au site</a></p>` : ''}</body></html>`);
 }
 
+// Page « connectez-vous » (navigateur sans session sur une ressource protégée, ex. un
+// brouillon ouvert depuis un lien) : lisible, avec un lien vers la connexion, jamais du
+// JSON brut. loginUrl est fourni par l'appelant (origine de l'orchestrateur).
+function sendSignInPage(res, status, title, text, loginUrl) {
+  const link = /^https?:\/\//i.test(String(loginUrl || '')) ? String(loginUrl) : '';
+  res.status(status).type('html').send(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>${escapeHtml(title)}</title><style>body{font-family:system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 20px;text-align:center;color:#222}a{color:#2563eb}</style></head><body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p>${link ? `<p><a href="${escapeHtml(link)}">Se connecter</a></p>` : ''}</body></html>`);
+}
+
 // --- Limiteurs de débit (anti brute-force / anti-abus) ---
 // Montés AVANT le catch-all Next : sur succès ils appellent next() et laissent
 // Next/Payload traiter la requête (flux intact) ; au-delà du seuil ils renvoient 429 JSON.
@@ -202,6 +210,7 @@ module.exports = {
   sendError,
   isHtmlFormPost,
   sendFormPage,
+  sendSignInPage,
   makeLimiter,
   limiters,
   mountRateLimits,

@@ -191,7 +191,21 @@ router.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (r
       }
     }
 
-    // La suppression Payload nettoie aussi les contenus rattachés et la relation users.sites
+    // Hébergement distant (cPanel) : retrait du site en ligne AVANT la suppression locale
+    // (le domaine personnalisé n'est plus connu ensuite). Chaque étape est tentée ; un
+    // retrait partiel n'empêche pas la suppression locale mais est signalé.
+    let remote = null;
+    if (hosting.isRemote && deleteFiles) {
+      try {
+        remote = await hosting.removeSite(slug, { customDomain: site.customDomain || '' });
+      } catch (e) {
+        console.error(`⚠️ [Sites] Retrait distant de ${slug} refusé : ${e.message}`);
+        remote = { removed: false, customDomain: 'failed', subdomain: 'failed', files: 'failed' };
+      }
+    }
+
+    // La suppression Payload nettoie aussi les contenus rattachés (médias et leurs
+    // fichiers compris) et la relation users.sites
     await sitesStore.deleteSite(slug);
     purgeSiteData(slug);
 
@@ -199,8 +213,15 @@ router.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (r
       fs.rmSync(removableRoot, { recursive: true, force: true });
     }
 
-    logAudit(req, 'site.suppression', req.params.slug, `fichiers=${Boolean(deleteFiles)}`);
-    res.json({ success: true, message: "Site supprimé avec succès." });
+    const remoteAudit = remote ? ` distant=${remote.removed ? 'ok' : 'partiel'}` : '';
+    logAudit(req, 'site.suppression', req.params.slug, `fichiers=${Boolean(deleteFiles)}${remoteAudit}`);
+    res.json({
+      success: true,
+      message: remote && !remote.removed
+        ? "Site supprimé, mais son retrait de l'hébergement est incomplet : vérifiez le serveur."
+        : "Site supprimé avec succès.",
+      remote,
+    });
   } catch (e) {
     sendError(res, "Impossible de supprimer le site.", e);
   }
@@ -726,21 +747,38 @@ router.post('/api/sites/:slug/duplicate', auth.authenticate, auth.requireAdmin, 
 
     // Contenu + thème copiés via le fallback JSON (repris par le CMS, persisté dans
     // Payload à la première sauvegarde) — même approche que l'import d'archive.
+    let pagesData = null;
+    try { pagesData = await readSitePages(source.slug); } catch { /* pages source illisibles : pages par défaut */ }
+    let postsDocs = null;
+    try { postsDocs = (await readSitePosts(source.slug)).docs; } catch { /* articles source illisibles : pas de blog */ }
+
+    // Images : le jumeau reçoit ses propres copies (supprimer l'un ne casse pas l'autre),
+    // et son contenu cite les nouveaux noms de fichiers.
+    const { copySiteMedia } = require('../services/sites');
+    const { remapMediaFilenames } = require('../lib/media');
+    let mediaMap = {};
     try {
-      const pagesData = await readSitePages(source.slug);
-      if (pagesData && Array.isArray(pagesData.docs)) {
-        writeJsonFile(getSitePagesFile(slug), pagesData);
-      }
-    } catch { /* pages source illisibles : le jumeau démarre avec les pages par défaut */ }
+      const payloadInstance = getPayloadInstance();
+      const targetId = payloadInstance ? await findPayloadSiteId(payloadInstance, slug) : null;
+      if (targetId) mediaMap = await copySiteMedia(source.slug, targetId, { pages: pagesData, posts: postsDocs });
+    } catch (e) {
+      console.error(`[Duplication] Médias de ${source.slug} non copiés :`, e.message);
+    }
+
+    if (pagesData && Array.isArray(pagesData.docs)) {
+      try {
+        writeJsonFile(getSitePagesFile(slug), remapMediaFilenames(pagesData, mediaMap));
+      } catch { /* le jumeau démarre avec les pages par défaut */ }
+    }
     const srcTheme = getSiteThemeFile(source.slug);
     if (fs.existsSync(srcTheme)) {
       try { fs.copyFileSync(srcTheme, getSiteThemeFile(slug)); } catch { /* thème par défaut sinon */ }
     }
-    try {
-      writePostsFile(slug, (await readSitePosts(source.slug)).docs);
-    } catch { /* articles source illisibles : le jumeau démarre sans blog */ }
+    if (postsDocs) {
+      try { writePostsFile(slug, remapMediaFilenames(postsDocs, mediaMap)); } catch { /* le jumeau démarre sans blog */ }
+    }
 
-    logAudit(req, 'site.duplication', slug, `source=${source.slug}`);
+    logAudit(req, 'site.duplication', slug, `source=${source.slug} médias=${Object.keys(mediaMap).length}`);
     res.json({ success: true, site: newSite });
   } catch (e) {
     sendError(res, "Échec de la duplication du site.", e);

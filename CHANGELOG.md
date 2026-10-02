@@ -2,6 +2,16 @@
 
 Toutes les modifications notables apportées à ce projet sont documentées dans ce fichier.
 
+## [Non publié]
+
+### Médiathèque, brouillons et cycle de vie des sites
+
+- **Médiathèque** : seules les images PNG, JPEG, WebP et GIF sont acceptées. Les SVG, qui peuvent contenir du script, ne sont plus acceptés ni republiés, même s'ils ont été téléversés avant ce changement. La taille d'un fichier est limitée à `MEDIA_MAX_MB` (8 Mo par défaut, 413 au-delà). Les fichiers en transit passent par le disque, pas par la mémoire. Les grandes photos sont ramenées à 2400 px quand `sharp` est disponible. Les fichiers sont servis avec `Cache-Control: private`.
+- **Aperçus** : les fichiers SVG, XML et XSL servis sous `/preview` et `/draft` le sont dans un bac à sable CSP (`sandbox`). Les copies de bascule d'une publication interrompue (`*.tmp-*`, `*.old-*`) ne sont jamais servies.
+- **Brouillons protégés** : `/draft/<slug>/` est réservé aux comptes qui ont accès au site (401 sinon, avec une page « connectez-vous » pour un navigateur ; 403 pour le client d'un autre site). Les brouillons ne sont jamais mis en cache (`no-store`).
+- **Suppression d'un site** : ses images (fiches et fichiers) sont supprimées avec lui, dans une transaction avec ses contenus. En mode cPanel, « supprimer aussi les fichiers » retire également le site du serveur : domaine personnalisé, sous-domaine puis dossier en ligne. Si ce retrait n'aboutit qu'en partie, l'administrateur est averti et le journal d'audit l'indique.
+- **Duplication d'un site** : le jumeau reçoit ses propres copies des images, et ses pages et articles citent ces copies. Supprimer l'un des deux sites ne casse donc plus l'autre. Un site dupliqué avant cette version qui cite encore les images de son site source ne les publiait déjà pas : il faut les téléverser de nouveau.
+
 ## [2.2.0] - 2026-10-01
 
 ### Refactorisation

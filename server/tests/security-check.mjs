@@ -713,6 +713,197 @@ if (admin.token) {
   }
 }
 
+// ---- Lot 2 : médias, brouillons, suppression ----
+{
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const serverDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const projectDir = path.dirname(serverDir);
+  const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+  const upload = async (token, siteId, data, type, name) => {
+    const form = new FormData();
+    form.append('file', new Blob([data], { type }), name);
+    form.append('_payload', JSON.stringify({ site: siteId }));
+    const res = await fetch(`${BASE}/api/media`, { method: 'POST', headers: { Origin: ORIGIN, Cookie: `payload-token=${token}` }, body: form });
+    let json = null;
+    try { json = await res.clone().json(); } catch { /* non-JSON */ }
+    return { status: res.status, json };
+  };
+  const payloadSiteId = async (slug) => (await req(`/api/payload_sites?where[slug][equals]=${slug}&depth=0`, { token: admin.token })).json?.docs?.[0]?.id;
+  const raw = (p, headers = {}) => fetch(`${BASE}${p}`, { headers: { Origin: ORIGIN, ...headers } });
+
+  // Médiathèque : formats matriciels uniquement, taille bornée, cache privé
+  if (client.token && admin.token) {
+    const ownId = await payloadSiteId('boulangerie-artisanale');
+    if (ownId) {
+      const svg = '<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg"><script>alert(document.cookie)</script></svg>';
+      const svgUp = await upload(client.token, ownId, svg, 'image/svg+xml', 'logo.svg');
+      check('Media : SVG avec <script> (prologue XML) -> 400', svgUp.status === 400, `HTTP ${svgUp.status}`);
+      if (svgUp.json?.doc?.id) await req(`/api/media/${svgUp.json.doc.id}`, { method: 'DELETE', token: admin.token });
+
+      const big = Buffer.alloc(9 * 1024 * 1024, 0);
+      pixel.copy(big);
+      const bigUp = await upload(client.token, ownId, big, 'image/png', 'enorme.png');
+      check('Media : PNG de 9 Mo -> 413', bigUp.status === 413, `HTTP ${bigUp.status}`);
+      if (bigUp.json?.doc?.id) await req(`/api/media/${bigUp.json.doc.id}`, { method: 'DELETE', token: admin.token });
+
+      const ok = await upload(client.token, ownId, pixel, 'image/png', 'pixel-lot2.png');
+      check('Media : PNG 1 px -> 201', ok.status === 201, `HTTP ${ok.status}`);
+      const filename = ok.json?.doc?.filename;
+      if (filename) {
+        const file = await raw(`/api/media/file/${encodeURIComponent(filename)}`, { Cookie: `payload-token=${client.token}` });
+        const cache = file.headers.get('cache-control') || '';
+        check('Media : fichier servi avec Cache-Control private', file.status === 200 && cache.includes('private'), `HTTP ${file.status} ${cache}`);
+      }
+      if (ok.json?.doc?.id) await req(`/api/media/${ok.json.doc.id}`, { method: 'DELETE', token: admin.token });
+    }
+  }
+
+  // Aperçu : un SVG présent dans un site est servi dans un bac à sable ; les copies de
+  // bascule interrompues ne sont jamais servies
+  {
+    const siteDir = path.join(projectDir, 'simulated_public_html', 'boulangerie-artisanale');
+    const createdDir = !fs.existsSync(siteDir);
+    fs.mkdirSync(siteDir, { recursive: true });
+    const svgFile = path.join(siteDir, 'csp-test.svg');
+    fs.writeFileSync(svgFile, '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+    try {
+      const r = await raw('/preview/boulangerie-artisanale/csp-test.svg');
+      const csp = r.headers.get('content-security-policy') || '';
+      check('Aperçu : SVG servi avec une CSP « sandbox »', r.status === 200 && csp.includes('sandbox'), `HTTP ${r.status} ${csp}`);
+    } finally {
+      fs.rmSync(svgFile, { force: true });
+      if (createdDir) fs.rmSync(siteDir, { recursive: true, force: true });
+    }
+    const swapDir = path.join(projectDir, 'simulated_public_html', 'sc-bascule.tmp-deploy');
+    fs.mkdirSync(swapDir, { recursive: true });
+    fs.writeFileSync(path.join(swapDir, 'index.html'), '<h1>copie interrompue</h1>');
+    try {
+      const r = await raw('/preview/sc-bascule.tmp-deploy/index.html');
+      check('Aperçu : copie de bascule (.tmp-*) jamais servie -> 404', r.status === 404, `HTTP ${r.status}`);
+    } finally {
+      fs.rmSync(swapDir, { recursive: true, force: true });
+    }
+  }
+
+  // Brouillons : réservés aux comptes ayant accès au site
+  {
+    const draftDir = path.join(projectDir, 'drafts', 'boulangerie-artisanale');
+    const draftFile = path.join(draftDir, 'index.html');
+    const createdDraftDir = !fs.existsSync(draftDir);
+    const createdDraft = !fs.existsSync(draftFile);
+    if (createdDraft) {
+      fs.mkdirSync(draftDir, { recursive: true });
+      fs.writeFileSync(draftFile, '<!doctype html><title>Brouillon</title>');
+    }
+    const url = '/draft/boulangerie-artisanale/index.html';
+    try {
+      const anonHtml = await raw(url, { Accept: 'text/html' });
+      check('Brouillon : anonyme (navigateur) -> 401 en page HTML', anonHtml.status === 401 && (anonHtml.headers.get('content-type') || '').includes('text/html'), `HTTP ${anonHtml.status}`);
+      const anonJson = await raw(url, { Accept: 'application/json' });
+      check('Brouillon : anonyme (API) -> 401 JSON', anonJson.status === 401 && (anonJson.headers.get('content-type') || '').includes('json'), `HTTP ${anonJson.status}`);
+
+      if (client.token) {
+        const own = await raw(url, { Cookie: `payload-token=${client.token}` });
+        const cache = own.headers.get('cache-control') || '';
+        check('Brouillon : propriétaire -> 200 avec no-store', own.status === 200 && cache.includes('no-store'), `HTTP ${own.status} ${cache}`);
+        const traversal = await raw('/draft/..%2F..%2Fetc/passwd', { Cookie: `payload-token=${client.token}` });
+        check('Brouillon : traversée encodée -> jamais 200', traversal.status !== 200, `HTTP ${traversal.status}`);
+        const traversal2 = await raw('/draft/%2e%2e/%2e%2e/server/.env', { Cookie: `payload-token=${client.token}` });
+        check('Brouillon : traversée « %2e%2e » -> jamais 200', traversal2.status !== 200, `HTTP ${traversal2.status}`);
+      }
+
+      if (admin.token) {
+        // Client d'un AUTRE site : compte jetable rattaché à un site jetable
+        const email = 'sec-check-draft@nulle-part.example';
+        const existing = await req(`/api/users?where[email][equals]=${encodeURIComponent(email)}`, { token: admin.token });
+        if (existing.json?.docs?.[0]?.id) await req(`/api/users/${existing.json.docs[0].id}`, { method: 'DELETE', token: admin.token });
+        const other = await req('/api/sites', { method: 'POST', body: { name: 'Brouillon SC' }, token: admin.token });
+        const otherSlug = other.json?.site?.slug;
+        const otherId = otherSlug ? await payloadSiteId(otherSlug) : null;
+        const user = otherId
+          ? await req('/api/users', { method: 'POST', body: { email, password: 'Cheval-Correct-42!', roles: ['client'], sites: [otherId] }, token: admin.token })
+          : null;
+        const otherLogin = user?.json?.doc?.id ? await login(email, 'Cheval-Correct-42!') : { token: null };
+        if (otherLogin.token) {
+          const foreign = await raw(url, { Cookie: `payload-token=${otherLogin.token}` });
+          check("Brouillon : client d'un autre site -> 403", foreign.status === 403, `HTTP ${foreign.status}`);
+        } else {
+          check("Brouillon : client d'un autre site -> 403", false, 'compte de test non créé');
+        }
+        if (user?.json?.doc?.id) await req(`/api/users/${user.json.doc.id}`, { method: 'DELETE', token: admin.token });
+        if (otherSlug) await req(`/api/sites/${otherSlug}`, { method: 'DELETE', token: admin.token });
+      }
+    } finally {
+      if (createdDraftDir) fs.rmSync(draftDir, { recursive: true, force: true });
+      else if (createdDraft) fs.rmSync(draftFile, { force: true });
+    }
+  }
+
+  // Suppression d'un site : ses médias (fiches et fichiers) partent avec lui
+  if (admin.token) {
+    const created = await req('/api/sites', { method: 'POST', body: { name: 'Suppression SC' }, token: admin.token });
+    const slug = created.json?.site?.slug;
+    const siteId = slug ? await payloadSiteId(slug) : null;
+    if (siteId) {
+      const up = await upload(admin.token, siteId, pixel, 'image/png', 'suppression-sc.png');
+      const mediaId = up.json?.doc?.id;
+      const filename = up.json?.doc?.filename;
+      check('Suppression : média téléversé sur le site', up.status === 201 && Boolean(filename), `HTTP ${up.status}`);
+      const del = await req(`/api/sites/${slug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+      check('Suppression : DELETE ?deleteFiles=true (simulation) -> 200', del.status === 200 && (del.json?.remote ?? null) === null, `HTTP ${del.status} remote=${JSON.stringify(del.json?.remote)}`);
+      const left = await req(`/api/payload_sites?where[slug][equals]=${slug}&depth=0`, { token: admin.token });
+      check('Suppression : fiche payload_sites retirée', left.json?.totalDocs === 0, `${left.json?.totalDocs} fiche(s)`);
+      if (mediaId) {
+        check('Suppression : fiche média retirée -> 404', (await req(`/api/media/${mediaId}`, { token: admin.token })).status === 404);
+      }
+      if (filename) {
+        const file = await raw(`/api/media/file/${encodeURIComponent(filename)}`, { Cookie: `payload-token=${admin.token}` });
+        // Payload ne cherche pas la fiche pour un admin (accès total) : fichier absent du
+        // disque -> 500 générique côté admin, 404 pour un client. Jamais 200.
+        check('Suppression : fichier média plus servi', file.status !== 200 && file.status >= 400, `HTTP ${file.status}`);
+        check('Suppression : fichier média effacé du disque', !fs.existsSync(path.join(serverDir, 'uploads', filename)));
+      }
+    } else if (slug) {
+      check('Suppression : site de test créé dans Payload', false);
+      await req(`/api/sites/${slug}`, { method: 'DELETE', token: admin.token });
+    }
+  }
+
+  // Duplication : le jumeau reçoit ses propres copies d'images, citées par ses pages
+  if (admin.token) {
+    const created = await req('/api/sites', { method: 'POST', body: { name: 'Duplication SC' }, token: admin.token });
+    const slug = created.json?.site?.slug;
+    const siteId = slug ? await payloadSiteId(slug) : null;
+    let twinSlug = null;
+    if (siteId) {
+      const up = await upload(admin.token, siteId, pixel, 'image/png', 'duplication-sc.png');
+      const filename = up.json?.doc?.filename;
+      const imageUrl = `/api/media/file/${filename}`;
+      const save = await req(`/api/site-pages?site=${slug}`, {
+        method: 'POST',
+        body: { docs: [{ title: 'Accueil', slug: 'home', layout: [{ blockType: 'hero', title: 'Bienvenue', backgroundImage: imageUrl }] }] },
+        token: admin.token,
+      });
+      const dup = await req(`/api/sites/${slug}/duplicate`, { method: 'POST', token: admin.token });
+      twinSlug = dup.json?.site?.slug || null;
+      const twinId = twinSlug ? await payloadSiteId(twinSlug) : null;
+      if (filename && save.status === 200 && twinId) {
+        const twinMedia = await req(`/api/media?where[site][equals]=${twinId}&depth=0`, { token: admin.token });
+        const newName = twinMedia.json?.docs?.[0]?.filename;
+        check('Duplication : le jumeau possède 1 média', twinMedia.json?.totalDocs === 1, `${twinMedia.json?.totalDocs} média(s)`);
+        const twinPages = JSON.stringify((await req(`/api/site-pages?site=${twinSlug}`, { token: admin.token })).json || {});
+        check('Duplication : les pages du jumeau citent la copie', Boolean(newName) && newName !== filename && twinPages.includes(`/api/media/file/${newName}`) && !twinPages.includes(imageUrl), `${filename} -> ${newName}`);
+      } else {
+        check('Duplication : préparation du site source', false, `upload=${up.status} pages=${save.status} jumeau=${twinSlug}`);
+      }
+    }
+    if (twinSlug) await req(`/api/sites/${twinSlug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+    if (slug) await req(`/api/sites/${slug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+  }
+}
+
 // ---- Rate-limit login (EN DERNIER : consomme le budget d'échecs de l'IP) ----
 // Les connexions réussies ne comptent pas (skipSuccessfulRequests) : seules les
 // tentatives ratées ci-dessous épuisent le quota jusqu'au 429. On cible un email
