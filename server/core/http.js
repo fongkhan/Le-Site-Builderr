@@ -41,6 +41,14 @@ function sendFormPage(req, res, status, title, text) {
   res.status(status).type('html').send(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>${escapeHtml(title)}</title><style>body{font-family:system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 20px;text-align:center;color:#222}a{color:#2563eb}</style></head><body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p>${back ? `<p><a href="${escapeHtml(back)}">← Revenir au site</a></p>` : ''}</body></html>`);
 }
 
+// Page « connectez-vous » (navigateur sans session sur une ressource protégée, ex. un
+// brouillon ouvert depuis un lien) : lisible, avec un lien vers la connexion, jamais du
+// JSON brut. loginUrl est fourni par l'appelant (origine de l'orchestrateur).
+function sendSignInPage(res, status, title, text, loginUrl) {
+  const link = /^https?:\/\//i.test(String(loginUrl || '')) ? String(loginUrl) : '';
+  res.status(status).type('html').send(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>${escapeHtml(title)}</title><style>body{font-family:system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 20px;text-align:center;color:#222}a{color:#2563eb}</style></head><body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p>${link ? `<p><a href="${escapeHtml(link)}">Se connecter</a></p>` : ''}</body></html>`);
+}
+
 // --- Limiteurs de débit (anti brute-force / anti-abus) ---
 // Montés AVANT le catch-all Next : sur succès ils appellent next() et laissent
 // Next/Payload traiter la requête (flux intact) ; au-delà du seuil ils renvoient 429 JSON.
@@ -113,16 +121,41 @@ function isPublicRoute(reqPath) {
   return PUBLIC_ROUTE_PREFIXES.some((p) => reqPath === p || reqPath.startsWith(p + '/'));
 }
 
-// 10 Mo pour l'orchestrateur (images base64 de l'onboarding, pages) ; 32 Ko suffisent
-// largement aux endpoints publics non authentifiés.
-// Les endpoints publics acceptent aussi un formulaire HTML classique (sans JavaScript).
-const jsonParser = express.json({ limit: '10mb' });
+// Limite du corps JSON selon la route (routes Express non publiques). null : méthode sans
+// corps attendu (aucun handler GET/HEAD/DELETE/OPTIONS ne lit req.body).
+//  - 10 Mo : onboarding (image d'inspiration en base64) ;
+//  - 2 Mo : contenu éditorial (pages, articles, thème) ;
+//  - 256 Ko : le reste (formulaires d'administration, IA, domaines…).
+const BODYLESS_METHODS = new Set(['GET', 'HEAD', 'DELETE', 'OPTIONS']);
+const ROUTE_JSON_LIMITS = [
+  { prefixes: ['/api/onboard'], limit: '10mb' },
+  { prefixes: ['/api/site-pages', '/api/site-posts', '/api/theme'], limit: '2mb' },
+];
+const DEFAULT_JSON_LIMIT = '256kb';
+
+const matchesPrefix = (reqPath, p) => reqPath === p || reqPath.startsWith(p + '/');
+
+function jsonLimitFor(method, reqPath) {
+  if (BODYLESS_METHODS.has(String(method || '').toUpperCase())) return null;
+  const rule = ROUTE_JSON_LIMITS.find((r) => r.prefixes.some((p) => matchesPrefix(reqPath, p)));
+  return rule ? rule.limit : DEFAULT_JSON_LIMIT;
+}
+
+// Un parser par limite, créé une seule fois au chargement du module. Les endpoints
+// publics (32 Ko) acceptent aussi un formulaire HTML classique (sans JavaScript).
+const jsonParsers = new Map(
+  [DEFAULT_JSON_LIMIT, ...ROUTE_JSON_LIMITS.map((r) => r.limit)].map((limit) => [limit, express.json({ limit })])
+);
 const publicJsonParser = express.json({ limit: '32kb' });
 const publicFormParser = express.urlencoded({ extended: false, limit: '32kb' });
 function jsonBodyForExpressRoutes(req, res, next) {
   if (!isExpressRoute(req.path)) return next();
-  if (!isPublicRoute(req.path)) return jsonParser(req, res, next);
-  publicJsonParser(req, res, (err) => (err ? next(err) : publicFormParser(req, res, next)));
+  if (isPublicRoute(req.path)) {
+    return publicJsonParser(req, res, (err) => (err ? next(err) : publicFormParser(req, res, next)));
+  }
+  const limit = jsonLimitFor(req.method, req.path);
+  if (!limit) return next();
+  jsonParsers.get(limit)(req, res, next);
 }
 
 // Dernier middleware : erreurs non gérées rendues en JSON (jamais la page HTML par
@@ -177,12 +210,14 @@ module.exports = {
   sendError,
   isHtmlFormPost,
   sendFormPage,
+  sendSignInPage,
   makeLimiter,
   limiters,
   mountRateLimits,
   EXPRESS_ROUTE_PREFIXES,
   isExpressRoute,
   isPublicRoute,
+  jsonLimitFor,
   jsonBodyForExpressRoutes,
   jsonErrorHandler,
   asyncHandler,

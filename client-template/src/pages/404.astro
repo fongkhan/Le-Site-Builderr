@@ -1,0 +1,82 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { DEFAULT_LOCALE, LOCALES } from '../lib/i18n.mjs';
+import { getSiteContent } from '../lib/content';
+import { withBase } from '../lib/url';
+import { t } from '../lib/ui-strings.mjs';
+
+// Page d'erreur 404 (dist/404.html) : servie par l'hébergeur pour toute adresse inconnue
+// (ErrorDocument du .htaccess en mode cPanel), donc à n'importe quelle profondeur — liens
+// et ressources absolus (withBase). Non indexée et absente du sitemap. La langue de
+// l'adresse demandée est inconnue : menu de la langue par défaut, message bilingue court.
+const { posts, navByLocale, locales } = await getSiteContent();
+const nav = navByLocale[DEFAULT_LOCALE] || [];
+const otherLocales = LOCALES.filter((l) => l !== DEFAULT_LOCALE);
+---
+
+<Layout
+  title={t(DEFAULT_LOCALE, 'notFoundTitle')}
+  pages={nav}
+  locale={DEFAULT_LOCALE}
+  locales={locales}
+  noindex
+>
+  <main id="contenu" tabindex="-1">
+    <section class="not-found">
+      <h1>{t(DEFAULT_LOCALE, 'notFoundTitle')}</h1>
+      <p>{t(DEFAULT_LOCALE, 'notFoundText')}</p>
+      {otherLocales.map((l) => (
+        <p lang={l}><strong>{t(l, 'notFoundTitle')}.</strong> {t(l, 'notFoundText')}</p>
+      ))}
+      <p class="not-found-links">
+        <a class="not-found-btn" href={withBase('/')}>{t(DEFAULT_LOCALE, 'notFoundHome')}</a>
+        {posts.length > 0 && <a href={withBase('/blog/')}>{t(DEFAULT_LOCALE, 'notFoundBlog')}</a>}
+      </p>
+    </section>
+  </main>
+</Layout>
+
+<style>
+  .not-found {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 100px 20px;
+    text-align: center;
+  }
+
+  .not-found h1 {
+    font-size: clamp(2rem, 5vw, 3rem);
+    margin-bottom: 20px;
+  }
+
+  .not-found p {
+    margin-bottom: 12px;
+  }
+
+  .not-found p[lang] {
+    opacity: 0.75;
+    font-size: 0.95rem;
+  }
+
+  .not-found-links {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: 30px;
+  }
+
+  .not-found-links a {
+    color: var(--color-primary);
+    font-weight: 600;
+  }
+
+  .not-found-links .not-found-btn {
+    padding: 12px 24px;
+    background-color: var(--color-primary);
+    color: #ffffff;
+    text-decoration: none;
+    border-radius: var(--border-radius);
+  }
+</style>

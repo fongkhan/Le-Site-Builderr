@@ -15,6 +15,7 @@ const {
   getSitePostsFile,
 } = require('../core/config');
 const { DEFAULT_PAGES, DEFAULT_THEME, starterPages } = require('./defaults');
+const { sortPages } = require('../lib/page-order');
 
 const SEED_SITE_SLUG = 'boulangerie-artisanale';
 
@@ -116,6 +117,47 @@ async function findPayloadSiteId(payloadInstance, siteSlug) {
   return siteRes.docs.length > 0 ? siteRes.docs[0].id : null;
 }
 
+// Identifiants de lignes Payload (id, blockName) retirés récursivement d'une valeur de
+// bloc (listes imbriquées : items, plans[].features…). Payload attribue de nouveaux id à
+// l'écriture : une ligne copiée (section dupliquée, site dupliqué, élément rétabli) ne
+// réutilise jamais l'id d'une ligne existante, que Postgres refuserait (clé en double).
+function stripRowIds(value) {
+  if (Array.isArray(value)) return value.map(stripRowIds);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [key, v] of Object.entries(value)) {
+      if (key === 'id' || key === 'blockName') continue;
+      out[key] = stripRowIds(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+// Page Payload → page de l'éditeur (identifiants de blocs et de lignes retirés, galerie
+// en URLs).
+function toEditorPage(page) {
+  return {
+    title: page.title,
+    slug: page.slug,
+    locale: page.locale || 'fr',
+    metaTitle: page.metaTitle || undefined,
+    metaDescription: page.metaDescription || undefined,
+    hideFromNav: page.hideFromNav === true,
+    layout: page.layout ? page.layout.map(block => {
+      const { id, blockName, ...rest } = block;
+      const fields = stripRowIds(rest);
+      if (block.blockType === 'gallery' && fields.images) {
+        fields.images = fields.images.map(img => typeof img === 'object' && img !== null ? img.url : img);
+      }
+      return {
+        blockType: block.blockType,
+        ...fields
+      };
+    }) : []
+  };
+}
+
 // Lecture des pages d'un site : Payload d'abord, fallback JSON (partagé entre l'API
 // authentifiée et le canal interne de build)
 async function readSitePages(siteSlug) {
@@ -132,25 +174,8 @@ async function readSitePages(siteSlug) {
           overrideAccess: true
         });
         if (pagesRes.docs.length > 0) {
-          return {
-            docs: [...splitDuplicatePages(pagesRes.docs).kept.values()].map(page => ({
-              title: page.title,
-              slug: page.slug,
-              locale: page.locale || 'fr',
-              metaTitle: page.metaTitle || undefined,
-              metaDescription: page.metaDescription || undefined,
-              layout: page.layout ? page.layout.map(block => {
-                const { id, ...fields } = block;
-                if (block.blockType === 'gallery' && fields.images) {
-                  fields.images = fields.images.map(img => typeof img === 'object' && img !== null ? img.url : img);
-                }
-                return {
-                  blockType: block.blockType,
-                  ...fields
-                };
-              }) : []
-            }))
-          };
+          // Ordre du menu (navOrder), une fois les doublons écartés
+          return { docs: sortPages([...splitDuplicatePages(pagesRes.docs).kept.values()]).map(toEditorPage) };
         }
       }
     } catch (dbError) {
@@ -228,6 +253,7 @@ function validatePagesBody(body) {
       return `Adresse de page invalide : ${JSON.stringify(page.slug)}.`;
     }
     if (page.layout !== undefined && !Array.isArray(page.layout)) return "Le contenu d'une page (layout) doit être une liste de sections.";
+    if (page.hideFromNav !== undefined && typeof page.hideFromNav !== 'boolean') return "Visibilité dans le menu (hideFromNav) invalide : un booléen est attendu.";
     const key = pageKey(page.slug, page.locale);
     if (keys.has(key)) return `Page en double : ${page.slug}.`;
     keys.add(key);
@@ -277,11 +303,97 @@ function dedupePageDocs(docs) {
   });
 }
 
-// Enregistre les pages d'un site. Payload : upsert par (site, slug, langue), puis
-// suppression des pages listées dans body.deleted (absentes du corps) et des doublons.
-// Une page simplement absente du corps est conservée : elle a pu être créée depuis un
-// autre onglet ou par un autre utilisateur. Une erreur de base est propagée (l'appelant
-// répond 500, rien n'est perdu en silence). Miroir JSON des pages reçues ensuite.
+// Corps du CMS → données Payload d'une page. navOrder = position dans la liste envoyée.
+// Identifiants de blocs et de lignes jamais transmis (stripRowIds) : Payload les génère.
+function toPageData(pageInput, index) {
+  return {
+    title: pageInput.title,
+    slug: pageInput.slug,
+    locale: pageInput.locale === 'en' ? 'en' : 'fr',
+    metaTitle: pageInput.metaTitle || null,
+    metaDescription: pageInput.metaDescription || null,
+    navOrder: index,
+    hideFromNav: Boolean(pageInput.hideFromNav),
+    layout: pageInput.layout ? pageInput.layout.map(block => {
+      const { blockType, id, blockName, ...rest } = block;
+      const fields = stripRowIds(rest);
+      if (blockType === 'gallery' && fields.images) {
+        fields.images = fields.images.map(img => typeof img === 'string' ? { url: img } : img);
+      }
+      return {
+        blockType: blockType,
+        ...fields
+      };
+    }) : []
+  };
+}
+
+// Valeur comparable : identifiants Payload (id, blockName), null et undefined retirés
+// récursivement ; '', 0 et false sont des valeurs réelles et restent. Clés triées.
+function canonicalValue(value) {
+  if (value === null || value === undefined) return undefined;
+  if (Array.isArray(value)) return value.map(canonicalValue).filter((v) => v !== undefined);
+  if (typeof value === 'object') {
+    const out = {};
+    for (const key of Object.keys(value).sort()) {
+      if (key === 'id' || key === 'blockName') continue;
+      const v = canonicalValue(value[key]);
+      if (v !== undefined) out[key] = v;
+    }
+    return out;
+  }
+  return value;
+}
+
+// Forme canonique (chaîne) d'une page, identique qu'elle vienne de la base (depth 0) ou
+// du CMS : sert à n'écrire que les pages réellement modifiées.
+function canonicalPage(doc) {
+  const layout = Array.isArray(doc.layout) ? doc.layout.map((block) => {
+    if (!block || typeof block !== 'object') return block;
+    const copy = { ...block };
+    // Galerie : 'url' et { url } désignent la même image
+    if (copy.blockType === 'gallery' && Array.isArray(copy.images)) {
+      copy.images = copy.images.map((img) => (typeof img === 'string' ? { url: img } : img));
+    }
+    return copy;
+  }) : [];
+  return JSON.stringify(canonicalValue({
+    title: doc.title,
+    slug: doc.slug,
+    locale: doc.locale === 'en' ? 'en' : 'fr',
+    metaTitle: doc.metaTitle || null,
+    metaDescription: doc.metaDescription || null,
+    navOrder: typeof doc.navOrder === 'number' ? doc.navOrder : null,
+    hideFromNav: Boolean(doc.hideFromNav),
+    layout,
+  }));
+}
+
+// Écritures nécessaires pour passer de la base (pages du site lues en depth 0) au corps
+// envoyé : création des pages nouvelles, mise à jour des seules pages modifiées,
+// suppression des pages listées (deletedKeys : clés langue:slug) et des doublons.
+function planPageWrites(existingDocs, inputDocs, deletedKeys) {
+  const deleted = deletedKeys instanceof Set ? deletedKeys : new Set(deletedKeys || []);
+  const { kept: existingByKey, duplicates } = splitDuplicatePages(existingDocs || []);
+  const creates = [];
+  const updates = [];
+  inputDocs.forEach((pageInput, index) => {
+    const data = toPageData(pageInput, index);
+    const existing = existingByKey.get(pageKey(data.slug, data.locale));
+    if (!existing) creates.push(data);
+    else if (canonicalPage(existing) !== canonicalPage(data)) updates.push({ id: existing.id, data });
+  });
+  const sent = new Set(inputDocs.map((p) => pageKey(p.slug, p.locale)));
+  const removed = [...existingByKey].filter(([key]) => deleted.has(key) && !sent.has(key)).map(([, page]) => page);
+  return { creates, updates, deletes: [...duplicates, ...removed] };
+}
+
+// Enregistre les pages d'un site. Payload : upsert par (site, slug, langue) des seules
+// pages modifiées, puis suppression des pages listées dans body.deleted (absentes du
+// corps) et des doublons. Une page simplement absente du corps est conservée (et garde
+// sa place dans le menu) : elle a pu être créée depuis un autre onglet ou par un autre
+// utilisateur. Une erreur de base est propagée (l'appelant répond 500, rien n'est perdu
+// en silence). Miroir JSON des pages reçues ensuite, s'il y a eu une écriture.
 async function saveSitePages(siteSlug, body) {
   const docs = body.docs;
   const sentKeys = new Set(docs.map((p) => pageKey(p.slug, p.locale)));
@@ -297,43 +409,20 @@ async function saveSitePages(siteSlug, body) {
       depth: 0,
       overrideAccess: true
     });
-    const { kept: existingByKey, duplicates } = splitDuplicatePages(existingRes.docs);
+    const plan = planPageWrites(existingRes.docs, docs, deletedKeys);
 
-    for (const pageInput of docs) {
-      const pageLocale = pageInput.locale === 'en' ? 'en' : 'fr';
-      const pageData = {
-        title: pageInput.title,
-        slug: pageInput.slug,
-        locale: pageLocale,
-        metaTitle: pageInput.metaTitle || null,
-        metaDescription: pageInput.metaDescription || null,
-        site: siteDoc.id,
-        layout: pageInput.layout ? pageInput.layout.map(block => {
-          const { blockType, id, ...fields } = block;
-          if (blockType === 'gallery' && fields.images) {
-            fields.images = fields.images.map(img => typeof img === 'string' ? { url: img } : img);
-          }
-          return {
-            blockType: blockType,
-            ...fields
-          };
-        }) : []
-      };
-
-      const existing = existingByKey.get(pageKey(pageInput.slug, pageLocale));
-      if (existing) {
-        await payloadInstance.update({ collection: 'pages', id: existing.id, data: pageData });
-      } else {
-        await payloadInstance.create({ collection: 'pages', data: pageData });
-      }
+    for (const { id, data } of plan.updates) {
+      await payloadInstance.update({ collection: 'pages', id, data: { ...data, site: siteDoc.id }, depth: 0 });
     }
-
+    for (const data of plan.creates) {
+      await payloadInstance.create({ collection: 'pages', data: { ...data, site: siteDoc.id }, depth: 0 });
+    }
     // Pages supprimées dans le CMS (sinon elles réapparaîtraient) et doublons
-    const toDelete = [...duplicates, ...[...existingByKey].filter(([key]) => deletedKeys.has(key)).map(([, page]) => page)];
-    for (const page of toDelete) {
+    for (const page of plan.deletes) {
       await payloadInstance.delete({ collection: 'pages', id: page.id, overrideAccess: true });
     }
-    writeJsonFile(getSitePagesFile(siteSlug), { docs });
+    const wrote = plan.creates.length + plan.updates.length + plan.deletes.length > 0;
+    if (wrote || !fs.existsSync(getSitePagesFile(siteSlug))) writeJsonFile(getSitePagesFile(siteSlug), { docs });
     return;
   }
 
@@ -616,6 +705,11 @@ module.exports = {
   validatePagesBody,
   findDangerousUrl,
   saveSitePages,
+  canonicalPage,
+  planPageWrites,
+  toEditorPage,
+  toPageData,
+  stripRowIds,
   normalizePost,
   readPostsFile,
   writePostsFile,

@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { exec } = require('child_process');
+const { runCommand } = require('../lib/run-command');
 const sitesStore = require('../sites-store');
 const hosting = require('../core/hosting');
 const releases = require('../lib/releases');
@@ -12,13 +12,15 @@ const seo = require('../lib/seo');
 const media = require('../lib/media');
 const i18n = require('../lib/i18n');
 const { assertSafePath, assertStrictlyInside, previewPathFor } = require('../lib/paths');
-const { replaceDirAtomically } = require('../lib/fs-swap');
+const { replaceDirAtomically, recoverInterruptedSwaps } = require('../lib/fs-swap');
 const { getPayloadInstance } = require('../core/payload');
 const { sendMail } = require('../core/mail');
-const { appendBuildLog, appendRawBuildLog, resetBuildLog } = require('../core/build-log');
+const { LOG_PATH_MASKS, redactLogText, appendBuildLog, appendRawBuildLog, resetBuildLog } = require('../core/build-log');
+const { createPathRedactor, displayPath } = require('../lib/log-redact');
 const {
   envInt,
   PORT,
+  PROJECT_DIR,
   ASTRO_PROJECT_DIR,
   DIST_DIR,
   LOCK_FILE,
@@ -69,7 +71,9 @@ let buildLockHeld = false;
 let activeBuildingSite = null;
 let activeBasePath = '/';
 
-// Vider les logs + nettoyer un verrou orphelin laissé par un crash
+// Vider les logs + reprise après crash : verrou orphelin, bascules de dossiers
+// interrompues (site écarté en .old restauré, copies .tmp supprimées) et releases
+// partielles.
 function resetOnBoot() {
   resetBuildLog('Initialisation du système de build...\n');
   buildLockHeld = false;
@@ -77,12 +81,59 @@ function resetOnBoot() {
     fs.unlinkSync(LOCK_FILE);
     appendRawBuildLog('Verrou de build orphelin détecté et nettoyé au démarrage.\n');
   }
+  // Détail (noms de dossiers d'autres sites) dans le journal du serveur seulement : le
+  // journal de build est lisible par tout client tant qu'aucun build n'a eu lieu.
+  const actions = [];
+  for (const [label, root] of [['production', PUBLIC_HTML_DIR], ['brouillons', DRAFTS_DIR]]) {
+    for (const action of recoverInterruptedSwaps(root)) actions.push(`${label} : ${action}`);
+  }
+  try {
+    for (const removed of releases.removePartialReleases(RELEASES_DIR)) actions.push(`releases : partielle supprimée : ${removed}`);
+  } catch (err) {
+    actions.push(`releases : échec du nettoyage : ${err.message}`);
+  }
+  for (const action of actions) console.warn(`♻️ [Reprise] ${action}`);
+  if (actions.length > 0) {
+    appendRawBuildLog(`Reprise après un arrêt brutal : ${actions.length} dossier(s) de déploiement remis en ordre.\n`);
+  }
 }
 
 // Comparaison à temps constant (pas d'indice sur le jeton via le temps de réponse).
 function isValidBuildToken(value) {
   if (typeof value !== 'string' || value.length !== BUILD_TOKEN.length) return false;
   return crypto.timingSafeEqual(Buffer.from(value), Buffer.from(BUILD_TOKEN));
+}
+
+// Site dont le build vient d'être lancé (avant que buildingSite ne soit posé) et site
+// dont le brouillon est en cours : la suppression d'un site les consulte (isSiteBusy).
+let launchingSite = null;
+let draftSite = null;
+
+// Vrai si un build ou un brouillon de CE site est en cours (ou en train de démarrer).
+function isSiteBusy(siteSlug) {
+  return Boolean(siteSlug) && (buildStatus.buildingSite === siteSlug || launchingSite === siteSlug || draftSite === siteSlug);
+}
+
+// Retire un site de la file d'attente (site supprimé). Vrai s'il y attendait.
+function dequeue(siteSlug) {
+  const idx = buildQueue.indexOf(siteSlug);
+  if (idx === -1) return false;
+  buildQueue.splice(idx, 1);
+  queuedTriggers.delete(siteSlug);
+  appendBuildLog(`FILE D'ATTENTE : "${siteSlug}" retiré (site supprimé).`);
+  return true;
+}
+
+// Vrai si le site a été supprimé depuis le lancement de son build ou de son brouillon :
+// rien ne doit alors être déployé ni publié (fichiers remis en ligne sans site pour les
+// retirer, brouillon hérité par un futur site du même slug). Base injoignable : on ne
+// conclut pas à une suppression.
+async function siteWasDeleted(siteSlug) {
+  try {
+    return !(await sitesStore.getSiteBySlug(siteSlug));
+  } catch {
+    return false;
+  }
 }
 
 function getActiveBuildingSite() {
@@ -130,6 +181,7 @@ function tryReserve() {
 // relance la file d'attente.
 function release() {
   buildLockHeld = false;
+  launchingSite = null;
   drainQueue();
 }
 
@@ -137,6 +189,7 @@ function release() {
 // verrou et relance la file.
 function launch(siteSlug, triggeredBy, failureLabel = 'Erreur de lancement du build :') {
   buildTriggers.set(siteSlug, triggeredBy || 'système');
+  launchingSite = siteSlug;
   startBuild(siteSlug).catch((e) => {
     console.error(failureLabel, e.message);
     buildStatus.inProgress = false;
@@ -168,8 +221,9 @@ function drainQueue() {
 }
 
 // Variables du serveur jamais transmises au build (npm install exécute des scripts
-// tiers) : base de données, secrets, clés d'API, identifiants SMTP/cPanel.
-const SECRET_ENV = /(SECRET|PASSWORD|PASSWD|PASS$|TOKEN|API_KEY|_KEY$|DATABASE_URI|^CPANEL_|^SMTP_|^SEED_)/i;
+// tiers) : base de données (DATABASE_URI/URL, POSTGRES_*, PG*, DB_*), secrets, clés
+// d'API, identifiants SMTP/cPanel.
+const SECRET_ENV = /(SECRET|PASSWORD|PASSWD|PASS$|TOKEN|API_KEY|_KEY$|DATABASE_UR[IL]|^POSTGRES_|^PG|^DB_|^CPANEL_|^SMTP_|^SEED_)/i;
 
 function sanitizedEnv(env = process.env) {
   const out = {};
@@ -244,16 +298,70 @@ async function notifyBuildResult(siteSlug, siteName, status, durationMs) {
   await sendMail(emails, subject, text);
 }
 
-// Exécute la commande de build dans le template (callback (error, stdout, stderr)).
-// Borné dans le temps (un npm install bloqué ne garde pas le verrou indéfiniment) et
-// avec un tampon de sortie large (le maxBuffer par défaut, 1 Mo, tue les gros builds).
-function runAstroBuild(command, env, callback) {
-  exec(command, { cwd: ASTRO_PROJECT_DIR, env, timeout: BUILD_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024, killSignal: 'SIGKILL' }, (error, stdout, stderr) => {
-    if (error && error.killed) {
-      error.message = `Build interrompu après ${Math.round(BUILD_TIMEOUT_MS / 1000)} s (délai maximal BUILD_TIMEOUT_MS dépassé).`;
+// Plafond de la sortie recopiée dans le journal pour un build (le fichier est sondé par
+// l'orchestrateur pendant tout le build).
+const MAX_BUILD_OUTPUT_BYTES = 5 * 1024 * 1024;
+
+// Commande en cours (build ou brouillon) : arrêt gracieux du serveur (abortCurrent).
+let currentRun = null;
+
+// Exécute la commande de build dans le template (callback (error, stdout, stderr) ; stdout
+// et stderr valent tous deux la fin de la sortie entrelacée). Borné dans le temps : au
+// délai maximal, TOUT l'arbre de processus est tué (npm, astro…) et le callback n'est
+// appelé qu'une fois tous les descripteurs fermés, avant que le build suivant ne reprenne
+// le dist. log=true : la sortie est recopiée en direct dans le journal (plafonnée) ; un
+// brouillon ne l'écrit pas (journal lisible par les propriétaires du dernier build).
+function runAstroBuild(command, env, callback, { log = true } = {}) {
+  let written = 0;
+  let capped = false;
+  const writeOutput = (text) => {
+    if (capped || !text) return;
+    const bytes = Buffer.byteLength(text);
+    if (written + bytes > MAX_BUILD_OUTPUT_BYTES) {
+      capped = true;
+      appendRawBuildLog('\n[… sortie tronquée …]\n');
+      return;
     }
-    callback(error, stdout, stderr);
-  });
+    written += bytes;
+    appendRawBuildLog(text);
+  };
+  // Chemins serveur masqués dans la sortie recopiée (journal lu par le client propriétaire)
+  const redactor = createPathRedactor(LOG_PATH_MASKS);
+  const onOutput = log ? (raw) => writeOutput(redactor.push(raw)) : undefined;
+  const flushOutput = () => { if (log) writeOutput(redactor.flush()); };
+
+  let run;
+  try {
+    run = runCommand(command, { cwd: ASTRO_PROJECT_DIR, env, timeoutMs: BUILD_TIMEOUT_MS, onOutput });
+  } catch (err) {
+    return callback(err, '', '');
+  }
+  currentRun = run;
+  run.promise.then(
+    ({ code, signal, timedOut, tail }) => {
+      if (currentRun === run) currentRun = null;
+      flushOutput();
+      let error = null;
+      if (timedOut) {
+        error = new Error(`Build interrompu après ${Math.round(BUILD_TIMEOUT_MS / 1000)} s (délai maximal BUILD_TIMEOUT_MS dépassé).`);
+      } else if (code !== 0) {
+        error = new Error(signal ? `Build interrompu (signal ${signal}).` : `Build échoué (code de sortie ${code}).`);
+      }
+      callback(error, tail, tail);
+    },
+    (err) => {
+      if (currentRun === run) currentRun = null;
+      callback(err, '', '');
+    }
+  );
+}
+
+// Arrêt gracieux : tue l'arbre de processus du build en cours (s'il y en a un). Le build
+// se termine alors en erreur par son chemin normal (verrou libéré dans le finally).
+function abortCurrent() {
+  if (!currentRun) return false;
+  currentRun.kill();
+  return true;
 }
 
 // Commande de build : installe les dépendances du template au premier build, et à
@@ -290,9 +398,9 @@ async function startDraftBuild(siteSlug) {
 
     await new Promise((resolve, reject) => {
       runAstroBuild(buildCommand(), buildEnvFor(site, siteSlug, { draft: true }), (error, stdout, stderr) => {
-        if (error) return reject(new Error(`Build brouillon échoué : ${String(stderr || stdout).slice(-500)}`));
+        if (error) return reject(new Error(`Build brouillon échoué : ${error.message}\n${String(stderr || stdout).slice(-500)}`));
         resolve();
-      });
+      }, { log: false });
     });
 
     if (!fs.existsSync(path.join(DIST_DIR, 'index.html'))) {
@@ -305,6 +413,12 @@ async function startDraftBuild(siteSlug) {
       await copyReferencedMedia(siteSlug, await readSitePages(siteSlug), await readSitePosts(siteSlug, { publishedOnly: true }));
     } catch (mediaErr) {
       console.error(`Médias du brouillon non copiés : ${mediaErr.message}`);
+    }
+
+    // Site supprimé pendant la compilation : aucun brouillon écrit (il survivrait à la
+    // purge et serait servi au propriétaire d'un futur site du même slug).
+    if (await siteWasDeleted(siteSlug)) {
+      throw new Error('Site supprimé pendant la prévisualisation : brouillon abandonné.');
     }
 
     // Publication atomique dans le dossier de brouillons (jamais dans PUBLIC_HTML_DIR)
@@ -323,9 +437,11 @@ async function startDraftBuild(siteSlug) {
 // Brouillon exclusif : compile puis libère le créneau et relance la file.
 // Précondition : le créneau a été réservé par l'appelant (tryReserve).
 async function runDraftPreview(siteSlug) {
+  draftSite = siteSlug;
   try {
     return await startDraftBuild(siteSlug);
   } finally {
+    draftSite = null;
     release(); // un build en attente peut repartir
   }
 }
@@ -340,6 +456,7 @@ async function startBuild(siteSlug) {
     // Le site a pu être supprimé pendant son attente en file
     appendBuildLog(`ANNULÉ : le site "${siteSlug}" n'existe plus.`);
     buildLockHeld = false;
+    launchingSite = null;
     drainQueue();
     return;
   }
@@ -364,7 +481,7 @@ async function startBuild(siteSlug) {
   activeBasePath = basePathFor(site, siteSlug);
 
   const cmd = buildCommand();
-  appendBuildLog(`Commande exécutée : ${cmd} (dans ${ASTRO_PROJECT_DIR})`);
+  appendBuildLog(`Commande exécutée : ${cmd} (dans ${displayPath(ASTRO_PROJECT_DIR, PROJECT_DIR)})`);
 
   runAstroBuild(cmd, buildEnvFor(site, siteSlug), (error, stdout, stderr) => {
     // Le traitement du résultat est async (publication distante éventuelle) mais le
@@ -386,22 +503,31 @@ async function startBuild(siteSlug) {
 }
 
 // Marque le build en erreur (statut, site, historique) — chemin de sortie commun.
+// Le message et l'extrait sont lisibles par le client (statut, historique) : chemins masqués.
 function failBuild(siteSlug, site, publicError, excerpt) {
   buildStatus.status = "error";
-  buildStatus.error = publicError;
+  buildStatus.error = redactLogText(publicError);
   updateSiteStatus(siteSlug, 'error');
-  finalizeBuild(siteSlug, site.name, 'error', excerpt);
+  finalizeBuild(siteSlug, site.name, 'error', redactLogText(excerpt || ''));
 }
 
 // SEO : sitemap.xml + robots.txt générés dans le dist avant publication.
 // Chemins localisés : la langue par défaut est à la racine, les autres préfixées
 // (/en/…). '' (accueil de la langue par défaut) est représenté par « home ».
+// En mode cPanel (site à la racine de son domaine), .htaccess : page 404, cache,
+// compression. Jamais en publication simulée : la base /preview/<dossier>/ rendrait
+// « ErrorDocument 404 /404.html » faux, et Express n'utilise pas ce fichier.
 function writeSeoFiles(site, pagesData, postsData) {
+  const htaccess = require('../lib/htaccess');
   // Exactement les routes générées par le template : jamais d'URL en 404 dans le sitemap
+  // (une page CMS d'adresse « 404 » est réservée : voir i18n.RESERVED_ROOT_SLUGS).
   const slugs = i18n.publishedRoutes(pagesData.docs, postsData.docs);
   if (slugs.length > 0) {
     fs.writeFileSync(path.join(DIST_DIR, 'sitemap.xml'), seo.generateSitemap(site.domain, slugs), 'utf-8');
     fs.writeFileSync(path.join(DIST_DIR, 'robots.txt'), seo.generateRobots(site.domain), 'utf-8');
+  }
+  if (hosting.isRemote && basePathFor(site, site && site.slug) === '/') {
+    fs.writeFileSync(path.join(DIST_DIR, '.htaccess'), htaccess.generateHtaccess(), 'utf-8');
   }
 }
 
@@ -424,9 +550,11 @@ async function ownedMediaFilenames(siteSlug, filenames) {
 
 // Médiathèque : copie dans le dist les images du site référencées par les pages et les
 // articles publiés (couvertures, images du corps) — URLs /media/… réécrites par le canal
-// interne : le site publié est autonome. Renvoie { copied, ignored }.
+// interne : le site publié est autonome. Seules les images matricielles sont publiées
+// (jamais un SVG hérité d'avant la restriction des formats). Renvoie { copied, ignored }.
 async function copyReferencedMedia(siteSlug, pagesData, postsData) {
-  const filenames = media.collectMediaFilenames({ pages: pagesData, posts: postsData });
+  const { isPublishableMediaName } = require('../lib/media-policy');
+  const filenames = media.collectMediaFilenames({ pages: pagesData, posts: postsData }).filter(isPublishableMediaName);
   if (filenames.length === 0) return { copied: 0, ignored: 0 };
   const owned = await ownedMediaFilenames(siteSlug, filenames);
   const mediaOut = path.join(DIST_DIR, 'media');
@@ -442,19 +570,29 @@ async function copyReferencedMedia(siteSlug, pagesData, postsData) {
   return { copied, ignored: filenames.length - owned.size };
 }
 
+// Build d'un site supprimé en cours de route : ni déploiement, ni publication, ni
+// statut ou historique écrit sur un site qui n'existe plus.
+function cancelDeletedSiteBuild(siteSlug) {
+  appendBuildLog(`ANNULÉ : le site "${siteSlug}" a été supprimé pendant le build, rien n'est déployé.`, { gap: true });
+  buildStatus.status = "error";
+  buildStatus.error = "Site supprimé pendant le build : déploiement annulé.";
+  buildStartTimes.delete(siteSlug);
+  buildTriggers.delete(siteSlug);
+}
+
 async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
   activeBuildingSite = null;
   activeBasePath = '/';
 
   if (error) {
     console.error(`Erreur de build : ${error.message}`);
-    appendBuildLog(`ERREUR DE BUILD :\n${error.message}\n${stderr}`, { gap: true });
+    // La sortie a déjà été recopiée en direct dans le journal
+    appendBuildLog(`ERREUR DE BUILD :\n${error.message}`, { gap: true });
     failBuild(siteSlug, site, error.message, `${error.message}\n${stderr || ''}`);
     return;
   }
 
-  appendBuildLog(`RÉSULTAT DU BUILD ASTRO :\n${stdout}`, { gap: true });
-  appendBuildLog(`Astro compilé. Déploiement atomique vers ${site.documentRoot}...`);
+  appendBuildLog(`Astro compilé. Déploiement atomique vers ${displayPath(site.documentRoot, PROJECT_DIR)}...`);
 
   // Déploiement atomique LOCAL : sert l'aperçu (/preview) et constitue la publication
   // en mode simulation.
@@ -489,8 +627,14 @@ async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
       appendBuildLog(`Copie des médias échouée : ${mediaErr.message}`);
     }
 
+    // Site supprimé pendant le build : rien n'est déployé ni publié
+    if (await siteWasDeleted(siteSlug)) {
+      cancelDeletedSiteBuild(siteSlug);
+      return;
+    }
+
     replaceDirAtomically(DIST_DIR, siteDestDir, siteSlug);
-    appendBuildLog(`DÉPLOIEMENT LOCAL SUCCÈS : Fichiers synchronisés vers ${siteDestDir} !`);
+    appendBuildLog(`DÉPLOIEMENT LOCAL SUCCÈS : Fichiers synchronisés vers ${displayPath(siteDestDir, PROJECT_DIR)} !`);
 
     // Conserver une version horodatée pour le rollback (non bloquant si ça échoue)
     try {
@@ -512,6 +656,10 @@ async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
   // SSL réel (AutoSSL). En cas d'échec distant, l'aperçu local reste intact mais le
   // build est marqué en erreur : en mode cpanel, l'intention est la mise en ligne.
   if (hosting.isRemote) {
+    if (await siteWasDeleted(siteSlug)) {
+      cancelDeletedSiteBuild(siteSlug);
+      return;
+    }
     try {
       appendBuildLog(`Publication cPanel vers public_html/${siteSlug}...`);
       await hosting.publish(siteSlug, DIST_DIR);
@@ -553,5 +701,8 @@ module.exports = {
   enqueue,
   launch,
   runDraftPreview,
+  isSiteBusy,
+  dequeue,
   sanitizedEnv,
+  abortCurrent,
 };

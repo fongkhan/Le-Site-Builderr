@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { resetPassword } from '../../api/auth';
-import { ApiError } from '../../api/client';
+import { resetPasswordErrorMessage } from './resetPasswordError';
 import { useToast } from '../../components/ui/ToastContext';
 
 export function ResetPasswordPage() {
@@ -19,8 +19,8 @@ export function ResetPasswordPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (password.length < 8) {
-      setError('Le mot de passe doit contenir au moins 8 caractères.');
+    if (password.length < 12) {
+      setError('Le mot de passe doit contenir au moins 12 caractères.');
       return;
     }
     if (password !== confirm) {
@@ -33,13 +33,7 @@ export function ResetPasswordPage() {
       toast.success('Mot de passe mis à jour : vous pouvez vous connecter.');
       navigate('/login', { replace: true });
     } catch (err) {
-      if (err instanceof ApiError && err.status === 429) {
-        setError('Trop de tentatives. Patientez quelques minutes avant de réessayer.');
-      } else if (err instanceof ApiError && (err.status === 400 || err.status === 403 || err.status === 404)) {
-        setError('Ce lien de réinitialisation est invalide ou a expiré. Demandez-en un nouveau.');
-      } else {
-        setError('Le serveur est injoignable pour le moment. Réessayez dans un instant.');
-      }
+      setError(resetPasswordErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -72,7 +66,7 @@ export function ResetPasswordPage() {
                 className="input-text"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="8 caractères minimum"
+                placeholder="12 caractères minimum"
                 autoComplete="new-password"
                 required
                 autoFocus

@@ -18,10 +18,14 @@ import type { AutosaveState } from './hooks/autosaveController';
 import {
   DEFAULT_LOCALE,
   HOME_SLUG,
+  canMovePage,
+  duplicateBlock,
   findBlock,
   insertBlock,
+  insertBlockAt,
   isDefaultHome,
   moveBlock,
+  movePage,
   newClientId,
   pageDeletionBlocker,
   removeBlock,
@@ -31,6 +35,7 @@ import {
   type EditorPage,
 } from './lib/editorModel';
 import { derivePageSlug, pageAddress } from './lib/pageSlug';
+import { hasNativeUndo } from './lib/shortcuts';
 import { PageSelector } from './components/PageSelector';
 import { PageSettings } from './components/PageSettings';
 import { SeoPanel, type SeoField } from './components/SeoPanel';
@@ -38,6 +43,7 @@ import { BlockList } from './components/BlockList';
 import { AddBlockPalette } from './components/AddBlockPalette';
 import { SaveIndicator } from './components/SaveIndicator';
 import { NewPageModal } from './components/NewPageModal';
+import './cms-editor.css';
 
 export function CmsPage() {
   const site = useCurrentSite();
@@ -58,12 +64,26 @@ function leaveMessage(state: AutosaveState): string {
   return "Vos dernières modifications sont en cours d'enregistrement automatique. Patientez un instant : si vous quittez maintenant, l'envoi se terminera en arrière-plan, sans nouvel essai en cas d'échec.";
 }
 
+// Raccourci clavier ignoré : saisie de texte en cours (le champ garde son propre annuler)
+// ou fenêtre modale ouverte. Une case à cocher n'a pas d'annuler : l'éditeur s'en charge.
+function shortcutBlocked(target: EventTarget | null): boolean {
+  if (document.querySelector('[aria-modal="true"]')) return true;
+  if (!(target instanceof HTMLElement)) return false;
+  return hasNativeUndo({
+    tagName: target.tagName,
+    type: target instanceof HTMLInputElement ? target.type : undefined,
+    isContentEditable: target.isContentEditable,
+  });
+}
+
+const HISTORY_HINT = 'Historique de cette session : il est perdu au rechargement de la page.';
+
 function CmsEditor({ site }: { site: Site }) {
   const navigate = useNavigate();
   const toast = useToast();
   const ai = useAiAssist(site.slug);
 
-  const { load, reload, pages, latest, commit, updateBlockById, saveState, retrySave } = useSitePages(site.slug);
+  const { load, reload, pages, latest, commit, updateBlockById, undo, redo, canUndo, canRedo, saveState, retrySave } = useSitePages(site.slug);
   const [theme, setTheme] = useState<Theme>(DEFAULT_THEME);
   const [themeUnavailable, setThemeUnavailable] = useState(false);
   const [themeAttempt, setThemeAttempt] = useState(0);
@@ -73,6 +93,19 @@ function CmsEditor({ site }: { site: Site }) {
   const [pageToDelete, setPageToDelete] = useState<string | null>(null);
   const [creatingPage, setCreatingPage] = useState(false);
   const [seoPageId, setSeoPageId] = useState<string | null>(null);
+
+  // Ctrl/Cmd+Z : annuler ; Maj+Ctrl/Cmd+Z : rétablir
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.key.toLowerCase() !== 'z') return;
+      if (shortcutBlocked(e.target)) return;
+      e.preventDefault();
+      if (e.shiftKey) redo();
+      else undo();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [undo, redo]);
 
   // Le thème ne sert qu'à l'aperçu : son échec n'empêche pas l'édition
   useEffect(() => {
@@ -134,12 +167,28 @@ function CmsEditor({ site }: { site: Site }) {
     toast.success(`Bloc « ${blockLabel(type)} » ajouté.`);
   };
 
+  // Suppression annulable depuis le toast : la section revient à sa place (si sa page
+  // existe encore), quelles que soient les modifications faites entre-temps.
   const confirmRemoveBlock = () => {
     if (blockToRemove === null) return;
     const id = blockToRemove;
+    const found = findBlock(latest(), id);
     commit((prev) => removeBlock(prev, id), true);
     if (editingBlockId === id) setEditingBlockId(null);
     setBlockToRemove(null);
+    if (!found) return;
+    const { page, block, index } = found;
+    toast.success('Section supprimée.', {
+      action: { label: 'Annuler', onClick: () => commit((prev) => insertBlockAt(prev, page.id, block, index), true) },
+    });
+  };
+
+  const duplicateSection = (blockId: string) => {
+    commit((prev) => duplicateBlock(prev, blockId), true);
+    const found = findBlock(latest(), blockId);
+    const copy = found?.page.layout[found.index + 1];
+    if (copy) setEditingBlockId(copy.id);
+    toast.success('Section dupliquée : la copie suit l’originale.');
   };
 
   const updatePageField = (pageId: string, field: SeoField | 'title', value: string) => {
@@ -249,7 +298,15 @@ function CmsEditor({ site }: { site: Site }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <h2 style={{ fontSize: '1.4rem' }}>🗃️ Sections de la page</h2>
-            {!saveFailed && <SaveIndicator state={saveState} onRetry={retrySave} />}
+            <div className="cms-history">
+              <button type="button" className="btn btn-secondary" onClick={undo} disabled={!canUndo} title={`Annuler (Ctrl+Z). ${HISTORY_HINT}`}>
+                ↶ Annuler
+              </button>
+              <button type="button" className="btn btn-secondary" onClick={redo} disabled={!canRedo} title={`Rétablir (Maj+Ctrl+Z). ${HISTORY_HINT}`}>
+                ↷ Rétablir
+              </button>
+              {!saveFailed && <SaveIndicator state={saveState} onRetry={retrySave} />}
+            </div>
           </div>
           {saveFailed && <SaveIndicator state={saveState} onRetry={retrySave} />}
         </div>
@@ -267,6 +324,12 @@ function CmsEditor({ site }: { site: Site }) {
               deleteBlocker={pageDeletionBlocker(activePage, pages)}
               onRename={(title) => updatePageField(activePage.id, 'title', title)}
               onDelete={() => setPageToDelete(activePage.id)}
+              canMoveUp={canMovePage(pages, activePage.id, -1)}
+              canMoveDown={canMovePage(pages, activePage.id, 1)}
+              onMove={(delta) => commit((prev) => movePage(prev, activePage.id, delta), true)}
+              onToggleNav={(visible) => commit((prev) => updatePage(prev, activePage.id, (draft) => {
+                draft.hideFromNav = !visible;
+              }), true)}
             />
             <SeoPanel
               page={activePage}
@@ -288,6 +351,7 @@ function CmsEditor({ site }: { site: Site }) {
               onMove={(id, delta) => commit((prev) => moveBlock(prev, id, delta), true)}
               onReorder={(fromId, toId) => commit((prev) => reorderBlock(prev, fromId, toId), true)}
               onRemove={setBlockToRemove}
+              onDuplicate={duplicateSection}
               updateBlock={updateBlockById}
             />
           ) : (

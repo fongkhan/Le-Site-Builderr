@@ -2,6 +2,37 @@
 
 Toutes les modifications notables apportées à ce projet sont documentées dans ce fichier.
 
+## [2.3.0] - 2026-10-02
+
+### Ajouts
+
+- **Messages reçus** : les envois des formulaires de contact et de prise de rendez-vous sont conservés (12 mois, 500 messages maximum par site) et consultables dans un onglet « Messages » de l'orchestrateur : non lus, marquer comme lu, répondre par email, supprimer. Un email de notification en échec ne fait plus perdre le message.
+- **CMS** : annuler / rétablir (boutons et raccourcis clavier), duplication de section, « Annuler » sur la suppression d'une section ou d'un élément de liste, ordre des pages dans le menu, page masquable du menu (toujours publiée), sauvegarde automatique limitée aux pages modifiées.
+- **Sites publiés** : page 404, libellés d'interface (formulaires, menu, bannière cookies, boutons) traduits selon la langue de la page, structure accessible (lien d'évitement, un seul titre principal, pied de page hors du contenu principal) ; en mode cPanel, `.htaccess` généré (page 404, pas d'index de dossier, cache et compression).
+- **Supervision** : `GET /api/health` et `GET /api/health/ready` (base, stockage, build), sans secret ni chemin.
+- **Orchestrateur** : titre d'onglet par page, lien « Aller au contenu », focus déplacé sur le contenu à chaque navigation, focus visible, animations réduites selon les préférences système, notifications plus lisibles (erreurs affichées plus longtemps, pause au survol), messages d'erreur réseau en français.
+
+### Sécurité
+
+- **Comptes** : politique de mot de passe (12 caractères minimum, différent de l'email, mots de passe courants refusés) ; sessions révoquées au changement ou à la réinitialisation du mot de passe ; message de connexion unique (compte inconnu, mauvais mot de passe ou verrouillé) ; déverrouillage réservé aux admins ; création anonyme de compte refusée ; cookie de session `Secure` en production (`COOKIE_SECURE`).
+- **Production** : email de l'admin initial obligatoire (`SEED_ADMIN_EMAIL`), démarrage refusé tant qu'aucun admin n'existe.
+- **Chemins serveur** (`documentRoot`, `repositoryPath`, jeton de vérification de domaine) masqués aux clients, dans l'API comme dans le journal et l'historique des builds.
+- **Médiathèque** : formats raster uniquement (SVG refusé et jamais republié), taille limitée (`MEDIA_MAX_MB`), aucun fichier écrit sur le disque avant le contrôle d'accès. SVG/XML servis sous `/preview` et `/draft` dans un bac à sable CSP.
+- **Brouillons** : `/draft/<slug>/` réservé aux comptes ayant accès au site, jamais mis en cache.
+- Corps JSON limité par route (256 Ko par défaut, 2 Mo pour le contenu, 10 Mo pour l'onboarding) ; secrets de base de données retirés de l'environnement du build.
+
+### Fiabilité
+
+- **Build** : lancé dans son propre groupe de processus ; au délai maximal ou à l'arrêt du serveur, tout l'arbre (npm, astro) est arrêté ; sortie diffusée en direct ; journal lu par la fin.
+- **Reprise après crash** : bascules de dossiers interrompues réparées au démarrage (dossiers marqués uniquement) ; versions écrites en `.partial` puis renommées.
+- **Suppression d'un site** : médias supprimés avec lui (sauf ceux encore cités par un autre site, rattachés à ce dernier), refusée pendant un build ou un brouillon du site ; en mode cPanel, `?deleteFiles=true` retire aussi le sous-domaine, le domaine personnalisé et les fichiers distants. Un build ou un brouillon d'un site supprimé entre-temps n'est jamais publié.
+- **Duplication d'un site** : le jumeau reçoit ses propres copies des images ; ses pages s'enregistrent sans erreur.
+- Dupliquer une section contenant une liste ne fait plus échouer les sauvegardes suivantes.
+
+### Vérification
+
+- Matrice de sécurité : 228 contrôles (80 nouveaux). Tests unitaires serveur : 222 ; tests Vitest de l'orchestrateur : 149 ; fixture du template étendue (structure, langues, 404, pages masquées).
+
 ## [2.2.0] - 2026-10-01
 
 ### Refactorisation

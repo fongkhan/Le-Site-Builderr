@@ -2,6 +2,7 @@
 // Bloc « Contact » : formulaire de message (balisage, styles et envoi communs dans
 // components/forms/LeadForm.astro). Ancre stable #contact : cible des CTA de la page.
 import LeadForm from '../forms/LeadForm.astro';
+import { t } from '../../lib/ui-strings.mjs';
 
 interface Props {
   data: {
@@ -11,15 +12,18 @@ interface Props {
   };
   /** id d'ancre attribué par la page (unique : « contact », « contact-2 »…). */
   anchorId?: string;
+  /** Langue de la page (libellés d'interface, lib/ui-strings.mjs). */
+  locale?: string;
 }
 
-const { data, anchorId = 'contact' } = Astro.props;
+const { data, anchorId = 'contact', locale } = Astro.props;
 ---
 
 <LeadForm
   kind="contact"
   anchorId={anchorId}
-  title={data.title || 'Contactez-nous'}
+  title={data.title || t(locale, 'contactTitle')}
   subtitle={data.subtitle}
-  ctaText={data.ctaText || 'Envoyer le message'}
+  ctaText={data.ctaText || t(locale, 'contactCta')}
+  locale={locale}
 />

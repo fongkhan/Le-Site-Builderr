@@ -3,6 +3,7 @@
 const { getPayload } = require('payload');
 const sitesStore = require('../sites-store');
 const { IS_PRODUCTION } = require('./config');
+const { resolveSeedAdmin, missingAdminMessage } = require('../lib/seed');
 
 let payloadInstance = null;
 
@@ -17,25 +18,27 @@ const DEFAULT_SEED_PASSWORD = 'password123';
 // uniquement avec un SEED_ADMIN_PASSWORD explicite et robuste — jamais « password123 ».
 async function seedUsers(payload) {
   try {
-    // 1. Super Admin
-    const adminRes = await payload.find({
-      collection: 'users',
-      where: { email: { equals: 'admin@admin.com' } }
-    });
-    if (adminRes.docs.length === 0) {
+    // 1. Super Admin (email : SEED_ADMIN_EMAIL, obligatoire en production)
+    const adminEmail = resolveSeedAdmin(process.env);
+    const adminRes = adminEmail
+      ? await payload.find({ collection: 'users', where: { email: { equals: adminEmail } } })
+      : null;
+    // Production sans SEED_ADMIN_EMAIL : aucun admin créé ici (jamais admin@admin.com) ;
+    // le démarrage s'arrête ensuite s'il n'en existe aucun (missingAdminMessage).
+    if (adminEmail && adminRes.docs.length === 0) {
       const adminPassword = process.env.SEED_ADMIN_PASSWORD || (IS_PRODUCTION ? '' : DEFAULT_SEED_PASSWORD);
       if (IS_PRODUCTION && (adminPassword.length < 12 || adminPassword === DEFAULT_SEED_PASSWORD)) {
-        console.error("❌ [Seeding] Aucun administrateur : définissez SEED_ADMIN_PASSWORD (12 caractères minimum) dans le .env puis redémarrez pour créer admin@admin.com.");
+        console.error(`❌ [Seeding] Aucun administrateur : définissez SEED_ADMIN_PASSWORD (12 caractères minimum) dans le .env puis redémarrez pour créer ${adminEmail}.`);
       } else {
         await payload.create({
           collection: 'users',
           data: {
-            email: 'admin@admin.com',
+            email: adminEmail,
             roles: ['admin'],
             password: adminPassword
           }
         });
-        console.log("✔ [Seeding] admin@admin.com créé.");
+        console.log(`✔ [Seeding] ${adminEmail} créé.`);
       }
     }
 
@@ -76,6 +79,12 @@ async function initPayload() {
       // Payload devient la source de vérité : import one-way de sites.json (idempotent)
       await sitesStore.migrateFromJson();
       await seedUsers(payloadInstance);
+      // Production sans aucun admin : arrêt (sinon serveur sans compte exploitable)
+      const fatal = await missingAdminMessage(payloadInstance, process.env);
+      if (fatal) {
+        console.error(fatal);
+        process.exit(1);
+      }
     } catch (err) {
       console.error("❌ [Payload CMS] Erreur lors de l'initialisation :", err.message);
       // En production, un serveur sans base n'accepterait aucune connexion (503 partout) :

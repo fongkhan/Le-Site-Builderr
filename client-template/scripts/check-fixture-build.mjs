@@ -49,6 +49,63 @@ for (const file of htmlFiles) {
   check(businesses <= 1, `${rel} : ${businesses} entités LocalBusiness`);
 }
 
+// ---- Structure accessible, libellés traduits et page 404 ----
+// Structure accessible (un <main> ciblé par le lien d'évitement, un seul h1, pieds de page
+// hors du <main>), libellés d'interface traduits et page 404.
+const readDist = (rel) => (fs.existsSync(path.join(dist, rel)) ? fs.readFileSync(path.join(dist, rel), 'utf-8') : '');
+for (const file of htmlFiles) {
+  const rel = path.relative(dist, file);
+  const html = fs.readFileSync(file, 'utf-8');
+  const mains = (html.match(/<main[\s>]/g) || []).length;
+  const h1s = (html.match(/<h1[\s>]/g) || []).length;
+  check(mains === 1, `${rel} : ${mains} élément(s) <main> (1 attendu)`);
+  check(h1s === 1, `${rel} : ${h1s} titre(s) <h1> (1 attendu)`);
+  const mainHtml = html.slice(html.search(/<main[\s>]/), html.indexOf('</main>'));
+  check(!/<footer[\s>]/.test(mainHtml), `${rel} : <footer> à l'intérieur de <main>`);
+  check(html.includes('href="#contenu"'), `${rel} : lien d'évitement (href="#contenu") absent`);
+  check(/<main[^>]*\sid="contenu"/.test(html), `${rel} : <main id="contenu"> absent`);
+}
+
+const homeEn = readDist('en/index.html');
+for (const fr of ['Votre nom', 'Navigation principale', 'Réseaux sociaux']) {
+  check(!homeEn.includes(fr), `en/index.html : libellé français « ${fr} »`);
+}
+check(homeEn.includes('Your name'), 'en/index.html : libellé anglais « Your name » absent');
+// Erreurs d'envoi du formulaire traduites (le texte du serveur, en français, n'est jamais affiché)
+check(/data-msg-rate-limit="Too many/.test(homeEn), 'en/index.html : message « trop d’envois » anglais absent du formulaire');
+check(/data-msg-invalid="Please check/.test(homeEn), 'en/index.html : message « champ invalide » anglais absent du formulaire');
+check(home.includes('Votre nom'), 'index.html : libellé « Votre nom » absent');
+
+const notFound = readDist('404.html');
+check(notFound !== '', 'page 404.html absente');
+check(/<meta name="robots" content="noindex/.test(notFound), '404.html : meta robots noindex absente');
+check(notFound.includes(`href="${base}/"`), `404.html : lien vers l'accueil (${base}/) absent`);
+check(!fs.existsSync(path.join(dist, '404', 'index.html')), 'route 404/index.html générée par la route attrape-tout');
+// La fixture contient une page fr d'adresse « 404 » (réservée : ignorée, jamais dans le
+// menu) et une page en/404 (générée normalement).
+check(fs.existsSync(path.join(dist, 'en', '404', 'index.html')), 'page anglaise en/404/index.html absente');
+for (const file of htmlFiles) {
+  const rel = path.relative(dist, file);
+  const html = fs.readFileSync(file, 'utf-8');
+  check(!html.includes(`href="${base}/404/"`), `${rel} : lien vers la page CMS réservée ${base}/404/`);
+}
+
+// ---- Pages masquées du menu ----
+// Page masquée du menu (hideFromNav) : générée, mais aucun lien du menu ne la cible ;
+// le menu commence par l'accueil.
+{
+  check(fs.existsSync(path.join(dist, 'mentions-legales/index.html')), 'page masquée du menu absente : mentions-legales/index.html');
+  for (const file of htmlFiles) {
+    const rel = path.relative(dist, file);
+    const html = fs.readFileSync(file, 'utf-8');
+    const nav = html.match(/<nav class="site-nav"[^>]*>([\s\S]*?)<\/nav>/);
+    if (!nav) continue;
+    const hrefs = [...nav[1].matchAll(/<a[^>]+href="([^"]*)"/g)].map(([, href]) => href);
+    check(!hrefs.some((href) => href.includes('/mentions-legales')), `${rel} : la page masquée figure dans le menu`);
+    if (!rel.startsWith('en/')) check(hrefs[0] === `${base}/`, `${rel} : le premier lien du menu n'est pas l'accueil (${hrefs[0]})`);
+  }
+}
+
 if (failures.length) {
   console.error(`✖ ${failures.length} problème(s) dans le site généré :\n- ${failures.join('\n- ')}`);
   process.exit(1);

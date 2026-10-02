@@ -5,9 +5,13 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const { FRONTEND_ORIGINS, PUBLIC_HTML_DIR, DRAFTS_DIR, IS_PRODUCTION } = require('./core/config');
-const { mountRateLimits, jsonBodyForExpressRoutes, jsonErrorHandler, isPublicRoute, trustProxySetting } = require('./core/http');
+const { mountRateLimits, jsonBodyForExpressRoutes, jsonErrorHandler, isPublicRoute, trustProxySetting, sendSignInPage } = require('./core/http');
+const auth = require('./auth');
+const { isValidSlug } = require('./lib/paths');
+const { isSwapDirRequest } = require('./lib/fs-swap');
 
 const ROUTERS = [
+  require('./routes/health'),
   require('./routes/sites'),
   require('./routes/admin'),
   require('./routes/content'),
@@ -29,6 +33,50 @@ const corsPolicy = cors((req, callback) => callback(null, isPublicRoute(req.path
 // du site publié sur son vrai domaine, ou brouillon non publié).
 const noindex = (req, res, next) => {
   res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  next();
+};
+
+// Fichiers statiques (/preview, /draft) : les formats interprétables par le navigateur
+// (SVG, XML, XSL) peuvent porter du script ; ils sont servis dans un bac à sable sans
+// script ni ressource externe.
+const SANDBOXED_EXT = /\.(svgz?|xml|xsl)$/i;
+const staticOptions = {
+  setHeaders(res, filePath) {
+    if (SANDBOXED_EXT.test(filePath)) {
+      res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+    }
+  },
+};
+
+// Copies de bascule (dossier.tmp-*, dossier.old-*) d'une publication interrompue : jamais
+// servies. Seul le PREMIER segment est concerné (dossiers frères des sites) : un média
+// « affiche.old-2023.png » reste servi.
+function hideSwapDirs(req, res, next) {
+  if (isSwapDirRequest(req.path)) return res.status(404).end();
+  next();
+}
+
+// Brouillons : réservés aux comptes ayant accès au site (le premier segment du chemin est
+// le slug). Un navigateur sans session reçoit une page lisible plutôt que du JSON.
+const draftSlugOf = (req) => req.path.split('/')[1] || '';
+const draftSiteAccess = auth.requireSiteAccess(draftSlugOf);
+function guardDraft(req, res, next) {
+  if (!req.user) {
+    if (req.accepts(['json', 'html']) === 'html') {
+      return sendSignInPage(res, 401, 'Brouillon protégé', "Connectez-vous à l'orchestrateur pour voir ce brouillon.", `${FRONTEND_ORIGINS[0]}/login`);
+    }
+    return res.status(401).json({ error: "Authentification requise. Veuillez vous connecter." });
+  }
+  // Slug invalide ou absent (traversée encodée…) : 400, jamais résolu en chemin
+  if (!isValidSlug(draftSlugOf(req))) {
+    return res.status(400).json({ error: "Identifiant de site invalide." });
+  }
+  draftSiteAccess(req, res, next);
+}
+
+// Brouillon non publié : jamais conservé par un cache partagé ni par le navigateur.
+const noStore = (req, res, next) => {
+  res.setHeader('Cache-Control', 'private, no-store');
   next();
 };
 
@@ -63,9 +111,9 @@ function createApp({ nextHandler }) {
   }
 
   // Sites générés servis sous /preview/<slug>/ (le préfixe /sites est réservé aux
-  // routes du dashboard React) et brouillons sous /draft/<slug>/.
-  app.use('/preview', noindex, express.static(PUBLIC_HTML_DIR));
-  app.use('/draft', noindex, express.static(DRAFTS_DIR));
+  // routes du dashboard React) et brouillons sous /draft/<slug>/ (accès contrôlé).
+  app.use('/preview', noindex, hideSwapDirs, express.static(PUBLIC_HTML_DIR, staticOptions));
+  app.use('/draft', auth.authenticate, guardDraft, noindex, noStore, hideSwapDirs, express.static(DRAFTS_DIR, staticOptions));
 
   for (const router of ROUTERS) app.use(router);
 

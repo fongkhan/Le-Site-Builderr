@@ -9,6 +9,7 @@ const hosting = require('../core/hosting');
 const releases = require('../lib/releases');
 const analytics = require('../lib/analytics');
 const { generateSlug, assertSafePath, assertStrictlyInside, previewPathFor } = require('../lib/paths');
+const { publicSiteView } = require('../lib/sites-view');
 const { validateTheme } = require('../lib/theme');
 const { replaceDirAtomically } = require('../lib/fs-swap');
 const { sendError, createRouter } = require('../core/http');
@@ -50,8 +51,13 @@ router.get('/api/sites', auth.authenticate, auth.requireAuth, async (req, res) =
     if (!auth.isAdmin(req.user)) {
       sites = sites.filter(s => req.userSiteSlugs.has(s.slug));
     }
-    // Adresse de la copie servie par l'orchestrateur (publication simulée)
-    res.json(sites.map((s) => ({ ...s, previewPath: `${previewPathFor(s.documentRoot, PUBLIC_HTML_DIR, s.slug)}/` })));
+    // Adresse de la copie servie par l'orchestrateur (publication simulée), calculée
+    // avant le retrait des chemins serveur pour un client
+    const isAdmin = auth.isAdmin(req.user);
+    res.json(sites.map((s) => publicSiteView(
+      { ...s, previewPath: `${previewPathFor(s.documentRoot, PUBLIC_HTML_DIR, s.slug)}/` },
+      { isAdmin }
+    )));
   } catch (e) {
     sendError(res, "Impossible de lire la liste des sites.", e);
   }
@@ -174,6 +180,14 @@ router.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (r
       return res.status(404).json({ error: "Site non trouvé." });
     }
 
+    // Build ou brouillon de CE site en cours : il redéploierait (ou republierait sur
+    // l'hébergement) les fichiers que la suppression retire. Vérification synchrone, sans
+    // await avant la suppression ; un build lancé malgré tout pendant celle-ci revérifie
+    // l'existence du site avant tout déploiement.
+    if (build.isSiteBusy(slug)) {
+      return res.status(409).json({ error: "Un build ou une prévisualisation de ce site est en cours : réessayez quand il sera terminé." });
+    }
+
     // Fichiers de production : jamais hors du périmètre ni la racine partagée elle-même
     // (un documentRoot hérité invalide n'est pas supprimé, le site l'est quand même).
     let removableRoot = null;
@@ -185,16 +199,40 @@ router.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (r
       }
     }
 
-    // La suppression Payload nettoie aussi les contenus rattachés et la relation users.sites
+    // La suppression Payload nettoie aussi les contenus rattachés (médias et leurs
+    // fichiers compris, sauf ceux qu'un autre site cite encore) et la relation users.sites.
+    // Elle passe AVANT tout retrait de fichiers : si elle échoue, le site reste intact et
+    // en ligne (jamais un site hors ligne mais toujours en base).
     await sitesStore.deleteSite(slug);
+    // En attente dans la file : retiré (son build serait de toute façon annulé)
+    build.dequeue(slug);
     purgeSiteData(slug);
 
     if (removableRoot && fs.existsSync(removableRoot)) {
       fs.rmSync(removableRoot, { recursive: true, force: true });
     }
 
-    logAudit(req, 'site.suppression', req.params.slug, `fichiers=${Boolean(deleteFiles)}`);
-    res.json({ success: true, message: "Site supprimé avec succès." });
+    // Hébergement distant (cPanel) : retrait du site en ligne, domaine personnalisé lu sur
+    // la fiche déjà chargée. Chaque étape est tentée ; un retrait partiel est signalé.
+    let remote = null;
+    if (hosting.isRemote && deleteFiles) {
+      try {
+        remote = await hosting.removeSite(slug, { customDomain: site.customDomain || '' });
+      } catch (e) {
+        console.error(`⚠️ [Sites] Retrait distant de ${slug} refusé : ${e.message}`);
+        remote = { removed: false, customDomain: 'failed', subdomain: 'failed', files: 'failed' };
+      }
+    }
+
+    const remoteAudit = remote ? ` distant=${remote.removed ? 'ok' : 'partiel'}` : '';
+    logAudit(req, 'site.suppression', req.params.slug, `fichiers=${Boolean(deleteFiles)}${remoteAudit}`);
+    res.json({
+      success: true,
+      message: remote && !remote.removed
+        ? "Site supprimé, mais son retrait de l'hébergement est incomplet : vérifiez le serveur."
+        : "Site supprimé avec succès.",
+      remote,
+    });
   } catch (e) {
     sendError(res, "Impossible de supprimer le site.", e);
   }
@@ -227,8 +265,9 @@ router.post('/api/sites/scan', auth.authenticate, auth.requireAdmin, async (req,
       return res.status(400).json({ error: `Le chemin spécifié n'existe pas : ${targetDir}` });
     }
 
+    // Copies de bascule (X.tmp-…, X.old-…) jamais proposées à l'import
     const dirs = fs.readdirSync(targetDir, { withFileTypes: true })
-      .filter(dirent => dirent.isDirectory())
+      .filter(dirent => dirent.isDirectory() && !/\.(tmp|old)-/.test(dirent.name))
       .map(dirent => dirent.name);
 
     const scanned = [];
@@ -720,21 +759,38 @@ router.post('/api/sites/:slug/duplicate', auth.authenticate, auth.requireAdmin, 
 
     // Contenu + thème copiés via le fallback JSON (repris par le CMS, persisté dans
     // Payload à la première sauvegarde) — même approche que l'import d'archive.
+    let pagesData = null;
+    try { pagesData = await readSitePages(source.slug); } catch { /* pages source illisibles : pages par défaut */ }
+    let postsDocs = null;
+    try { postsDocs = (await readSitePosts(source.slug)).docs; } catch { /* articles source illisibles : pas de blog */ }
+
+    // Images : le jumeau reçoit ses propres copies (supprimer l'un ne casse pas l'autre),
+    // et son contenu cite les nouveaux noms de fichiers.
+    const { copySiteMedia } = require('../services/sites');
+    const { remapMediaFilenames } = require('../lib/media');
+    let mediaMap = {};
     try {
-      const pagesData = await readSitePages(source.slug);
-      if (pagesData && Array.isArray(pagesData.docs)) {
-        writeJsonFile(getSitePagesFile(slug), pagesData);
-      }
-    } catch { /* pages source illisibles : le jumeau démarre avec les pages par défaut */ }
+      const payloadInstance = getPayloadInstance();
+      const targetId = payloadInstance ? await findPayloadSiteId(payloadInstance, slug) : null;
+      if (targetId) mediaMap = await copySiteMedia(source.slug, targetId, { pages: pagesData, posts: postsDocs });
+    } catch (e) {
+      console.error(`[Duplication] Médias de ${source.slug} non copiés :`, e.message);
+    }
+
+    if (pagesData && Array.isArray(pagesData.docs)) {
+      try {
+        writeJsonFile(getSitePagesFile(slug), remapMediaFilenames(pagesData, mediaMap));
+      } catch { /* le jumeau démarre avec les pages par défaut */ }
+    }
     const srcTheme = getSiteThemeFile(source.slug);
     if (fs.existsSync(srcTheme)) {
       try { fs.copyFileSync(srcTheme, getSiteThemeFile(slug)); } catch { /* thème par défaut sinon */ }
     }
-    try {
-      writePostsFile(slug, (await readSitePosts(source.slug)).docs);
-    } catch { /* articles source illisibles : le jumeau démarre sans blog */ }
+    if (postsDocs) {
+      try { writePostsFile(slug, remapMediaFilenames(postsDocs, mediaMap)); } catch { /* le jumeau démarre sans blog */ }
+    }
 
-    logAudit(req, 'site.duplication', slug, `source=${source.slug}`);
+    logAudit(req, 'site.duplication', slug, `source=${source.slug} médias=${Object.keys(mediaMap).length}`);
     res.json({ success: true, site: newSite });
   } catch (e) {
     sendError(res, "Échec de la duplication du site.", e);

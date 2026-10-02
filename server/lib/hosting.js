@@ -12,6 +12,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { isValidSlug } = require('./paths');
 
 const CPANEL_TIMEOUT_MS = 20000;
 
@@ -42,6 +43,10 @@ function createSimulationDriver() {
     // La copie atomique locale (index.js) est LA publication en simulation.
     async publish() {
       return { published: 'local' };
+    },
+    // Rien de distant à retirer : les fichiers locaux sont supprimés par l'appelant.
+    async removeSite() {
+      return { removed: false };
     },
     async getSslStatus() {
       return 'active';
@@ -208,6 +213,56 @@ function createCpanelDriver(config) {
         try { fs.rmSync(localZip, { force: true }); } catch {}
       }
       return { published: 'cpanel', remoteDir: `public_html/${slug}` };
+    },
+
+    // Retire un site du serveur : domaine personnalisé, sous-domaine <slug>.<rootDomain>,
+    // puis dossier public_html/<slug>. Chaque étape est tentée même si une précédente
+    // échoue (droits, API…) ; le résultat détaille chaque étape ('removed', 'failed' ou
+    // 'skipped'), sans jeton ni hôte. Une ressource absente du serveur (domaine encore en
+    // attente de vérification, site importé sans sous-domaine ni dossier…) est 'skipped' :
+    // pas de fausse alerte « retrait incomplet ». Inventaire illisible : l'étape est
+    // tentée. Slug revalidé : jamais de chemin distant dérivé d'une valeur arbitraire
+    // (« ../ », vide → racine public_html).
+    async removeSite(slug, { customDomain } = {}) {
+      if (!isValidSlug(slug)) {
+        throw new Error('Identifiant de site invalide : retrait distant refusé.');
+      }
+      const attempt = async (label, fn) => {
+        try {
+          await fn();
+          return 'removed';
+        } catch (e) {
+          console.error(`⚠️ [cPanel] Retrait ${label} de ${slug} : ${e.message}`);
+          return 'failed';
+        }
+      };
+      // Inventaire du compte : null si illisible ou absent de la réponse (version de
+      // cPanel), jamais lu comme « vide » ; l'étape correspondante est alors tentée.
+      const toList = (list) => (Array.isArray(list) ? list.map((v) => String(v || '').toLowerCase()) : null);
+      const read = async (fn) => {
+        try { return await fn(); } catch { return null; }
+      };
+      const domainInfo = (await read(() => uapi('DomainInfo', 'list_domains', {}))) || {};
+      const addonDomains = toList(domainInfo.addon_domains);
+      const subDomains = toList(domainInfo.sub_domains);
+      const entries = await read(() => uapi('Fileman', 'list_files', { dir: 'public_html', types: 'dir' }));
+      const dirs = toList(Array.isArray(entries) ? entries.map((e) => e && e.file) : null);
+      const absent = (list, name) => Array.isArray(list) && !list.includes(String(name).toLowerCase());
+
+      const subdomain = `${slug}.${rootDomain}`;
+      const result = {
+        customDomain: !customDomain || absent(addonDomains, customDomain)
+          ? 'skipped'
+          : await attempt('du domaine personnalisé', () => uapi('AddonDomain', 'deladdondomain', { domain: customDomain })),
+        subdomain: absent(subDomains, subdomain)
+          ? 'skipped'
+          : await attempt('du sous-domaine', () => api2('SubDomain', 'delsubdomain', { domain: subdomain })),
+        files: absent(dirs, slug)
+          ? 'skipped'
+          : await attempt('des fichiers', () => unlinkRemote(`public_html/${slug}`)),
+      };
+      result.removed = Object.values(result).every((v) => v !== 'failed');
+      return result;
     },
 
     // Statut AutoSSL : 'active' si un certificat installé couvre le domaine, sinon 'pending'.

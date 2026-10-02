@@ -15,6 +15,11 @@ const { createHostingDriver, createCpanelDriver } = require('../../lib/hosting.j
 // ---------------------------------------------------------------------------
 const calls = [];
 let subDomains = ['deja-la.exemple.fr'];
+// Domaines additionnels et dossiers de public_html connus du compte (inventaire du retrait)
+let addonDomains = [];
+let publicDirs = [];
+// Étapes à faire échouer (nom UAPI « Module/fonction » ou API2 « Module::fonction »)
+const failing = new Set();
 let server;
 let mockPort;
 
@@ -31,7 +36,12 @@ before(async () => {
       return send({ status: 0, errors: ['Access denied'] });
     }
     if (url.pathname === '/execute/DomainInfo/list_domains') {
-      return send({ status: 1, data: { main_domain: 'exemple.fr', sub_domains: subDomains } });
+      if (failing.has('DomainInfo/list_domains')) return send({ status: 0, errors: ['inventaire indisponible'] });
+      return send({ status: 1, data: { main_domain: 'exemple.fr', sub_domains: subDomains, addon_domains: addonDomains } });
+    }
+    if (url.pathname === '/execute/Fileman/list_files') {
+      if (failing.has('Fileman/list_files')) return send({ status: 0, errors: ['inventaire indisponible'] });
+      return send({ status: 1, data: publicDirs.map((file) => ({ file, type: 'dir' })) });
     }
     if (url.pathname === '/execute/SubDomain/addsubdomain') {
       subDomains.push(`${entry.query.domain}.${entry.query.rootdomain}`);
@@ -40,7 +50,13 @@ before(async () => {
     if (url.pathname === '/execute/Fileman/upload_files') {
       return send({ status: 1, data: { succeeded: 1 } });
     }
+    if (url.pathname === '/execute/AddonDomain/deladdondomain') {
+      if (failing.has('AddonDomain/deladdondomain')) return send({ status: 0, errors: ['domaine inconnu'] });
+      return send({ status: 1, data: null });
+    }
     if (url.pathname === '/json-api/cpanel') {
+      const fn = `${entry.query.cpanel_jsonapi_module}::${entry.query.cpanel_jsonapi_func}`;
+      if (failing.has(fn)) return send({ cpanelresult: { event: { result: 0 }, error: 'échec simulé' } });
       return send({ cpanelresult: { event: { result: 1 }, data: [] } });
     }
     if (url.pathname === '/execute/SSL/installed_hosts') {
@@ -145,4 +161,119 @@ test('cpanel — les erreurs ne contiennent jamais le jeton', async () => {
       return true;
     }
   );
+});
+
+// Étapes d'un retrait de site, dans l'ordre des appels reçus par le mock (lectures
+// d'inventaire exclues).
+const removalSteps = () => calls.filter((c) => !/list_(domains|files)$/.test(c.path)).map((c) => (c.path === '/json-api/cpanel'
+  ? `${c.query.cpanel_jsonapi_func}:${c.query.op || c.query.domain}`
+  : `${c.path.split('/').pop()}:${c.query.domain}`));
+
+// Site « mon-site » présent sur le serveur : domaine personnalisé, sous-domaine et dossier.
+const presentOnServer = () => {
+  addonDomains = ['boutique.fr'];
+  subDomains = ['mon-site.exemple.fr'];
+  publicDirs = ['mon-site'];
+};
+
+test('cpanel — removeSite enchaîne deladdondomain → delsubdomain → fileop sur des chemins dérivés du slug', async () => {
+  failing.clear();
+  presentOnServer();
+  calls.length = 0;
+  const r = await makeDriver().removeSite('mon-site', { customDomain: 'boutique.fr' });
+  assert.deepEqual(r, { customDomain: 'removed', subdomain: 'removed', files: 'removed', removed: true });
+  assert.deepEqual(removalSteps(), ['deladdondomain:boutique.fr', 'delsubdomain:mon-site.exemple.fr', 'fileop:unlink']);
+  const fileop = calls.find((c) => c.query.cpanel_jsonapi_func === 'fileop');
+  assert.equal(fileop.query.sourcefiles, 'public_html/mon-site');
+  const serialized = JSON.stringify(r);
+  assert.ok(!serialized.includes('127.0.0.1') && !serialized.includes('demo-token'), 'ni hôte ni jeton dans le résultat');
+});
+
+test('cpanel — removeSite sans domaine personnalisé : étape ignorée', async () => {
+  failing.clear();
+  presentOnServer();
+  calls.length = 0;
+  const r = await makeDriver().removeSite('mon-site', {});
+  assert.equal(r.customDomain, 'skipped');
+  assert.equal(r.removed, true);
+  assert.equal(calls.filter((c) => c.path.includes('deladdondomain')).length, 0);
+});
+
+test('cpanel — removeSite rejette un slug vide ou une traversée sans aucun appel', async () => {
+  calls.length = 0;
+  const driver = makeDriver();
+  for (const bad of ['', '../x', 'a/b', undefined, 'Majuscule']) {
+    await assert.rejects(() => driver.removeSite(bad, { customDomain: 'boutique.fr' }), /invalide/);
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('cpanel — une étape en échec n’empêche pas les suivantes (retrait partiel signalé)', async () => {
+  failing.clear();
+  failing.add('AddonDomain/deladdondomain');
+  failing.add('SubDomain::delsubdomain');
+  presentOnServer();
+  calls.length = 0;
+  try {
+    const r = await makeDriver().removeSite('mon-site', { customDomain: 'boutique.fr' });
+    assert.deepEqual(r, { customDomain: 'failed', subdomain: 'failed', files: 'removed', removed: false });
+    assert.deepEqual(removalSteps(), ['deladdondomain:boutique.fr', 'delsubdomain:mon-site.exemple.fr', 'fileop:unlink']);
+  } finally {
+    failing.clear();
+  }
+});
+
+test('cpanel — removeSite : domaine, sous-domaine ou dossier absents du serveur → ignorés, sans fausse alerte', async () => {
+  failing.clear();
+  // Domaine personnalisé encore en attente de vérification (jamais rattaché), site
+  // importé sans sous-domaine ni dossier : deladdondomain/delsubdomain échoueraient.
+  failing.add('AddonDomain/deladdondomain');
+  failing.add('SubDomain::delsubdomain');
+  failing.add('Fileman::fileop');
+  addonDomains = [];
+  subDomains = ['autre.exemple.fr'];
+  publicDirs = ['autre'];
+  calls.length = 0;
+  try {
+    const r = await makeDriver().removeSite('mon-site', { customDomain: 'boutique.fr' });
+    assert.deepEqual(r, { customDomain: 'skipped', subdomain: 'skipped', files: 'skipped', removed: true });
+    assert.deepEqual(removalSteps(), [], 'aucune suppression tentée sur une ressource absente');
+  } finally {
+    failing.clear();
+  }
+});
+
+test('cpanel — removeSite : inventaire illisible → chaque étape est tentée', async () => {
+  failing.clear();
+  failing.add('DomainInfo/list_domains');
+  failing.add('Fileman/list_files');
+  addonDomains = [];
+  subDomains = [];
+  publicDirs = [];
+  calls.length = 0;
+  try {
+    const r = await makeDriver().removeSite('mon-site', { customDomain: 'boutique.fr' });
+    assert.deepEqual(r, { customDomain: 'removed', subdomain: 'removed', files: 'removed', removed: true });
+    assert.deepEqual(removalSteps(), ['deladdondomain:boutique.fr', 'delsubdomain:mon-site.exemple.fr', 'fileop:unlink']);
+  } finally {
+    failing.clear();
+  }
+});
+
+test('cpanel — removeSite : liste des domaines additionnels absente de la réponse → retrait tenté', async () => {
+  failing.clear();
+  addonDomains = null; // version de cPanel sans addon_domains : jamais lu comme « aucun »
+  subDomains = ['mon-site.exemple.fr'];
+  publicDirs = ['mon-site'];
+  calls.length = 0;
+  const r = await makeDriver().removeSite('mon-site', { customDomain: 'boutique.fr' });
+  assert.equal(r.customDomain, 'removed');
+  assert.deepEqual(removalSteps(), ['deladdondomain:boutique.fr', 'delsubdomain:mon-site.exemple.fr', 'fileop:unlink']);
+  addonDomains = [];
+});
+
+test('simulation — removeSite sans effet ni appel', async () => {
+  calls.length = 0;
+  assert.deepEqual(await createHostingDriver({}).removeSite('mon-site', { customDomain: 'boutique.fr' }), { removed: false });
+  assert.equal(calls.length, 0);
 });

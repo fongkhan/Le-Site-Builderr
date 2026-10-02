@@ -4,8 +4,8 @@
 
 import { DEFAULT_LOCALE, HOME_SLUG } from './editorModel';
 
-/** Adresses déjà utilisées par le site généré (blog, médias, préfixes de langue) */
-export const RESERVED_PAGE_SLUGS: readonly string[] = ['blog', 'media', 'en', 'fr'];
+/** Adresses déjà utilisées par le site généré (blog, médias, préfixes de langue, page d'erreur) */
+export const RESERVED_PAGE_SLUGS: readonly string[] = ['blog', 'media', 'en', 'fr', '404'];
 
 const MAX_SLUG_LENGTH = 80;
 const FALLBACK_SLUG = 'page';

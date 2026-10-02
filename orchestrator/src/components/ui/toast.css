@@ -1,0 +1,23 @@
+/* Action d'un toast (« Annuler »…) : complète les styles .toast de index.css */
+.toast-action {
+  background: none;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--accent-blue);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-left: auto;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+
+.toast-action:hover,
+.toast-action:focus-visible {
+  background: var(--accent-blue-soft);
+}
+
+/* Avec une action, le bouton de fermeture la suit au lieu de se pousser à droite */
+.toast-action + .toast-close {
+  margin-left: 0;
+}

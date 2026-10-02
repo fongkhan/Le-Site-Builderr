@@ -36,6 +36,8 @@ export interface PageDoc {
   locale?: string;
   metaTitle?: string;
   metaDescription?: string;
+  /** Page publiée mais absente du menu de navigation */
+  hideFromNav?: boolean;
   layout: Block[];
 }
 
@@ -72,9 +74,12 @@ export interface SiteContent {
 const SLUG_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 // Adresses réservées pour une page de la langue par défaut (servie à la racine) :
-// « blog » est la route du blog, et chaque code de langue préfixe les pages de cette
-// langue (/en/…). Une page CMS à cette adresse serait masquée par la route réservée.
-const RESERVED_ROOT_SLUGS = new Set(['blog', ...LOCALES.filter((l) => l !== DEFAULT_LOCALE)]);
+// « blog » est la route du blog, « 404 » la page d'erreur (src/pages/404.astro, prioritaire
+// sur la route attrape-tout), et chaque code de langue préfixe les pages de cette langue
+// (/en/…). Une page CMS à cette adresse serait masquée par la route réservée : elle est
+// ignorée (ni générée, ni dans le menu). Même liste dans server/lib/i18n.js.
+const RESERVED_ROOT_SLUGS = new Set(['blog', '404', ...LOCALES.filter((l) => l !== DEFAULT_LOCALE)]);
+const RESERVED_REASONS: Record<string, string> = { blog: 'blog du site', '404': "page d'erreur du site" };
 
 // Page générée quand l'API est injoignable lors d'un build local du template seul.
 const OFFLINE_PAGE: PageDoc = {
@@ -167,7 +172,7 @@ function routablePages(raw: any[]): PageDoc[] {
       continue;
     }
     if (locale === DEFAULT_LOCALE && RESERVED_ROOT_SLUGS.has(p.slug)) {
-      console.warn(`[contenu] Page « ${p.title || p.slug} » ignorée : l'adresse /${p.slug}/ est réservée (${p.slug === 'blog' ? 'blog du site' : 'préfixe de langue'}). Changez son adresse dans le CMS.`);
+      console.warn(`[contenu] Page « ${p.title || p.slug} » ignorée : l'adresse /${p.slug}/ est réservée (${RESERVED_REASONS[p.slug] ?? 'préfixe de langue'}). Changez son adresse dans le CMS.`);
       continue;
     }
     const route = localeRouteParam(locale, p.slug);
@@ -214,6 +219,8 @@ async function loadSiteContent(): Promise<SiteContent> {
   // n'apparaît que s'il contient au moins un article publié.
   const navByLocale: Record<string, NavPage[]> = {};
   for (const p of pages) {
+    // Page masquée du menu : générée et présente dans le sitemap, mais sans lien de menu
+    if (p.hideFromNav === true) continue;
     (navByLocale[normalizeLocale(p.locale)] ||= []).push({ title: p.title, slug: p.slug });
   }
   if (posts.length > 0) (navByLocale[DEFAULT_LOCALE] ||= []).push({ title: 'Actualités', slug: 'blog' });
