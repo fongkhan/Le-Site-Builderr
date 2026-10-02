@@ -49,7 +49,7 @@ for (const file of htmlFiles) {
   check(businesses <= 1, `${rel} : ${businesses} entités LocalBusiness`);
 }
 
-// ---- Lot 4 ----
+// ---- Structure accessible, libellés traduits et page 404 ----
 // Structure accessible (un <main> ciblé par le lien d'évitement, un seul h1, pieds de page
 // hors du <main>), libellés d'interface traduits et page 404.
 const readDist = (rel) => (fs.existsSync(path.join(dist, rel)) ? fs.readFileSync(path.join(dist, rel), 'utf-8') : '');
@@ -79,7 +79,7 @@ check(/<meta name="robots" content="noindex/.test(notFound), '404.html : meta ro
 check(notFound.includes(`href="${base}/"`), `404.html : lien vers l'accueil (${base}/) absent`);
 check(!fs.existsSync(path.join(dist, '404', 'index.html')), 'route 404/index.html générée par la route attrape-tout');
 
-// ---- Lot 5 ----
+// ---- Pages masquées du menu ----
 // Page masquée du menu (hideFromNav) : générée, mais aucun lien du menu ne la cible ;
 // le menu commence par l'accueil.
 {

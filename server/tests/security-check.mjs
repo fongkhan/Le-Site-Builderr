@@ -607,7 +607,7 @@ if (admin.token) {
   check('Helmet : en-tête X-Content-Type-Options=nosniff présent', r.res.headers.get('x-content-type-options') === 'nosniff', r.res.headers.get('x-content-type-options') || 'absent');
 }
 
-// ---- Lot 1 : comptes et sessions ----
+// ---- Comptes et sessions : mot de passe, révocation, anti-énumération, chemins serveur ----
 // Un seul échec de login ici (email inconnu) : le budget du limiteur par IP reste
 // disponible pour le contrôle final de rate-limit.
 {
@@ -713,7 +713,7 @@ if (admin.token) {
   }
 }
 
-// ---- Lot 2 : médias, brouillons, suppression ----
+// ---- Médias, brouillons protégés, suppression et duplication de site ----
 {
   const fs = await import('node:fs');
   const path = await import('node:path');
@@ -904,7 +904,7 @@ if (admin.token) {
   }
 }
 
-// ---- Lot 3 : santé ----
+// ---- Santé du serveur ----
 {
   const live = await req('/api/health');
   check('Santé : GET /api/health anonyme -> 200 status ok', live.status === 200 && live.json?.status === 'ok' && Number.isFinite(live.json?.uptimeS), `HTTP ${live.status}`);
@@ -920,7 +920,7 @@ if (admin.token) {
   check('Santé : réponses sans numéro de version', !/version/i.test(bodies));
 }
 
-// ---- Lot 5 ----
+// ---- Pages : ordre du menu et sauvegarde ciblée ----
 // Ordre du menu (navOrder) : contrôle distinct du tri alphabétique ci-dessus. Sauvegarde
 // ciblée : renvoyer tel quel ce que l'éditeur a lu ne réécrit aucune page.
 if (admin.token) {
@@ -963,7 +963,7 @@ if (admin.token) {
   }
 }
 
-// ---- Lot 6 ----
+// ---- Messages reçus (boîte de réception) ----
 // Boîte de réception : le message posté plus haut par le formulaire de contact est
 // conservé, lisible par le seul propriétaire du site, et jamais écrit par l'API REST.
 {
