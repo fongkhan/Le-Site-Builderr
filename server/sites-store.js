@@ -152,7 +152,7 @@ async function deleteSite(slug) {
     const req = await createLocalReq({}, payload);
     const ownsTransaction = await initTransaction(req);
     try {
-      for (const collection of ['media', 'pages', 'themes', 'posts', 'builds']) {
+      for (const collection of ['media', 'pages', 'themes', 'posts', 'builds', 'submissions']) {
         // Suppression groupée : les échecs par document sont renvoyés, pas levés
         const { errors } = await payload.delete({ collection, where: { site: { equals: siteId } }, overrideAccess: true, req });
         if (errors && errors.length > 0) {

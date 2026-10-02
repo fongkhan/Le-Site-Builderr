@@ -12,6 +12,7 @@ const { getSiteStatsFile } = require('../core/config');
 const { readJsonFile } = require('../services/content');
 const { readJsonStrict, writeJsonAtomic } = require('../lib/json-file');
 const { getSiteOwners } = require('../services/sites');
+const { saveSubmission } = require('../services/submissions');
 
 const router = createRouter();
 
@@ -28,6 +29,31 @@ function composeAppointmentMessage(body) {
   const extra = typeof body.message === 'string' ? body.message.trim() : '';
   if (extra) lines.push('', extra);
   return lines.join('\n');
+}
+
+// Email aux propriétaires du site. Sans propriétaire rattaché, le message est écrit
+// dans les logs du serveur ; un échec d'envoi est remonté à l'appelant.
+async function notifySiteOwners(site, { name, email, message, isAppointment }) {
+  const recipients = await getSiteOwners(site.slug);
+  const subject = `${isAppointment ? '📅 Demande de rendez-vous' : '📬 Nouveau message'} via ${site.name}`;
+  const text =
+    `Nouveau message reçu depuis le site « ${site.name} » (${site.domain}) :\n\n` +
+    `Nom : ${name.trim()}\nEmail : ${email.trim()}\n\n${message.trim()}\n\n` +
+    `— Envoyé par le formulaire de contact Meta-Builder`;
+
+  if (recipients.length > 0) {
+    try {
+      // Répondre au mail répond directement au visiteur
+      await sendMail(recipients, subject, text, { replyTo: email.trim() });
+    } catch (mailErr) {
+      // Le message n'est jamais perdu : il reste dans les logs du serveur
+      console.log(`📬 [Contact] Message pour « ${site.slug} » non distribué par email :\n${text}`);
+      throw mailErr;
+    }
+  } else {
+    // Aucun compte rattaché : ne pas perdre le message pour autant
+    console.log(`📬 [Contact] Message pour « ${site.slug} » (aucun propriétaire rattaché) :\n${text}`);
+  }
 }
 
 router.post('/api/contact/:slug', cors(), async (req, res) => {
@@ -57,25 +83,27 @@ router.post('/api/contact/:slug', cors(), async (req, res) => {
       return fail(400, "Nom, email valide et message sont requis.");
     }
 
-    const recipients = await getSiteOwners(site.slug);
-    const subject = `${isAppointment ? '📅 Demande de rendez-vous' : '📬 Nouveau message'} via ${site.name}`;
-    const text =
-      `Nouveau message reçu depuis le site « ${site.name} » (${site.domain}) :\n\n` +
-      `Nom : ${name.trim()}\nEmail : ${email.trim()}\n\n${message.trim()}\n\n` +
-      `— Envoyé par le formulaire de contact Meta-Builder`;
+    // Boîte de réception : enregistré avant l'email. Si l'un des deux aboutit, le
+    // visiteur reçoit un succès ; seul l'échec des deux lui est signalé.
+    let stored = false;
+    try {
+      await saveSubmission(site.slug, {
+        kind: isAppointment ? 'appointment' : 'contact',
+        name,
+        email,
+        phone: isAppointment ? body.phone : '',
+        message,
+      });
+      stored = true;
+    } catch (storeErr) {
+      console.error(`❌ [Contact] Message pour « ${site.slug} » non enregistré —`, (storeErr && storeErr.message) || storeErr);
+    }
 
-    if (recipients.length > 0) {
-      try {
-        // Répondre au mail répond directement au visiteur
-        await sendMail(recipients, subject, text, { replyTo: email.trim() });
-      } catch (mailErr) {
-        // Le message n'est jamais perdu : il reste dans les logs du serveur
-        console.log(`📬 [Contact] Message pour « ${site.slug} » non distribué par email :\n${text}`);
-        throw mailErr;
-      }
-    } else {
-      // Aucun compte rattaché : ne pas perdre le message pour autant
-      console.log(`📬 [Contact] Message pour « ${site.slug} » (aucun propriétaire rattaché) :\n${text}`);
+    try {
+      await notifySiteOwners(site, { name, email, message, isAppointment });
+    } catch (mailErr) {
+      if (!stored) throw mailErr;
+      console.error(`❌ [Contact] Email pour « ${site.slug} » non envoyé (message conservé dans la boîte de réception) —`, (mailErr && mailErr.message) || mailErr);
     }
     // Sans l'email du visiteur : le journal d'audit ne stocke pas de données personnelles
     logAudit(req, 'contact.recu', site.slug, isAppointment ? 'demande de rendez-vous' : 'formulaire de contact');

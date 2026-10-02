@@ -856,6 +856,40 @@ export default buildConfig({
         { name: 'logExcerpt', type: 'textarea' },
       ],
     },
+    {
+      // Messages reçus par les formulaires des sites publiés (contact, rendez-vous).
+      // Écrits uniquement par le serveur (overrideAccess) ; le propriétaire du site les
+      // lit et les supprime, l'orchestrateur passe par /api/sites/:slug/submissions.
+      slug: 'submissions',
+      admin: {
+        useAsTitle: 'name',
+        defaultColumns: ['site', 'kind', 'name', 'email', 'read', 'createdAt'],
+      },
+      access: {
+        read: isAdminOrSiteClient,
+        create: () => false,
+        update: () => false,
+        delete: isAdminOrSiteClient,
+      },
+      fields: [
+        siteRelationField({ index: true }),
+        {
+          name: 'kind',
+          type: 'select',
+          options: [
+            { label: 'Contact', value: 'contact' },
+            { label: 'Rendez-vous', value: 'appointment' },
+          ],
+          defaultValue: 'contact',
+          required: true,
+        },
+        { name: 'name', type: 'text', required: true },
+        { name: 'email', type: 'text', required: true },
+        { name: 'phone', type: 'text' },
+        { name: 'message', type: 'textarea', required: true },
+        { name: 'read', type: 'checkbox', defaultValue: false, index: true },
+      ],
+    },
   ],
   typescript: {
     outputFile: path.resolve(dirname, 'payload-types.ts'),

@@ -46,6 +46,7 @@ const router = createBrowserRouter([
                   { path: 'cms', lazy: async () => ({ Component: (await import('./features/cms/CmsPage')).CmsPage }) },
                   { path: 'blog', lazy: async () => ({ Component: (await import('./features/blog/BlogPage')).BlogPage }) },
                   { path: 'deploy', lazy: async () => ({ Component: (await import('./features/deploy/DeployPage')).DeployPage }) },
+                  { path: 'messages', lazy: async () => ({ Component: (await import('./features/messages/MessagesPage')).MessagesPage }) },
                 ],
               },
               {

@@ -96,6 +96,8 @@ function purgeSiteData(slug) {
   for (const file of [getSitePagesFile(slug), getSiteThemeFile(slug), getSitePostsFile(slug), getSiteStatsFile(slug)]) {
     try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch (e) { console.error(`Suppression de ${file} impossible :`, e.message); }
   }
+  // Messages reçus (repli JSON, module chargé à l'usage)
+  require('./submissions').purgeSubmissionsFile(slug);
   for (const base of [RELEASES_DIR, DRAFTS_DIR]) {
     try {
       fs.rmSync(assertStrictlyInside(path.join(base, slug), base), { recursive: true, force: true });

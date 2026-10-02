@@ -963,6 +963,41 @@ if (admin.token) {
   }
 }
 
+// ---- Lot 6 ----
+// Boîte de réception : le message posté plus haut par le formulaire de contact est
+// conservé, lisible par le seul propriétaire du site, et jamais écrit par l'API REST.
+{
+  const inbox = '/api/sites/boulangerie-artisanale/submissions';
+  check('Messages : lecture anonyme -> 401', (await req(inbox)).status === 401);
+  if (client.token) {
+    check("Messages : client sur un autre site -> 403", (await req('/api/sites/site-dun-autre/submissions', { token: client.token })).status === 403);
+    const own = await req(inbox, { token: client.token });
+    const items = Array.isArray(own.json?.items) ? own.json.items : [];
+    const mine = items.find((s) => s.email === 'jean@exemple.fr' && s.message === 'Bonjour, ceci est un test.');
+    check('Messages : propriétaire -> 200 et message du formulaire présent', own.status === 200 && Boolean(mine), `HTTP ${own.status}, ${items.length} message(s)`);
+    check('Messages : honeypot jamais stocké', !items.some((s) => 'company' in s), JSON.stringify(Object.keys(items[0] || {})));
+
+    if (admin.token) {
+      const siteRes = await req('/api/payload_sites?where[slug][equals]=boulangerie-artisanale&limit=1&depth=0', { token: admin.token });
+      const siteId = siteRes.json?.docs?.[0]?.id;
+      const forged = await req('/api/submissions', { method: 'POST', body: { site: siteId, kind: 'contact', name: 'x', email: 'x@x.fr', message: 'forgé' }, token: client.token });
+      check('Messages : création via REST Payload par un client -> 403', forged.status === 403, `HTTP ${forged.status}`);
+    }
+
+    if (mine) {
+      const patched = await req(`${inbox}/${mine.id}`, { method: 'PATCH', body: { read: true }, token: client.token });
+      check('Messages : marquer comme lu -> 200', patched.status === 200 && patched.json?.read === true, `HTTP ${patched.status}`);
+      check('Messages : marquage sans booléen -> 400', (await req(`${inbox}/${mine.id}`, { method: 'PATCH', body: { read: 'oui' }, token: client.token })).status === 400);
+      check("Messages : marquage depuis un autre site -> 403", (await req(`/api/sites/site-dun-autre/submissions/${mine.id}`, { method: 'PATCH', body: { read: true }, token: client.token })).status === 403);
+      const del = await req(`${inbox}/${mine.id}`, { method: 'DELETE', token: client.token });
+      check('Messages : suppression par le propriétaire -> 200', del.status === 200, `HTTP ${del.status}`);
+      const after = await req(inbox, { token: client.token });
+      check('Messages : message supprimé absent de la liste', after.status === 200 && !(after.json?.items || []).some((s) => s.id === mine.id));
+      check('Messages : suppression d\'un message inexistant -> 404', (await req(`${inbox}/${mine.id}`, { method: 'DELETE', token: client.token })).status === 404);
+    }
+  }
+}
+
 // ---- Rate-limit login (EN DERNIER : consomme le budget d'échecs de l'IP) ----
 // Les connexions réussies ne comptent pas (skipSuccessfulRequests) : seules les
 // tentatives ratées ci-dessous épuisent le quota jusqu'au 429. On cible un email
