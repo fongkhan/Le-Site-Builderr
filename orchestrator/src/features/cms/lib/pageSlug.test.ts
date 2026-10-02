@@ -47,7 +47,7 @@ describe('derivePageSlug', () => {
   });
 
   it('refuse les adresses réservées', () => {
-    for (const title of ['Blog', 'Média', 'EN', 'fr']) {
+    for (const title of ['Blog', 'Média', 'EN', 'fr', '404']) {
       const result = derivePageSlug(title, 'fr', pages);
       expect(result.error).toMatch(/réservée/);
     }

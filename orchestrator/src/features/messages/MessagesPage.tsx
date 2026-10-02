@@ -8,6 +8,7 @@ import { Spinner } from '../../components/ui/Spinner';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { formatDateTimeFr } from '../../lib/format';
+import type { Site } from '../../types';
 
 // Lien « Répondre » : l'adresse reste lisible (@ conservé), le reste est encodé.
 function replyHref(submission: Submission, siteName: string): string {
@@ -16,11 +17,26 @@ function replyHref(submission: Submission, siteName: string): string {
   return `mailto:${to}?subject=${subject}`;
 }
 
-// Boîte de réception des formulaires du site publié (contact, rendez-vous).
+// Boîte de réception des formulaires du site publié (contact, rendez-vous). Une instance
+// par site : une réponse arrivée après un changement de site ne touche jamais la liste
+// du site affiché.
 export function MessagesPage() {
   const site = useCurrentSite();
+  return <Inbox key={site.slug} site={site} />;
+}
+
+// Message mis à jour par le serveur, appliqué à la DERNIÈRE version de la liste.
+// eslint-disable-next-line react-refresh/only-export-components
+export function replaceSubmission(list: Submission[], updated: Submission): Submission[] {
+  return list.map((s) => (s.id === updated.id ? updated : s));
+}
+
+function Inbox({ site }: { site: Site }) {
   const toast = useToast();
   const [items, setItems] = useState<Submission[]>([]);
+  // Dernière version de la liste : deux actions concurrentes (marquer A puis B avant la
+  // réponse de A) partent chacune de l'état le plus récent, aucune n'efface l'autre.
+  const itemsRef = useRef<Submission[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -35,7 +51,8 @@ export function MessagesPage() {
     fetchSubmissions(site.slug)
       .then((d) => {
         if (id !== requestId.current) return;
-        setItems(d.items || []);
+        itemsRef.current = d.items || [];
+        setItems(itemsRef.current);
         publishUnread(site.slug, d.unread ?? 0);
       })
       .catch((err) => { if (id === requestId.current) setLoadError(errorMessage(err, 'Impossible de charger les messages.')); })
@@ -43,12 +60,13 @@ export function MessagesPage() {
   }, [site.slug]);
 
   useEffect(() => {
-    setItems([]);
     load();
   }, [load]);
 
-  // Liste mise à jour localement, compteur de l'onglet recalculé
-  const applyItems = (next: Submission[]) => {
+  // Liste mise à jour localement (à partir de sa dernière version), compteur recalculé
+  const applyItems = (change: (current: Submission[]) => Submission[]) => {
+    const next = change(itemsRef.current);
+    itemsRef.current = next;
     setItems(next);
     publishUnread(site.slug, next.filter((s) => !s.read).length);
   };
@@ -57,7 +75,7 @@ export function MessagesPage() {
     setBusyId(submission.id);
     try {
       const updated = await markSubmissionRead(site.slug, submission.id, !submission.read);
-      applyItems(items.map((s) => (s.id === updated.id ? updated : s)));
+      applyItems((current) => replaceSubmission(current, updated));
     } catch (err) {
       toast.error(errorMessage(err, 'Impossible de mettre à jour le message.'));
     } finally {
@@ -67,10 +85,11 @@ export function MessagesPage() {
 
   const confirmDelete = async () => {
     if (!toDelete) return;
+    const deletedId = toDelete.id;
     setDeleting(true);
     try {
-      await deleteSubmission(site.slug, toDelete.id);
-      applyItems(items.filter((s) => s.id !== toDelete.id));
+      await deleteSubmission(site.slug, deletedId);
+      applyItems((current) => current.filter((s) => s.id !== deletedId));
       toast.success('Message supprimé.');
       setToDelete(null);
     } catch (err) {

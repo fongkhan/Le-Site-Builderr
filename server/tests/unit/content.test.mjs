@@ -143,3 +143,35 @@ test('validatePagesBody — hideFromNav doit être un booléen', () => {
   assert.equal(validatePagesBody({ docs: [page({ hideFromNav: true })] }), null);
   assert.match(validatePagesBody({ docs: [page({ hideFromNav: 'oui' })] }), /hideFromNav/);
 });
+
+// ---- Identifiants de lignes : jamais renvoyés à Payload ----
+// Une section dupliquée (ou un site dupliqué) porte les id de lignes de l'original : les
+// renvoyer ferait échouer l'écriture (clé en double dans la table de la liste).
+const collectIds = (value, out = []) => {
+  if (Array.isArray(value)) value.forEach((v) => collectIds(v, out));
+  else if (value && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value)) {
+      if (k === 'id' || k === 'blockName') out.push(v);
+      collectIds(v, out);
+    }
+  }
+  return out;
+};
+
+test('toPageData — section dupliquée : aucun id de ligne transmis', () => {
+  const { toPageData } = require('../../services/content.js');
+  const faq = { blockType: 'faq', title: 'Questions', items: [{ id: 'r1', question: 'Q ?', answer: 'R.' }] };
+  const pricing = dbPage().layout[2];
+  const data = toPageData({ title: 'A', slug: 'a', layout: [faq, structuredClone(faq), pricing, structuredClone(pricing)] }, 0);
+  assert.deepEqual(collectIds(data.layout), []);
+  assert.equal(data.layout[1].items[0].question, 'Q ?');
+  assert.equal(data.layout[3].plans[0].features[0].feature, 'x');
+  assert.equal(data.layout[3].plans[0].isPopular, false);
+});
+
+test('toEditorPage — identifiants de lignes retirés (site dupliqué, copie de section)', () => {
+  const page = toEditorPage(dbPage());
+  assert.deepEqual(collectIds(page.layout), []);
+  assert.deepEqual(page.layout[1].images, ['https://img/a.jpg']);
+  assert.equal(page.layout[2].plans[0].features[0].feature, 'x');
+});

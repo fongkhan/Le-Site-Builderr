@@ -3,7 +3,17 @@
 // interprétable par le navigateur : XML, HTML…) peut embarquer du script exécuté sur le
 // domaine du site. Liste BLANCHE appliquée à la DERNIÈRE extension (« a.png.svg » refusé).
 
-const PUBLISHABLE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif']);
+// AVIF : matriciel et sans risque (déjà publié avant la restriction des formats) ;
+// jfif/jpe : variantes d'extension JPEG que Payload conserve telles quelles.
+const PUBLISHABLE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'jpe', 'jfif', 'webp', 'gif', 'avif']);
+
+// Taille maximale d'un fichier téléversé (Mo, défaut 8) : source unique pour Payload
+// (payload.config.ts) et pour l'orchestrateur (/api/config → mediaMaxMb).
+const DEFAULT_MEDIA_MAX_MB = 8;
+function mediaMaxMb(value = process.env.MEDIA_MAX_MB) {
+  const n = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_MEDIA_MAX_MB;
+}
 
 function isPublishableMediaName(name) {
   if (typeof name !== 'string' || !name) return false;
@@ -14,4 +24,4 @@ function isPublishableMediaName(name) {
   return PUBLISHABLE_EXTENSIONS.has(name.slice(dot + 1).toLowerCase());
 }
 
-module.exports = { isPublishableMediaName, PUBLISHABLE_EXTENSIONS };
+module.exports = { isPublishableMediaName, PUBLISHABLE_EXTENSIONS, mediaMaxMb, DEFAULT_MEDIA_MAX_MB };

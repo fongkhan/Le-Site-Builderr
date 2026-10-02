@@ -30,6 +30,17 @@ function killTree(pid, signal) {
   } catch { /* groupe déjà terminé */ }
 }
 
+// Groupes de processus des commandes en cours : tués à la sortie du serveur
+// (killActiveSync), sinon npm/astro, détachés, survivraient en orphelins.
+const activePids = new Set();
+
+// Tue SYNCHRONEMENT l'arbre de toutes les commandes en cours (utilisable dans un
+// gestionnaire process.on('exit'), où rien d'asynchrone ne s'exécute plus).
+function killActiveSync(signal = 'SIGKILL') {
+  for (const pid of activePids) killTree(pid, signal);
+  return activePids.size;
+}
+
 // Renvoie { promise, kill }. La promesse se résout sur 'close' (tous les descripteurs
 // fermés) avec { code, signal, timedOut, tail } ; elle ne rejette que si le shell ne
 // peut pas être lancé.
@@ -43,6 +54,7 @@ function runCommand(command, { cwd, env, timeoutMs = 0, onOutput, tailBytes = 65
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
+  if (child.pid) activePids.add(child.pid);
   let tail = Buffer.alloc(0);
   let timedOut = false;
   let killed = false;
@@ -90,11 +102,13 @@ function runCommand(command, { cwd, env, timeoutMs = 0, onOutput, tailBytes = 65
 
   const promise = new Promise((resolve, reject) => {
     child.on('error', (err) => {
+      activePids.delete(child.pid);
       clearTimeout(timer);
       clearTimeout(graceTimer);
       reject(err);
     });
     child.on('close', (code, signal) => {
+      activePids.delete(child.pid);
       clearTimeout(timer);
       clearTimeout(graceTimer);
       // Après un arrêt forcé, aucun membre du groupe ne doit survivre au shell (un
@@ -107,4 +121,4 @@ function runCommand(command, { cwd, env, timeoutMs = 0, onOutput, tailBytes = 65
   return { promise, kill, pid: child.pid };
 }
 
-module.exports = { runCommand, killTree };
+module.exports = { runCommand, killTree, killActiveSync };

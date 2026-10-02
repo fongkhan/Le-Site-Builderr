@@ -32,9 +32,11 @@ function localesInPages(pages) {
 }
 
 // Adresses réservées pour une page de la langue par défaut (servie à la racine) :
-// « blog » est la route du blog et chaque code de langue préfixe ses pages (/en/…).
-// Une page CMS à cette adresse serait masquée : ni générée, ni listée dans le sitemap.
-const RESERVED_ROOT_SLUGS = new Set(['blog', ...LOCALES.filter((l) => l !== DEFAULT_LOCALE)]);
+// « blog » est la route du blog, « 404 » la page d'erreur du template (src/pages/404.astro,
+// prioritaire sur la route attrape-tout) et chaque code de langue préfixe ses pages (/en/…).
+// Une page CMS à cette adresse serait masquée : ni générée, ni listée dans le sitemap ni
+// dans le menu. Même liste dans client-template/src/lib/content.ts.
+const RESERVED_ROOT_SLUGS = new Set(['blog', '404', ...LOCALES.filter((l) => l !== DEFAULT_LOCALE)]);
 
 function isRoutablePage(locale, slug) {
   return !(normalizeLocale(locale) === DEFAULT_LOCALE && RESERVED_ROOT_SLUGS.has(slug));

@@ -400,7 +400,8 @@ if (admin.token && client.token) {
   check('Contact : message valide -> 200', ok.status === 200 && ok.json?.success === true, `HTTP ${ok.status}`);
   check('Contact : site inconnu -> 404', (await req('/api/contact/site-inexistant', { method: 'POST', body: valid })).status === 404);
   check('Contact : corps invalide -> 400', (await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { name: '', email: 'pas-un-email', message: '' } })).status === 400);
-  const hp = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { ...valid, company: 'robot inc' } });
+  // Message propre à cette exécution : le bloc « Messages reçus » vérifie qu'il n'est jamais stocké
+  const hp = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { ...valid, message: `honeypot-${process.pid}`, company: 'robot inc' } });
   check('Contact : honeypot rempli -> 200 silencieux', hp.status === 200 && hp.json?.success === true);
 }
 
@@ -608,8 +609,9 @@ if (admin.token) {
 }
 
 // ---- Comptes et sessions : mot de passe, révocation, anti-énumération, chemins serveur ----
-// Un seul échec de login ici (email inconnu) : le budget du limiteur par IP reste
-// disponible pour le contrôle final de rate-limit.
+// Sept échecs de login ici (email inconnu, puis verrouillage d'un compte jetable : 5 échecs
+// + 1 essai verrouillé), sous le budget du limiteur par IP (RL_LOGIN_MAX, 8 par défaut) :
+// le contrôle final de rate-limit atteint toujours son 429.
 {
   const STRONG = 'Cheval-Correct-42!';
   const LOGIN_FAILED = 'Email ou mot de passe incorrect, ou compte temporairement verrouillé.';
@@ -705,6 +707,15 @@ if (admin.token) {
       check('Sessions : changement par un admin -> session du compte révoquée', meA2.json?.user === null, `user=${JSON.stringify(meA2.json?.user?.email ?? null)}`);
       const meAdmin = await req('/api/users/me', { token: admin.token });
       check("Sessions : la session de l'admin reste valide", meAdmin.json?.user?.email === 'admin@admin.com');
+
+      // Compte verrouillé (maxLoginAttempts = 5) : même 401 et même message qu'un compte
+      // inconnu, même avec le bon mot de passe (le hook se fonde sur le statut, pas sur
+      // le nom de classe de l'erreur, raccourci par la minification de production)
+      for (let i = 0; i < 5; i++) {
+        await req('/api/users/login', { method: 'POST', body: { email, password: 'mauvais-mot-de-passe' } });
+      }
+      const locked = await req('/api/users/login', { method: 'POST', body: { email, password: 'Encore-Cheval-44!' } });
+      check('Login : compte verrouillé -> 401 + même message que pour un compte inconnu', locked.status === 401 && locked.json?.errors?.[0]?.message === LOGIN_FAILED && JSON.stringify(locked.json) === JSON.stringify(unknownLogin.json), `HTTP ${locked.status} ${JSON.stringify(locked.json)}`);
 
       const unlocked = await req('/api/users/unlock', { method: 'POST', body: { email }, token: admin.token });
       check('Unlock : admin -> 200', unlocked.status === 200, `HTTP ${unlocked.status}`);
@@ -871,6 +882,59 @@ if (admin.token) {
     }
   }
 
+  // Suppression d'un site dont un AUTRE site cite encore un média (jumeau dupliqué avant
+  // la copie des images) : le média est rattaché à ce site, son fichier conservé
+  if (admin.token) {
+    const source = await req('/api/sites', { method: 'POST', body: { name: 'Source partagee SC' }, token: admin.token });
+    const twin = await req('/api/sites', { method: 'POST', body: { name: 'Jumeau ancien SC' }, token: admin.token });
+    const sourceSlug = source.json?.site?.slug;
+    const twinSlug = twin.json?.site?.slug;
+    const sourceId = sourceSlug ? await payloadSiteId(sourceSlug) : null;
+    const twinId = twinSlug ? await payloadSiteId(twinSlug) : null;
+    if (sourceId && twinId) {
+      const up = await upload(admin.token, sourceId, pixel, 'image/png', 'partage-sc.png');
+      const mediaId = up.json?.doc?.id;
+      const filename = up.json?.doc?.filename;
+      const save = await req(`/api/site-pages?site=${twinSlug}`, {
+        method: 'POST',
+        body: { docs: [{ title: 'Accueil', slug: 'home', layout: [{ blockType: 'hero', title: 'Ancien jumeau', backgroundImage: `/api/media/file/${filename}` }] }] },
+        token: admin.token,
+      });
+      if (mediaId && save.status === 200) {
+        const del = await req(`/api/sites/${sourceSlug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+        check('Suppression : site source dont un média est cité ailleurs -> 200', del.status === 200, `HTTP ${del.status}`);
+        const media = await req(`/api/media/${mediaId}?depth=0`, { token: admin.token });
+        const owner = media.json?.site && typeof media.json.site === 'object' ? media.json.site.id : media.json?.site;
+        check('Suppression : média encore cité rattaché au site qui le cite', media.status === 200 && String(owner) === String(twinId), `HTTP ${media.status} site=${owner}`);
+        check('Suppression : fichier du média encore cité conservé', Boolean(filename) && fs.existsSync(path.join(serverDir, 'uploads', filename)));
+      } else {
+        check('Suppression : préparation du média partagé', false, `upload=${up.status} pages=${save.status}`);
+      }
+    } else {
+      check('Suppression : sites de test du média partagé créés', false);
+    }
+    if (twinSlug) await req(`/api/sites/${twinSlug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+    if (sourceSlug) await req(`/api/sites/${sourceSlug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+  }
+
+  // Suppression pendant une prévisualisation du site : refusée (409), puis aucun
+  // brouillon ne survit à la suppression
+  if (admin.token) {
+    const created = await req('/api/sites', { method: 'POST', body: { name: 'Brouillon en cours SC' }, token: admin.token });
+    const slug = created.json?.site?.slug;
+    if (slug) {
+      let previewDone = false;
+      const preview = req(`/api/sites/${slug}/preview-build`, { method: 'POST', token: admin.token }).finally(() => { previewDone = true; });
+      await new Promise((r) => setTimeout(r, 400));
+      const busy = await req(`/api/sites/${slug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+      check('Suppression : brouillon du site en cours -> 409', busy.status === 409 && /en cours/.test(busy.json?.error || ''), `HTTP ${busy.status} (brouillon déjà terminé : ${previewDone})`);
+      await preview;
+      const del = await req(`/api/sites/${slug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+      check('Suppression : après le brouillon -> 200', del.status === 200, `HTTP ${del.status}`);
+      check('Suppression : aucun brouillon conservé', !fs.existsSync(path.join(projectDir, 'drafts', slug)));
+    }
+  }
+
   // Duplication : le jumeau reçoit ses propres copies d'images, citées par ses pages
   if (admin.token) {
     const created = await req('/api/sites', { method: 'POST', body: { name: 'Duplication SC' }, token: admin.token });
@@ -918,6 +982,14 @@ if (admin.token) {
   check('Santé : réponses sans PAYLOAD_SECRET', !secret || !bodies.includes(secret));
   check('Santé : réponses sans chemin absolu', !/"(\/[A-Za-z0-9._-]+){2,}|[A-Za-z]:\\\\/.test(bodies), bodies);
   check('Santé : réponses sans numéro de version', !/version/i.test(bodies));
+  // Une sonde fréquente (toutes les 5 s = 180 appels / 15 min) n'est jamais refusée :
+  // résultat mis en cache, aucun limiteur de débit.
+  const probes = [];
+  for (let i = 0; i < 130; i += 10) {
+    probes.push(...await Promise.all(Array.from({ length: 10 }, () => req('/api/health/ready'))));
+  }
+  check('Santé : 130 appels à /api/health/ready -> aucun 429', probes.every((r) => r.status === 200), probes.map((r) => r.status).filter((s) => s !== 200).join(','));
+  check('Santé : /api/health/ready sans limiteur de débit (pas d\'en-tête RateLimit)', probes.every((r) => !r.res.headers.get('ratelimit-policy') && !r.res.headers.get('ratelimit')));
 }
 
 // ---- Pages : ordre du menu et sauvegarde ciblée ----
@@ -944,6 +1016,7 @@ if (admin.token) {
       { blockType: 'gallery', title: 'Photos', images: ['https://exemple.fr/a.jpg'] },
       { blockType: 'pricing', title: 'Tarifs', plans: [{ name: 'Base', price: '0 €', isPopular: false, features: [{ feature: 'x' }] }] },
       { blockType: 'testimonials', title: 'Avis', testimonials: [{ quote: 'Super', author: 'A', rating: 5 }] },
+      { blockType: 'faq', title: 'FAQ', items: [{ question: 'Q1 ?', answer: 'R1' }, { question: 'Q2 ?', answer: 'R2' }] },
       { blockType: 'footer', text: '©', socials: { instagram: 'https://instagram.com/x' } },
     ];
     await req(url, { method: 'POST', body: { docs: [pg('home', { layout }), pg('tarifs', { hideFromNav: true }), pg('equipe')] }, token: admin.token });
@@ -958,6 +1031,32 @@ if (admin.token) {
       const resave = await req(url, { method: 'POST', body: { docs: read.json.docs }, token: admin.token });
       const after = await stamps();
       check("Pages : renvoyer le contenu lu n'écrit aucune page (sauvegarde ciblée)", resave.status === 200 && before !== '' && before === after, `${before} → ${after}`);
+
+      // Section dupliquée dans l'éditeur : la copie porte les identifiants de lignes de
+      // l'original (listes imbriquées) — le serveur ne doit jamais les renvoyer à la base.
+      const raw = await req(`/api/pages?where[site][equals]=${siteId}&where[slug][equals]=home&depth=0&limit=1`, { token: admin.token });
+      const homeLayout = raw.json?.docs?.[0]?.layout || [];
+      const faq = homeLayout.find((b) => b.blockType === 'faq');
+      const rowIds = Boolean(faq?.items?.[0]?.id);
+      const withCopy = read.json.docs.map((p) => (p.slug === 'home' ? { ...p, layout: [...homeLayout, structuredClone(faq)] } : p));
+      const dupSave = await req(url, { method: 'POST', body: { docs: withCopy }, token: admin.token });
+      check('Pages : section dupliquée avec éléments de liste (mêmes id de lignes) -> 200', rowIds && dupSave.status === 200, `HTTP ${dupSave.status}, id de lignes en base : ${rowIds}`);
+      const reread = await req(url, { token: admin.token });
+      const faqs = (reread.json?.docs?.find((p) => p.slug === 'home')?.layout || []).filter((b) => b.blockType === 'faq');
+      check('Pages : copie de section enregistrée, sans identifiant de ligne renvoyé à l’éditeur', faqs.length === 2 && faqs.every((b) => b.items?.length === 2 && !('id' in b.items[0])), JSON.stringify(faqs.map((b) => b.items)));
+
+      // Site dupliqué (FAQ avec éléments) : ses pages, renvoyées telles quelles, s'enregistrent
+      const twin = await req(`/api/sites/${slug}/duplicate`, { method: 'POST', token: admin.token });
+      const twinSlug = twin.json?.site?.slug;
+      if (twinSlug) {
+        const twinUrl = `/api/site-pages?site=${twinSlug}`;
+        const twinPages = await req(twinUrl, { token: admin.token });
+        const twinSave = await req(twinUrl, { method: 'POST', body: { docs: twinPages.json?.docs || [] }, token: admin.token });
+        check('Pages : site dupliqué (FAQ avec éléments), pages renvoyées -> 200', twinPages.status === 200 && twinSave.status === 200, `HTTP ${twinPages.status} / ${twinSave.status}`);
+        await req(`/api/sites/${twinSlug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+      } else {
+        check('Pages : duplication du site de test -> 200', false, `HTTP ${twin.status}`);
+      }
     }
     await req(`/api/sites/${slug}`, { method: 'DELETE', token: admin.token });
   }
@@ -973,9 +1072,13 @@ if (admin.token) {
     check("Messages : client sur un autre site -> 403", (await req('/api/sites/site-dun-autre/submissions', { token: client.token })).status === 403);
     const own = await req(inbox, { token: client.token });
     const items = Array.isArray(own.json?.items) ? own.json.items : [];
-    const mine = items.find((s) => s.email === 'jean@exemple.fr' && s.message === 'Bonjour, ceci est un test.');
+    // Messages de CETTE exécution (les plus récents d'abord) : un reste d'une exécution
+    // précédente ne peut pas satisfaire le contrôle.
+    const recent = (s) => Date.parse(s.createdAt) > Date.now() - 15 * 60 * 1000;
+    const mine = items.find((s) => s.email === 'jean@exemple.fr' && s.message === 'Bonjour, ceci est un test.' && recent(s));
     check('Messages : propriétaire -> 200 et message du formulaire présent', own.status === 200 && Boolean(mine), `HTTP ${own.status}, ${items.length} message(s)`);
-    check('Messages : honeypot jamais stocké', !items.some((s) => 'company' in s), JSON.stringify(Object.keys(items[0] || {})));
+    check('Messages : honeypot jamais stocké', own.status === 200 && !items.some((s) => s.message === `honeypot-${process.pid}`));
+    check('Messages : demande de RDV du formulaire présente', items.some((s) => s.kind === 'appointment' && s.email === 'rdv@example.com' && recent(s)));
 
     if (admin.token) {
       const siteRes = await req('/api/payload_sites?where[slug][equals]=boulangerie-artisanale&limit=1&depth=0', { token: admin.token });
@@ -995,6 +1098,14 @@ if (admin.token) {
       check('Messages : message supprimé absent de la liste', after.status === 200 && !(after.json?.items || []).some((s) => s.id === mine.id));
       check('Messages : suppression d\'un message inexistant -> 404', (await req(`${inbox}/${mine.id}`, { method: 'DELETE', token: client.token })).status === 404);
     }
+
+    // Nettoyage : aucun message de test (formulaire, RDV, honeypot) ne reste dans la boîte
+    // du compte de démonstration, y compris ceux d'exécutions précédentes interrompues.
+    const isTestMessage = (s) => s.email === 'jean@exemple.fr' || s.email === 'rdv@example.com';
+    const leftovers = ((await req(inbox, { token: client.token })).json?.items || []).filter(isTestMessage);
+    for (const s of leftovers) await req(`${inbox}/${s.id}`, { method: 'DELETE', token: client.token });
+    const remaining = ((await req(inbox, { token: client.token })).json?.items || []).filter(isTestMessage);
+    check('Messages : messages de test supprimés en fin de contrôle', remaining.length === 0, `${remaining.length} restant(s)`);
   }
 }
 

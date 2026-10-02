@@ -1,12 +1,20 @@
 // Journal du pipeline de build (fichier unique, affiché dans l'orchestrateur).
 const fs = require('fs');
-const { LOGS_FILE } = require('./config');
+const os = require('os');
+const { LOGS_FILE, PROJECT_DIR } = require('./config');
+const { redactPaths } = require('../lib/log-redact');
+
+// Le journal est lisible par le client propriétaire du dernier site construit : les
+// chemins du serveur y sont remplacés par des repères courts (« . » pour le projet, « ~ »).
+const LOG_PATH_MASKS = [[PROJECT_DIR, '.'], [os.homedir(), '~']];
+const redactLogText = (text) => redactPaths(text, LOG_PATH_MASKS);
 
 const timestamp = () => `[${new Date().toLocaleTimeString()}]`;
 
-// Ajoute une ligne horodatée. gap=true insère une ligne vide avant (blocs d'erreur/résultat).
+// Ajoute une ligne horodatée (chemins masqués, messages d'erreur compris). gap=true insère
+// une ligne vide avant (blocs d'erreur/résultat).
 function appendBuildLog(message, { gap = false } = {}) {
-  fs.appendFileSync(LOGS_FILE, `${gap ? '\n' : ''}${timestamp()} ${message}\n`);
+  fs.appendFileSync(LOGS_FILE, `${gap ? '\n' : ''}${timestamp()} ${redactLogText(message)}\n`);
 }
 
 // Ajoute un texte brut, sans horodatage.
@@ -49,4 +57,4 @@ function readBuildLog(file = LOGS_FILE) {
   }
 }
 
-module.exports = { timestamp, appendBuildLog, appendRawBuildLog, resetBuildLog, readBuildLog };
+module.exports = { LOG_PATH_MASKS, redactLogText, timestamp, appendBuildLog, appendRawBuildLog, resetBuildLog, readBuildLog };

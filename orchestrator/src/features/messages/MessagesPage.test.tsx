@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import type { Submission } from '../../api/submissions';
-import { MessagesList } from './MessagesPage';
+import { MessagesList, replaceSubmission } from './MessagesPage';
 
 const noop = () => {};
 
@@ -25,5 +25,14 @@ describe('boîte de réception', () => {
   it('liste vide : état vide explicite', () => {
     const html = renderToString(<MessagesList items={[]} siteName="Boulangerie" onToggleRead={noop} onDelete={noop} />);
     expect(html).toContain('Aucun message');
+  });
+
+  it('deux marquages concurrents : chacun part de la dernière version de la liste', () => {
+    let current = ITEMS.map((s) => ({ ...s, read: false }));
+    // Réponses de A puis de B (B lancé avant la réponse de A)
+    current = replaceSubmission(current, { ...ITEMS[0], read: true });
+    current = replaceSubmission(current, { ...ITEMS[1], read: true });
+    expect(current.map((s) => s.read)).toEqual([true, true]);
+    expect(replaceSubmission(current, { ...ITEMS[0], id: 'inconnu' })).toEqual(current);
   });
 });

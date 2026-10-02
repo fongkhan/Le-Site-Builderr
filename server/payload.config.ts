@@ -3,7 +3,6 @@ import { postgresAdapter } from '@payloadcms/db-postgres'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
 import { nodemailerAdapter } from '@payloadcms/email-nodemailer'
 import path from 'path'
-import os from 'os'
 import { createRequire } from 'module'
 import { fileURLToPath } from 'url'
 import { Access } from 'payload'
@@ -97,9 +96,10 @@ const resetPasswordUrl = (token: string) => `${frontendOrigins[0]}/reset-passwor
 // --- Comptes : politique de mot de passe, sessions, login (collection users) ---
 // Imports regroupés ici (hissés par ESM) pour isoler les modifications de la collection users.
 // Modules CommonJS du serveur : import par défaut (interop tsx et Next).
-import { ValidationError } from 'payload'
+import { ValidationError, Forbidden } from 'payload'
 import passwordPolicy from './lib/password-policy.js'
 import sessionOptions from './lib/session.js'
+import accountGuards from './lib/account-guards.js'
 
 // Message unique pour tout échec de login (mauvais identifiants OU compte verrouillé) :
 // ne révèle ni l'existence d'un compte ni son verrouillage.
@@ -144,14 +144,17 @@ export default buildConfig({
         }),
       }
     : {}),
-  // Téléversements : taille bornée (413 au-delà), fichiers en transit écrits sur disque
-  // plutôt qu'en mémoire.
+  // Téléversements : taille bornée (413 au-delà) et un seul fichier par requête. Les
+  // fichiers en transit restent en MÉMOIRE (useTempFiles: false) : Payload analyse le
+  // multipart AVANT le contrôle d'accès et n'efface ses fichiers temporaires qu'après une
+  // création réussie, si bien qu'une requête refusée (même anonyme) laisserait un
+  // fichier sur disque à chaque appel. Au plus MEDIA_MAX_MB en mémoire, libérés en fin
+  // de requête.
   upload: {
-    limits: { fileSize: MEDIA_MAX_MB * 1024 * 1024 },
+    limits: { fileSize: MEDIA_MAX_MB * 1024 * 1024, files: 1 },
     abortOnLimit: true,
     responseOnLimit: `Image trop volumineuse (${MEDIA_MAX_MB} Mo maximum).`,
-    useTempFiles: true,
-    tempFileDir: path.join(os.tmpdir(), 'metabuilder-uploads'),
+    useTempFiles: false,
   },
   ...(sharp ? { sharp } : {}),
   editor: lexicalEditor({}),
@@ -207,6 +210,13 @@ export default buildConfig({
       },
       hooks: {
         beforeOperation: [
+          // Aucune création de compte par HTTP sans être connecté, y compris
+          // /api/users/first-register (premier compte admin sur une base vide) : les
+          // comptes viennent d'un admin ou du seed (API locale, SEED_ADMIN_EMAIL).
+          ({ args, operation, req }: any) => {
+            if (accountGuards.isAnonymousHttpCreate({ operation, req })) throw new Forbidden(req.t)
+            return args
+          },
           // Politique de mot de passe sur les appels HTTP (REST, GraphQL). L'API locale
           // (seed de développement) n'est pas concernée.
           async ({ args, operation, req }: any) => {
@@ -312,8 +322,9 @@ export default buildConfig({
           ({ error, req }: any) => {
             const where = String(req?.pathname || req?.url || '').split('?')[0]
             if (!where.endsWith('/users/login')) return
-            const name = error?.name || error?.constructor?.name
-            if (name !== 'LockedAuth' && name !== 'AuthenticationError') return
+            // Statut 401 (LockedAuth, AuthenticationError) : error.name n'est pas fiable
+            // une fois le bundle Next minifié en production
+            if (!accountGuards.isLoginFailure(error)) return
             return { status: 401, response: { errors: [{ message: LOGIN_FAILED_MESSAGE }] } }
           },
         ],
@@ -797,7 +808,7 @@ export default buildConfig({
         staticDir: path.resolve(dirname, 'uploads'),
         // Images matricielles uniquement : un SVG peut embarquer du script (XSS sur le
         // domaine du site publié).
-        mimeTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'],
+        mimeTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif'],
         // Grandes photos ramenées à 2400 px maximum (jamais agrandies), si sharp est là.
         ...(sharp ? { resizeOptions: { width: 2400, height: 2400, fit: 'inside', withoutEnlargement: true } } : {}),
         // Fichiers servis à des comptes authentifiés : cache navigateur seulement.

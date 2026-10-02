@@ -8,6 +8,7 @@ const { FRONTEND_ORIGINS, PUBLIC_HTML_DIR, DRAFTS_DIR, IS_PRODUCTION } = require
 const { mountRateLimits, jsonBodyForExpressRoutes, jsonErrorHandler, isPublicRoute, trustProxySetting, sendSignInPage } = require('./core/http');
 const auth = require('./auth');
 const { isValidSlug } = require('./lib/paths');
+const { isSwapDirRequest } = require('./lib/fs-swap');
 
 const ROUTERS = [
   require('./routes/health'),
@@ -48,12 +49,10 @@ const staticOptions = {
 };
 
 // Copies de bascule (dossier.tmp-*, dossier.old-*) d'une publication interrompue : jamais
-// servies.
-const SWAP_DIR = /\.(tmp|old)-/;
+// servies. Seul le PREMIER segment est concerné (dossiers frères des sites) : un média
+// « affiche.old-2023.png » reste servi.
 function hideSwapDirs(req, res, next) {
-  let decoded = req.path;
-  try { decoded = decodeURIComponent(req.path); } catch { /* chemin brut */ }
-  if (SWAP_DIR.test(req.path) || SWAP_DIR.test(decoded)) return res.status(404).end();
+  if (isSwapDirRequest(req.path)) return res.status(404).end();
   next();
 }
 

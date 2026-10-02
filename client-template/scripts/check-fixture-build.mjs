@@ -71,6 +71,9 @@ for (const fr of ['Votre nom', 'Navigation principale', 'Réseaux sociaux']) {
   check(!homeEn.includes(fr), `en/index.html : libellé français « ${fr} »`);
 }
 check(homeEn.includes('Your name'), 'en/index.html : libellé anglais « Your name » absent');
+// Erreurs d'envoi du formulaire traduites (le texte du serveur, en français, n'est jamais affiché)
+check(/data-msg-rate-limit="Too many/.test(homeEn), 'en/index.html : message « trop d’envois » anglais absent du formulaire');
+check(/data-msg-invalid="Please check/.test(homeEn), 'en/index.html : message « champ invalide » anglais absent du formulaire');
 check(home.includes('Votre nom'), 'index.html : libellé « Votre nom » absent');
 
 const notFound = readDist('404.html');
@@ -78,6 +81,14 @@ check(notFound !== '', 'page 404.html absente');
 check(/<meta name="robots" content="noindex/.test(notFound), '404.html : meta robots noindex absente');
 check(notFound.includes(`href="${base}/"`), `404.html : lien vers l'accueil (${base}/) absent`);
 check(!fs.existsSync(path.join(dist, '404', 'index.html')), 'route 404/index.html générée par la route attrape-tout');
+// La fixture contient une page fr d'adresse « 404 » (réservée : ignorée, jamais dans le
+// menu) et une page en/404 (générée normalement).
+check(fs.existsSync(path.join(dist, 'en', '404', 'index.html')), 'page anglaise en/404/index.html absente');
+for (const file of htmlFiles) {
+  const rel = path.relative(dist, file);
+  const html = fs.readFileSync(file, 'utf-8');
+  check(!html.includes(`href="${base}/404/"`), `${rel} : lien vers la page CMS réservée ${base}/404/`);
+}
 
 // ---- Pages masquées du menu ----
 // Page masquée du menu (hideFromNav) : générée, mais aucun lien du menu ne la cible ;

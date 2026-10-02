@@ -46,6 +46,8 @@ const action = `${apiBase}/api/contact/${encodeURIComponent(slug)}`;
       data-msg-sending={tr('formSending')}
       data-msg-ok={tr(isAppointment ? 'appointmentOk' : 'contactOk')}
       data-msg-error={tr(isAppointment ? 'appointmentError' : 'contactError')}
+      data-msg-invalid={tr('formInvalid')}
+      data-msg-rate-limit={tr('formRateLimited')}
     >
       <label class="visually-hidden" for={fid('name')}>{tr('formName')}</label>
       <input id={fid('name')} type="text" name="name" placeholder={tr('formName')} required maxlength="120" autocomplete="name" />

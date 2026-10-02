@@ -34,3 +34,11 @@ test('readBuildLog — 1 Mo : au plus 200 Ko, préfixés par […], sans caract�
   // La fin lue correspond exactement à la fin du fichier
   assert.ok(content.endsWith(out.slice('[…]\n'.length)));
 });
+
+test('redactLogText — chemins du serveur masqués dans le journal (messages d’erreur compris)', () => {
+  const { redactLogText } = require('../../core/build-log.js');
+  const { PROJECT_DIR } = require('../../core/config.js');
+  assert.equal(redactLogText(`Copie des médias échouée : EACCES ${PROJECT_DIR}/server/uploads/x.png`), 'Copie des médias échouée : EACCES ./server/uploads/x.png');
+  assert.equal(redactLogText(`${os.homedir()}/.npm/_logs`), '~/.npm/_logs');
+  assert.equal(redactLogText('Build échoué (code de sortie 1).'), 'Build échoué (code de sortie 1).');
+});

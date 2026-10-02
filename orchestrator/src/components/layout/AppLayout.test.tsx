@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
-import { createMemoryRouter, RouterProvider } from 'react-router-dom';
-import { AppLayout } from './AppLayout';
+import { createMemoryRouter, NavigationType, RouterProvider } from 'react-router-dom';
+import { AppLayout, shouldFocusMain } from './AppLayout';
 
 // Contextes simulés (comme render.test.tsx) : rendu sans DOM ni serveur.
 vi.mock('../../state/ConfigContext', () => ({
@@ -33,5 +33,15 @@ describe('AppLayout : navigation accessible', () => {
     expect(html).toContain('Mes sites');
     // Le lien d'évitement est le premier élément de la mise en page
     expect(html.indexOf('skip-link')).toBeLessThan(html.indexOf('<header'));
+  });
+
+  it('focus sur le contenu : changement de page demandé, jamais une redirection initiale', () => {
+    expect(shouldFocusMain('/sites', '/sites/demo/design', NavigationType.Push)).toBe(true);
+    expect(shouldFocusMain('/sites/demo/design', '/sites', NavigationType.Pop)).toBe(true);
+    // Ouverture sur « / » (Navigate replace vers /sites) ou sur /sites/<slug> (→ design)
+    expect(shouldFocusMain('/', '/sites', NavigationType.Replace)).toBe(false);
+    expect(shouldFocusMain('/sites/demo', '/sites/demo/design', NavigationType.Replace)).toBe(false);
+    // Même chemin (query-string seul)
+    expect(shouldFocusMain('/sites', '/sites', NavigationType.Push)).toBe(false);
   });
 });

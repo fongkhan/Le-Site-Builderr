@@ -3,6 +3,9 @@
 // Toutes les routes Express passent par ce module — aucune ne lit/écrit sites.json en direct.
 
 const { readJsonStrict, writeJsonAtomic } = require('./lib/json-file');
+const fs = require('fs');
+const { collectMediaFilenames } = require('./lib/media');
+const { getSitePagesFile, getSitePostsFile, getSiteThemeFile } = require('./core/config');
 
 let getPayloadInstance = () => null;
 let SITES_FILE = null;
@@ -132,6 +135,78 @@ function updateSiteStatus(slug, status) {
   return updateSite(slug, { status });
 }
 
+// Carte { nomDeFichier: idDuSite } des médias de `names` cités par un site autre que
+// `siteId` : pages, articles et thèmes en base, puis fichiers JSON de repli (pages,
+// articles, thème). Le premier site trouvé l'emporte.
+async function findMediaCitations(payload, siteId, names, req) {
+  const citedBy = new Map();
+  const record = (value, ownerId) => {
+    if (ownerId === undefined || ownerId === null || String(ownerId) === String(siteId)) return;
+    for (const name of collectMediaFilenames(value)) {
+      if (names.has(name) && !citedBy.has(name)) citedBy.set(name, ownerId);
+    }
+  };
+  const idOf = (rel) => (rel && typeof rel === 'object' ? rel.id : rel);
+
+  for (const collection of ['pages', 'posts', 'themes']) {
+    const res = await payload.find({
+      collection,
+      where: { site: { not_equals: siteId } },
+      pagination: false,
+      depth: 0,
+      overrideAccess: true,
+      req,
+    });
+    for (const doc of res.docs) record(doc, idOf(doc.site));
+  }
+
+  const others = await payload.find({
+    collection: 'payload_sites',
+    where: { id: { not_equals: siteId } },
+    pagination: false,
+    depth: 0,
+    overrideAccess: true,
+    req,
+  });
+  for (const other of others.docs) {
+    for (const fileOf of [getSitePagesFile, getSitePostsFile, getSiteThemeFile]) {
+      let file;
+      try { file = fileOf(other.slug); } catch { continue; } // slug hérité invalide
+      if (!fs.existsSync(file)) continue;
+      try {
+        record(JSON.parse(fs.readFileSync(file, 'utf-8')), other.id);
+      } catch {
+        // Fichier illisible : ignoré (la base reste la source de vérité)
+      }
+    }
+  }
+  return citedBy;
+}
+
+// Rattache à l'autre site qui les cite les médias de `siteId` encore utilisés ailleurs.
+// Renvoie le nombre de médias rattachés.
+async function reassignSharedMedia(payload, siteId, req) {
+  const owned = await payload.find({
+    collection: 'media',
+    where: { site: { equals: siteId } },
+    pagination: false,
+    depth: 0,
+    overrideAccess: true,
+    req,
+  });
+  const names = new Set(owned.docs.map((d) => d.filename).filter(Boolean));
+  if (names.size === 0) return 0;
+  const citedBy = await findMediaCitations(payload, siteId, names, req);
+  let moved = 0;
+  for (const doc of owned.docs) {
+    const target = doc.filename && citedBy.get(doc.filename);
+    if (target === undefined || target === null || target === false) continue;
+    await payload.update({ collection: 'media', id: doc.id, data: { site: target }, overrideAccess: true, req });
+    moved += 1;
+  }
+  return moved;
+}
+
 async function deleteSite(slug) {
   const payload = getPayloadInstance();
   if (payload) {
@@ -145,14 +220,19 @@ async function deleteSite(slug) {
     const siteId = res.docs[0].id;
     // Supprime d'abord les contenus rattachés (sinon docs orphelins, hérités par un futur
     // site recréé sous le même slug), médias compris : Payload efface alors leurs fichiers
-    // (un site dupliqué possède ses propres copies). Le tout dans une transaction : un échec
+    // (un site dupliqué possède ses propres copies ; ceux qu'un autre site cite encore lui
+    // sont rattachés au lieu d'être supprimés). Le tout dans une transaction : un échec
     // en cours de route n'en laisse pas la moitié. Les fichiers déjà effacés ne sont pas
     // restaurés par un rollback (effacement disque immédiat) ; la fiche du site, si.
     const { createLocalReq, initTransaction, commitTransaction, killTransaction } = require('payload');
     const req = await createLocalReq({}, payload);
     const ownsTransaction = await initTransaction(req);
     try {
-      for (const collection of ['media', 'pages', 'themes', 'posts', 'builds', 'submissions']) {
+      // Médias encore cités par un AUTRE site (jumeau dupliqué avant la copie des images,
+      // référence reprise à la main…) : rattachés au site qui les cite au lieu d'être
+      // supprimés, sinon ce site perdrait la seule copie de ses images.
+      await reassignSharedMedia(payload, siteId, req);
+      for (const collection of ['media','pages', 'themes', 'posts', 'builds', 'submissions']) {
         // Suppression groupée : les échecs par document sont renvoyés, pas levés
         const { errors } = await payload.delete({ collection, where: { site: { equals: siteId } }, overrideAccess: true, req });
         if (errors && errors.length > 0) {
@@ -253,6 +333,7 @@ module.exports = {
   updateSite,
   updateSiteStatus,
   deleteSite,
+  reassignSharedMedia,
   getOrCreatePayloadDoc,
   migrateFromJson
 };

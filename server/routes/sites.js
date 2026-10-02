@@ -180,6 +180,14 @@ router.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (r
       return res.status(404).json({ error: "Site non trouvé." });
     }
 
+    // Build ou brouillon de CE site en cours : il redéploierait (ou republierait sur
+    // l'hébergement) les fichiers que la suppression retire. Vérification synchrone, sans
+    // await avant la suppression ; un build lancé malgré tout pendant celle-ci revérifie
+    // l'existence du site avant tout déploiement.
+    if (build.isSiteBusy(slug)) {
+      return res.status(409).json({ error: "Un build ou une prévisualisation de ce site est en cours : réessayez quand il sera terminé." });
+    }
+
     // Fichiers de production : jamais hors du périmètre ni la racine partagée elle-même
     // (un documentRoot hérité invalide n'est pas supprimé, le site l'est quand même).
     let removableRoot = null;
@@ -191,9 +199,21 @@ router.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (r
       }
     }
 
-    // Hébergement distant (cPanel) : retrait du site en ligne AVANT la suppression locale
-    // (le domaine personnalisé n'est plus connu ensuite). Chaque étape est tentée ; un
-    // retrait partiel n'empêche pas la suppression locale mais est signalé.
+    // La suppression Payload nettoie aussi les contenus rattachés (médias et leurs
+    // fichiers compris, sauf ceux qu'un autre site cite encore) et la relation users.sites.
+    // Elle passe AVANT tout retrait de fichiers : si elle échoue, le site reste intact et
+    // en ligne (jamais un site hors ligne mais toujours en base).
+    await sitesStore.deleteSite(slug);
+    // En attente dans la file : retiré (son build serait de toute façon annulé)
+    build.dequeue(slug);
+    purgeSiteData(slug);
+
+    if (removableRoot && fs.existsSync(removableRoot)) {
+      fs.rmSync(removableRoot, { recursive: true, force: true });
+    }
+
+    // Hébergement distant (cPanel) : retrait du site en ligne, domaine personnalisé lu sur
+    // la fiche déjà chargée. Chaque étape est tentée ; un retrait partiel est signalé.
     let remote = null;
     if (hosting.isRemote && deleteFiles) {
       try {
@@ -202,15 +222,6 @@ router.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (r
         console.error(`⚠️ [Sites] Retrait distant de ${slug} refusé : ${e.message}`);
         remote = { removed: false, customDomain: 'failed', subdomain: 'failed', files: 'failed' };
       }
-    }
-
-    // La suppression Payload nettoie aussi les contenus rattachés (médias et leurs
-    // fichiers compris) et la relation users.sites
-    await sitesStore.deleteSite(slug);
-    purgeSiteData(slug);
-
-    if (removableRoot && fs.existsSync(removableRoot)) {
-      fs.rmSync(removableRoot, { recursive: true, force: true });
     }
 
     const remoteAudit = remote ? ` distant=${remote.removed ? 'ok' : 'partiel'}` : '';

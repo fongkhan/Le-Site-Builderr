@@ -1,24 +1,9 @@
 import { useId, useRef, useState } from 'react';
 import { uploadMedia } from '../../../../api/media';
-import { ApiError, errorMessage } from '../../../../api/client';
 import { useToast } from '../../../../components/ui/ToastContext';
+import { useConfig } from '../../../../state/ConfigContext';
 import { COMPACT_INPUT_STYLE, ICON_BUTTON_STYLE } from './styles';
-
-// Formats acceptés par la médiathèque (images matricielles : jamais de SVG, qui peut
-// embarquer du script) et taille maximale, alignée sur MEDIA_MAX_MB côté serveur (8 Mo
-// par défaut ; le serveur reste seul juge et répond 413 au-delà de sa propre limite).
-const ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
-const MAX_UPLOAD_MB = 8;
-const MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
-const FORMAT_ERROR = 'Format refusé : choisissez une image PNG, JPEG, WebP ou GIF.';
-const SIZE_ERROR = `Image trop volumineuse (${MAX_UPLOAD_MB} Mo maximum).`;
-
-// Message lisible pour un refus du serveur (Payload répond en anglais).
-function uploadErrorMessage(err: unknown): string {
-  if (err instanceof ApiError && err.status === 413) return SIZE_ERROR;
-  if (err instanceof ApiError && err.status === 400) return FORMAT_ERROR;
-  return errorMessage(err, 'Échec du téléversement.');
-}
+import { ACCEPTED_TYPES, FORMAT_ERROR, exceedsUploadLimit, sizeErrorMessage, uploadErrorMessage, uploadLimitMb } from './uploadPolicy';
 
 interface ImageFieldProps {
   siteSlug: string;
@@ -38,6 +23,8 @@ export function ImageField({ siteSlug, value, placeholder, onChange, label, aria
   const id = useId();
   const toast = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
+  // Limite annoncée par le serveur (MEDIA_MAX_MB) ; inconnue → le serveur seul en juge
+  const limitMb = uploadLimitMb(useConfig().config?.mediaMaxMb);
   const [uploading, setUploading] = useState(false);
 
   const handleFile = async (file: File | undefined) => {
@@ -46,8 +33,8 @@ export function ImageField({ siteSlug, value, placeholder, onChange, label, aria
       toast.error(FORMAT_ERROR);
       return;
     }
-    if (file.size > MAX_UPLOAD_BYTES) {
-      toast.error(SIZE_ERROR);
+    if (exceedsUploadLimit(file.size, limitMb)) {
+      toast.error(sizeErrorMessage(limitMb));
       return;
     }
     setUploading(true);
@@ -56,7 +43,7 @@ export function ImageField({ siteSlug, value, placeholder, onChange, label, aria
       onChange(url);
       toast.success('Image téléversée dans la médiathèque.');
     } catch (err) {
-      toast.error(uploadErrorMessage(err));
+      toast.error(uploadErrorMessage(err, limitMb));
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -88,7 +75,7 @@ export function ImageField({ siteSlug, value, placeholder, onChange, label, aria
         >
           {uploading ? '…' : '📤'}
         </button>
-        <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp,image/gif" style={{ display: 'none' }} onChange={(e) => handleFile(e.target.files?.[0])} />
+        <input ref={fileRef} type="file" accept={ACCEPTED_TYPES.join(',')} style={{ display: 'none' }} onChange={(e) => handleFile(e.target.files?.[0])} />
       </div>
     </div>
   );

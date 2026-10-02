@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useToast } from '../../../components/ui/ToastContext';
-import { restoreItem } from '../lib/editorModel';
+import { countSameItems, restoreItem, restoreRemovedItem } from '../lib/editorModel';
 import type { ListUpdater } from './blockFields';
 import type { UpdateOptions } from './types';
 
@@ -67,20 +67,26 @@ export function ItemListEditor<T>({ items, onUpdate, newItem, itemLabel, addLabe
   const remove = (key: string, label: string) => {
     const index = keysRef.current.indexOf(key);
     if (index === -1) return;
-    let removed: { item: T } | null = null;
+    // copiesLeft : copies identiques restées dans la liste — « Annuler » n'a aucun effet si
+    // l'élément a déjà été rétabli par l'historique (sinon il serait en double).
+    let removed: { item: T; copiesLeft: number } | null = null;
     setKeysNow(keysRef.current.filter((k) => k !== key));
     onUpdate((draft) => {
-      if (index < draft.length) removed = { item: draft.splice(index, 1)[0] };
+      if (index < draft.length) {
+        const item = draft.splice(index, 1)[0];
+        removed = { item, copiesLeft: countSameItems(draft, item) };
+      }
     }, { immediate: true });
     toast.info(`Élément « ${label} » supprimé.`, {
       action: {
         label: 'Annuler',
         onClick: () => {
           if (!removed) return;
-          const { item } = removed;
+          const { item, copiesLeft } = removed;
           onUpdate((draft) => {
             const at = Math.min(index, draft.length);
-            const restored = restoreItem(draft, at, structuredClone(item));
+            const restored = restoreRemovedItem(draft, at, item, copiesLeft);
+            if (!restored) return;
             draft.splice(0, draft.length, ...restored);
             setKeysNow(restoreItem(keysRef.current, at, newItemKey()));
           }, { immediate: true });

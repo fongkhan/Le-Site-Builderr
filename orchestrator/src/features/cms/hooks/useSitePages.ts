@@ -110,17 +110,32 @@ export function useSitePages(siteSlug: string): SitePages {
     [saveNow, schedule],
   );
 
+  // Éditeur démonté (autre page de l'application) : la sauvegarde automatique est arrêtée.
+  // Une modification tardive (« Annuler » d'un toast resté affiché) serait perdue sans
+  // bruit : elle est refusée avec un message.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   const commit = useCallback(
     (change: (prev: EditorPage[]) => EditorPage[], immediate = false) => {
       const prev = pagesRef.current;
       const next = change(prev);
       if (next === prev) return;
+      if (!mounted.current) {
+        toast.error("L'éditeur de contenu a été fermé : cette modification n'a pas été appliquée. Rouvrez-le pour la refaire.");
+        return;
+      }
       // Frappe (débouncée) regroupée par champ ; un changement de structure est une étape
       history.push(prev, immediate ? undefined : editGroupKey(prev, next));
       syncHistoryFlags();
       apply(prev, next, immediate);
     },
-    [apply, history, syncHistoryFlags],
+    [apply, history, syncHistoryFlags, toast],
   );
 
   const travel = useCallback(

@@ -101,12 +101,14 @@ function mapLayoutOf(pages: EditorPage[], blockId: string, change: (layout: Edit
   return pages.map((p) => (p === found.page ? { ...p, layout } : p));
 }
 
-// Applique une recette à une copie du bloc le plus récent.
+// Applique une recette à une copie du bloc le plus récent. Recette sans effet (retour
+// asynchrone ignoré, restauration déjà faite) : pages d'origine, donc ni historique ni envoi.
 export function updateBlock(pages: EditorPage[], blockId: string, recipe: (draft: Block) => void): EditorPage[] {
   return mapLayoutOf(pages, blockId, (layout, index) => {
     const draft = structuredClone(layout[index]);
     recipe(draft);
     draft.id = blockId; // l'identifiant client ne change jamais
+    if (JSON.stringify(draft) === JSON.stringify(layout[index])) return null;
     const next = layout.slice();
     next[index] = draft;
     return next;
@@ -198,10 +200,25 @@ export function movePage(pages: EditorPage[], pageId: string, delta: -1 | 1): Ed
   return next;
 }
 
-// Copie profonde d'un bloc (nouvel identifiant client), insérée juste après l'original.
+// Copie sans identifiants de lignes (id, blockName) : la base en attribue de nouveaux,
+// une copie qui réutiliserait ceux de l'original serait refusée (clé en double).
+function withoutRowIds<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(withoutRowIds) as T;
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(value)) {
+      if (key !== 'id' && key !== 'blockName') out[key] = withoutRowIds(v);
+    }
+    return out as T;
+  }
+  return value;
+}
+
+// Copie profonde d'un bloc (nouvel identifiant client, sans identifiants de lignes),
+// insérée juste après l'original.
 export function duplicateBlock(pages: EditorPage[], blockId: string): EditorPage[] {
   return mapLayoutOf(pages, blockId, (layout, index) => {
-    const copy: EditorBlock = { ...structuredClone(layout[index]), id: newClientId() };
+    const copy: EditorBlock = { ...withoutRowIds(layout[index]), id: newClientId() };
     const next = layout.slice();
     next.splice(index + 1, 0, copy);
     return next;
@@ -221,6 +238,21 @@ export function restoreItem<T>(list: readonly T[], index: number, item: T): T[] 
   const next = list.slice();
   next.splice(Math.max(0, Math.min(index, next.length)), 0, item);
   return next;
+}
+
+// Nombre d'éléments de la liste identiques (même contenu) à `item`.
+export function countSameItems<T>(list: readonly T[], item: T): number {
+  const ref = JSON.stringify(item);
+  return list.filter((x) => JSON.stringify(x) === ref).length;
+}
+
+// Annulation de la suppression d'un élément de liste (toast « Annuler ») : réinsère
+// l'élément, sauf s'il a déjà été rétabli entre-temps (annuler de l'historique, Ctrl+Z) —
+// la liste compte alors plus de copies identiques qu'après la suppression (`copiesLeft`).
+// Renvoie null si rien n'est à faire.
+export function restoreRemovedItem<T>(list: readonly T[], index: number, item: T, copiesLeft: number): T[] | null {
+  if (countSameItems(list, item) > copiesLeft) return null;
+  return restoreItem(list, index, structuredClone(item));
 }
 
 /** Annonce lecteur d'écran après un déplacement (newIndex à partir de 0). */

@@ -117,7 +117,25 @@ async function findPayloadSiteId(payloadInstance, siteSlug) {
   return siteRes.docs.length > 0 ? siteRes.docs[0].id : null;
 }
 
-// Page Payload → page de l'éditeur (identifiants de blocs retirés, galerie en URLs).
+// Identifiants de lignes Payload (id, blockName) retirés récursivement d'une valeur de
+// bloc (listes imbriquées : items, plans[].features…). Payload attribue de nouveaux id à
+// l'écriture : une ligne copiée (section dupliquée, site dupliqué, élément rétabli) ne
+// réutilise jamais l'id d'une ligne existante, que Postgres refuserait (clé en double).
+function stripRowIds(value) {
+  if (Array.isArray(value)) return value.map(stripRowIds);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [key, v] of Object.entries(value)) {
+      if (key === 'id' || key === 'blockName') continue;
+      out[key] = stripRowIds(v);
+    }
+    return out;
+  }
+  return value;
+}
+
+// Page Payload → page de l'éditeur (identifiants de blocs et de lignes retirés, galerie
+// en URLs).
 function toEditorPage(page) {
   return {
     title: page.title,
@@ -127,7 +145,8 @@ function toEditorPage(page) {
     metaDescription: page.metaDescription || undefined,
     hideFromNav: page.hideFromNav === true,
     layout: page.layout ? page.layout.map(block => {
-      const { id, ...fields } = block;
+      const { id, blockName, ...rest } = block;
+      const fields = stripRowIds(rest);
       if (block.blockType === 'gallery' && fields.images) {
         fields.images = fields.images.map(img => typeof img === 'object' && img !== null ? img.url : img);
       }
@@ -285,6 +304,7 @@ function dedupePageDocs(docs) {
 }
 
 // Corps du CMS → données Payload d'une page. navOrder = position dans la liste envoyée.
+// Identifiants de blocs et de lignes jamais transmis (stripRowIds) : Payload les génère.
 function toPageData(pageInput, index) {
   return {
     title: pageInput.title,
@@ -295,7 +315,8 @@ function toPageData(pageInput, index) {
     navOrder: index,
     hideFromNav: Boolean(pageInput.hideFromNav),
     layout: pageInput.layout ? pageInput.layout.map(block => {
-      const { blockType, id, ...fields } = block;
+      const { blockType, id, blockName, ...rest } = block;
+      const fields = stripRowIds(rest);
       if (blockType === 'gallery' && fields.images) {
         fields.images = fields.images.map(img => typeof img === 'string' ? { url: img } : img);
       }
@@ -687,6 +708,8 @@ module.exports = {
   canonicalPage,
   planPageWrites,
   toEditorPage,
+  toPageData,
+  stripRowIds,
   normalizePost,
   readPostsFile,
   writePostsFile,

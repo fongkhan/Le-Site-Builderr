@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { Link, NavLink, Outlet, useLocation, useNavigate, useNavigation } from 'react-router-dom';
+import { Link, NavigationType, NavLink, Outlet, useLocation, useNavigate, useNavigation, useNavigationType } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { useBuildStatus } from '../../state/BuildStatusContext';
 import { useConfig } from '../../state/ConfigContext';
@@ -28,16 +28,27 @@ function useDocumentTitle(pathname: string) {
   }, []);
 }
 
+// Le focus doit-il passer sur le contenu principal ? Seulement pour un changement de page
+// demandé par l'utilisateur (lien, retour arrière : PUSH ou POP). Une redirection (REPLACE :
+// « / » → /sites, site → onglet Design, à l'ouverture de l'application) ne le déplace
+// pas : au premier Tab, le lien d'évitement et le menu restent accessibles.
+// eslint-disable-next-line react-refresh/only-export-components
+export function shouldFocusMain(previousPath: string, pathname: string, navigationType: NavigationType): boolean {
+  return previousPath !== pathname && navigationType !== NavigationType.Replace;
+}
+
 // Focus sur le contenu principal à chaque changement de page (lecteurs d'écran, clavier) :
-// jamais au premier affichage, ni quand seul le query-string change.
+// jamais au premier affichage (redirections initiales comprises), ni quand seul le
+// query-string change.
 function useFocusMainOnNavigation(pathname: string) {
   const mainRef = useRef<HTMLElement>(null);
   const previous = useRef(pathname);
+  const navigationType = useNavigationType();
   useEffect(() => {
-    if (previous.current === pathname) return;
+    const focus = shouldFocusMain(previous.current, pathname, navigationType);
     previous.current = pathname;
-    mainRef.current?.focus({ preventScroll: true });
-  }, [pathname]);
+    if (focus) mainRef.current?.focus({ preventScroll: true });
+  }, [pathname, navigationType]);
   return mainRef;
 }
 

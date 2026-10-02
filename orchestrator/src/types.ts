@@ -169,6 +169,8 @@ export interface AppConfig {
   aiQuota?: AiQuotaInfo | null;
   /** Offre du compte : null = sans limite (admin). */
   plan?: PlanInfo | null;
+  /** Taille maximale d'une image téléversée (Mo, MEDIA_MAX_MB côté serveur) */
+  mediaMaxMb?: number;
 }
 
 export interface PlanInfo {

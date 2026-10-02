@@ -16,4 +16,26 @@ function summarizeChecks(checks = {}, critical = CRITICAL_CHECKS) {
   return degraded ? { status: 'degraded', httpStatus: 200 } : { status: 'ok', httpStatus: 200 };
 }
 
-module.exports = { summarizeChecks, CRITICAL_CHECKS };
+// Sonde mise en cache : au plus un calcul (requête SQL, accès disque) par période
+// ttlMs, et les appels simultanés partagent le calcul en cours. Protège le serveur d'une
+// sonde trop fréquente (ou d'un flood anonyme) SANS jamais répondre 429 : une sonde de
+// disponibilité toutes les secondes reste servie. Un calcul en échec n'est pas mis en cache.
+function createCachedProbe(compute, ttlMs = 2000, now = Date.now) {
+  let cached = null;
+  let pending = null;
+  return function probe() {
+    if (cached && now() - cached.at < ttlMs) return Promise.resolve(cached.value);
+    if (!pending) {
+      pending = Promise.resolve()
+        .then(compute)
+        .then((value) => {
+          cached = { at: now(), value };
+          return value;
+        })
+        .finally(() => { pending = null; });
+    }
+    return pending;
+  };
+}
+
+module.exports = { summarizeChecks, createCachedProbe, CRITICAL_CHECKS };

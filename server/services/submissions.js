@@ -1,6 +1,7 @@
 // Boîte de réception des messages d'un site : collection Payload « submissions », repli
 // JSON (DATA_DIR/submissions_<slug>.json, jamais servi statiquement) en mode sans base.
-// La rétention (12 mois, 500 messages) est appliquée à chaque enregistrement.
+// La rétention (12 mois, 500 messages) est appliquée à chaque enregistrement et à chaque
+// lecture : un site qui ne reçoit plus de messages ne garde pas les anciens.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -50,6 +51,31 @@ async function payloadContext(slug) {
   return { payload, siteId: await findPayloadSiteId(payload, slug) };
 }
 
+// Rétention en base : supprime les messages du site au-delà de 12 mois ou des 500 plus
+// récents. Best-effort (rattrapée au prochain appel). `docs` : messages du site déjà lus
+// (sinon relus). Renvoie les messages conservés, du plus récent au plus ancien.
+async function applyPayloadRetention(ctx, docs) {
+  const all = docs || (await ctx.payload.find({
+    collection: 'submissions',
+    where: { site: { equals: ctx.siteId } },
+    select: { createdAt: true },
+    pagination: false,
+    depth: 0,
+    overrideAccess: true,
+  })).docs;
+  const kept = pruneSubmissions(all);
+  const keptIds = new Set(kept.map((d) => d.id));
+  const stale = all.filter((d) => !keptIds.has(d.id)).map((d) => d.id);
+  if (stale.length > 0) {
+    try {
+      await ctx.payload.delete({ collection: 'submissions', where: { and: [{ id: { in: stale } }, { site: { equals: ctx.siteId } }] }, overrideAccess: true });
+    } catch (e) {
+      console.error('⚠️ [Messages] rétention non appliquée —', e.message);
+    }
+  }
+  return kept;
+}
+
 // Enregistre un message (déjà validé par la route) puis applique la rétention.
 async function saveSubmission(slug, input) {
   const data = normalizeSubmission(input);
@@ -62,19 +88,7 @@ async function saveSubmission(slug, input) {
       overrideAccess: true,
     });
     try {
-      const all = await ctx.payload.find({
-        collection: 'submissions',
-        where: { site: { equals: ctx.siteId } },
-        select: { createdAt: true },
-        pagination: false,
-        depth: 0,
-        overrideAccess: true,
-      });
-      const kept = new Set(pruneSubmissions(all.docs).map((d) => d.id));
-      const stale = all.docs.filter((d) => !kept.has(d.id)).map((d) => d.id);
-      if (stale.length > 0) {
-        await ctx.payload.delete({ collection: 'submissions', where: { id: { in: stale } }, overrideAccess: true });
-      }
+      await applyPayloadRetention(ctx);
     } catch (e) {
       // La rétention sera rattrapée au prochain message : le message reçu est conservé.
       console.error('⚠️ [Messages] rétention non appliquée —', e.message);
@@ -86,7 +100,7 @@ async function saveSubmission(slug, input) {
   return toApi(entry);
 }
 
-// Messages du site, du plus récent au plus ancien.
+// Messages du site, du plus récent au plus ancien (rétention appliquée, comme en JSON).
 async function listSubmissions(slug) {
   const ctx = await payloadContext(slug);
   if (ctx) {
@@ -99,7 +113,7 @@ async function listSubmissions(slug) {
       depth: 0,
       overrideAccess: true,
     });
-    return res.docs.map(toApi);
+    return (await applyPayloadRetention(ctx, res.docs)).map(toApi);
   }
   return pruneSubmissions(readFileList(slug)).map(toApi);
 }

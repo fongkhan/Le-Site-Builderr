@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { UI_STRINGS, t } from '../../../client-template/src/lib/ui-strings.mjs';
 import { LOCALES } from '../../../client-template/src/lib/i18n.mjs';
+import { errorMessageFor } from '../../../client-template/src/components/forms/lead-status.mjs';
 
 test('UI_STRINGS — une table par langue du site, mêmes clés partout', () => {
   assert.deepEqual(Object.keys(UI_STRINGS).sort(), [...LOCALES].sort());
@@ -37,4 +38,14 @@ test('t — remplacement des marqueurs {nom}', () => {
   assert.equal(t('fr', 'orderProduct', { name: 'Bol' }), 'Commander « Bol »');
   assert.equal(t('en', 'orderProduct', { name: 'Bowl' }), 'Order “Bowl”');
   assert.equal(t('fr', 'orderProduct'), 'Commander « {name} »');
+});
+
+test('formulaire — erreur d’envoi dans la langue de la page, jamais le texte du serveur', () => {
+  const texts = (locale) => ({ failed: t(locale, 'contactError'), invalid: t(locale, 'formInvalid'), rateLimited: t(locale, 'formRateLimited') });
+  const en = texts('en');
+  assert.equal(errorMessageFor(429, en), 'Too many submissions in a short time: please try again in a few minutes.');
+  assert.equal(errorMessageFor(400, en), 'Please check your name, email address and message.');
+  assert.equal(errorMessageFor(500, en), 'Unable to send the message right now.');
+  assert.equal(errorMessageFor(0, en), 'Unable to send the message right now.');
+  assert.match(errorMessageFor(429, texts('fr')), /Trop d'envois/);
 });

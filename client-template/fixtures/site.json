@@ -180,6 +180,18 @@
         ]
       },
       {
+        "title": "Page d'erreur en collision",
+        "slug": "404",
+        "locale": "fr",
+        "layout": [{ "blockType": "hero", "title": "Ne doit jamais être générée ni listée" }]
+      },
+      {
+        "title": "Error page",
+        "slug": "404",
+        "locale": "en",
+        "layout": [{ "blockType": "hero", "title": "English page at /en/404/" }]
+      },
+      {
         "title": "Ateliers",
         "slug": "ateliers",
         "locale": "fr",

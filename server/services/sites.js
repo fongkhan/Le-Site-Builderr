@@ -108,9 +108,13 @@ function purgeSiteData(slug) {
 }
 
 // Dossiers qu'un nouveau site occuperait sous ce slug et qui existent déjà (site supprimé
-// en conservant ses fichiers, dossier repéré par le scan mais pas importé…).
+// en conservant ses fichiers, dossier repéré par le scan mais pas importé…). Un brouillon
+// resté sous ce slug (build de brouillon terminé après la suppression du site) compte
+// aussi : le garde /draft/<slug> le servirait sinon au propriétaire du nouveau site.
 function slugHasLeftovers(slug) {
-  return fs.existsSync(defaultDocumentRoot(slug)) || fs.existsSync(path.join(REPOSITORIES_DIR, slug));
+  return fs.existsSync(defaultDocumentRoot(slug))
+    || fs.existsSync(path.join(REPOSITORIES_DIR, slug))
+    || fs.existsSync(path.join(DRAFTS_DIR, slug));
 }
 
 // Premier slug libre : base, base-2, base-3… Libre = ni enregistré, ni déjà présent sur le

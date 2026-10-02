@@ -132,12 +132,17 @@ async function main() {
   console.log('→ Serveur API : http://localhost:4000');
   console.log('→ Interface  : http://localhost:5173  (comptes de démo dans le README)');
 
-  process.on('SIGINT', () => {
+  // Ctrl+C (SIGINT) ou arrêt demandé (SIGTERM : kill, docker stop…) : le serveur reçoit
+  // SIGTERM et interrompt lui-même le build en cours (lancé dans son propre groupe de
+  // processus, que le signal du terminal n'atteint pas).
+  const stop = () => {
     console.log('\n=== FERMETURE DE LA STACK ===');
-    serverProcess.kill();
-    clientProcess.kill();
+    serverProcess.kill('SIGTERM');
+    clientProcess.kill('SIGTERM');
     process.exit();
-  });
+  };
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
 }
 
 main();

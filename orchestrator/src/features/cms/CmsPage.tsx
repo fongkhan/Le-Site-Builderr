@@ -35,6 +35,7 @@ import {
   type EditorPage,
 } from './lib/editorModel';
 import { derivePageSlug, pageAddress } from './lib/pageSlug';
+import { hasNativeUndo } from './lib/shortcuts';
 import { PageSelector } from './components/PageSelector';
 import { PageSettings } from './components/PageSettings';
 import { SeoPanel, type SeoField } from './components/SeoPanel';
@@ -63,12 +64,16 @@ function leaveMessage(state: AutosaveState): string {
   return "Vos dernières modifications sont en cours d'enregistrement automatique. Patientez un instant : si vous quittez maintenant, l'envoi se terminera en arrière-plan, sans nouvel essai en cas d'échec.";
 }
 
-// Raccourci clavier ignoré : saisie en cours (le champ garde son propre annuler) ou
-// fenêtre modale ouverte.
+// Raccourci clavier ignoré : saisie de texte en cours (le champ garde son propre annuler)
+// ou fenêtre modale ouverte. Une case à cocher n'a pas d'annuler : l'éditeur s'en charge.
 function shortcutBlocked(target: EventTarget | null): boolean {
   if (document.querySelector('[aria-modal="true"]')) return true;
   if (!(target instanceof HTMLElement)) return false;
-  return target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
+  return hasNativeUndo({
+    tagName: target.tagName,
+    type: target instanceof HTMLInputElement ? target.type : undefined,
+    isContentEditable: target.isContentEditable,
+  });
 }
 
 const HISTORY_HINT = 'Historique de cette session : il est perdu au rechargement de la page.';

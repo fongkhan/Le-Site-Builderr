@@ -51,10 +51,15 @@ test('generateHtaccess — cache long des ressources Astro, court pour le HTML',
   assert.match(conf, /\\\.html\$"[\s\S]*?max-age=300/);
 });
 
-test('sitemap — la page 404 du template n’y figure jamais', () => {
+test('sitemap — la page 404 du template n’y figure jamais (page CMS « 404 » réservée)', () => {
+  // La fixture contient une page fr d'adresse « 404 » (masquée par la page d'erreur du
+  // template) et une page en/404 (générée normalement) : mêmes routes que writeSeoFiles.
   const fixture = JSON.parse(fs.readFileSync(new URL('../../../client-template/fixtures/site.json', import.meta.url), 'utf-8'));
-  const routes = publishedRoutes(fixture.pages.docs, fixture.posts.docs).filter((r) => r !== ERROR_PAGE_ROUTE);
-  assert.ok(routes.length > 0);
+  assert.ok(fixture.pages.docs.some((p) => p.slug === ERROR_PAGE_ROUTE && p.locale === 'fr'), 'fixture sans page fr « 404 »');
+  const routes = publishedRoutes(fixture.pages.docs, fixture.posts.docs);
+  assert.ok(!routes.includes(ERROR_PAGE_ROUTE));
+  assert.ok(routes.includes(`en/${ERROR_PAGE_ROUTE}`));
   const xml = generateSitemap('exemple.fr', routes, '2026-01-15');
-  assert.doesNotMatch(xml, /\/404/);
+  assert.doesNotMatch(xml, /exemple\.fr\/404/);
+  assert.match(xml, /exemple\.fr\/en\/404\//);
 });

@@ -3,13 +3,14 @@
 // chemin, ni message d'erreur — seulement des états.
 const fs = require('fs');
 const path = require('path');
-const { createRouter, makeLimiter } = require('../core/http');
+const { createRouter } = require('../core/http');
 const { getPayloadInstance } = require('../core/payload');
 const { DATA_DIR, PUBLIC_HTML_DIR, UPLOADS_DIR } = require('../core/config');
-const { summarizeChecks } = require('../lib/health');
+const { summarizeChecks, createCachedProbe } = require('../lib/health');
 const build = require('../services/build');
 
 const DB_TIMEOUT_MS = 2000;
+const READY_CACHE_MS = 2000;
 
 const router = createRouter();
 
@@ -59,15 +60,20 @@ function checkStorage() {
   }
 }
 
-// Disponibilité : 200 (ok/degraded) ou 503 (down). Limiteur léger : la requête SQL et
-// les accès disque ne doivent pas servir de levier de charge.
-router.get('/api/health/ready', makeLimiter(120, 'Trop de requêtes.'), async (req, res) => {
+// Disponibilité : 200 (ok/degraded) ou 503 (down). Résultat mis en cache 2 s (jamais
+// de 429 pour la sonde) : la requête SQL et les accès disque ne servent pas de levier de
+// charge, quel que soit le rythme des appels.
+const readyProbe = createCachedProbe(async () => {
   const checks = {
     database: await checkDatabase(),
     storage: checkStorage(),
     build: { inProgress: Boolean(build.getBuildStatus().inProgress), queueLength: build.getQueue().length },
   };
-  const { status, httpStatus } = summarizeChecks(checks);
+  return { checks, ...summarizeChecks(checks) };
+}, READY_CACHE_MS);
+
+router.get('/api/health/ready', async (req, res) => {
+  const { status, httpStatus, checks } = await readyProbe();
   res.set('Cache-Control', 'no-store');
   res.status(httpStatus).json({ status, checks });
 });

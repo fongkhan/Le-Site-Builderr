@@ -9,6 +9,7 @@ import {
   moveAnnouncement,
   movePage,
   restoreItem,
+  restoreRemovedItem,
   insertBlock,
   moveBlock,
   pageDeletionBlocker,
@@ -209,6 +210,38 @@ describe('duplication et restauration', () => {
     expect(restoreItem(list, 9, 'z')).toEqual(['a', 'c', 'z']);
     expect(restoreItem([], 3, 'x')).toEqual(['x']);
     expect(list).toEqual(['a', 'c']); // liste d'origine intacte
+  });
+
+  it('duplicateBlock : la copie ne reprend aucun identifiant de ligne (base : clé en double)', () => {
+    const pages = toEditorPages({
+      docs: [{ title: 'A', slug: 'home', layout: [{ blockType: 'faq', title: 'FAQ', items: [{ id: 'row-1', question: 'Q', answer: 'R' }] } as never] }],
+    });
+    const original = pages[0].layout[0];
+    const copy = duplicateBlock(pages, original.id)[0].layout[1];
+    expect(JSON.stringify(copy)).not.toContain('row-1');
+    expect(copy.items).toEqual([{ question: 'Q', answer: 'R' }]);
+    expect(original.items?.[0]).toHaveProperty('id', 'row-1'); // original intact
+  });
+
+  it('restoreRemovedItem : « Annuler » du toast après un Ctrl+Z ne crée pas de doublon', () => {
+    const q2 = { question: 'Q2', answer: 'R2' };
+    const before = [{ question: 'Q1', answer: 'R1' }, q2, { question: 'Q3', answer: 'R3' }];
+    const after = [before[0], before[2]];
+    expect(restoreRemovedItem(after, 1, q2, 0)).toEqual(before);
+    // Déjà rétabli par l'historique : rien à faire
+    expect(restoreRemovedItem(structuredClone(before), 1, q2, 0)).toBeNull();
+    // Deux éléments identiques (gabarits vides) : l'autre copie ne bloque pas la restauration
+    const blank = { question: '', answer: '' };
+    expect(restoreRemovedItem([blank], 1, blank, 1)).toEqual([blank, blank]);
+    expect(restoreRemovedItem([blank, blank], 1, blank, 1)).toBeNull();
+  });
+
+  it('updateBlock : recette sans effet → pages d’origine (ni historique ni envoi)', () => {
+    const pages = load();
+    const faq = pages[0].layout[1];
+    expect(updateBlock(pages, faq.id, () => {})).toBe(pages);
+    expect(updateBlock(pages, faq.id, (b) => { b.title = 'FAQ'; })).toBe(pages);
+    expect(updateBlock(pages, faq.id, (b) => { b.title = 'Questions'; })).not.toBe(pages);
   });
 
   it('insertBlockAt : remet une section supprimée à sa place, une seule fois', () => {

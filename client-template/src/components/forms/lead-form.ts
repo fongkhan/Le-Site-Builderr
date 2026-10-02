@@ -5,19 +5,29 @@
 // (method="post", jamais en GET : les données ne doivent pas finir dans une URL, des
 // journaux ou l'historique). Avec JavaScript, l'envoi se fait en fetch (JSON) et le
 // résultat s'affiche sans quitter la page. Échoue en douceur : ne casse jamais la page.
-// Messages d'état dans la langue de la page : attributs data-msg-sending, data-msg-ok et
-// data-msg-error du formulaire (posés par LeadForm.astro), repli sur le français.
+// Messages d'état dans la langue de la page : attributs data-msg-sending, data-msg-ok,
+// data-msg-error, data-msg-invalid et data-msg-rate-limit du formulaire (posés par
+// LeadForm.astro), repli sur le français. Le texte d'erreur du serveur (en français)
+// n'est jamais affiché : le message dépend du code de la réponse (lead-status.mjs).
+
+import { errorMessageFor } from './lead-status.mjs';
 
 type LeadKind = 'contact' | 'appointment';
 
-const MESSAGES: Record<LeadKind, { sending: string; ok: string; failed: string }> = {
+const COMMON = {
+  sending: 'Envoi en cours…',
+  invalid: 'Vérifiez votre nom, votre email et votre message.',
+  rateLimited: "Trop d'envois en peu de temps : réessayez dans quelques minutes.",
+};
+
+const MESSAGES: Record<LeadKind, { sending: string; ok: string; failed: string; invalid: string; rateLimited: string }> = {
   contact: {
-    sending: 'Envoi en cours…',
+    ...COMMON,
     ok: 'Merci, votre message a bien été envoyé !',
     failed: "Impossible d'envoyer le message pour le moment.",
   },
   appointment: {
-    sending: 'Envoi en cours…',
+    ...COMMON,
     ok: 'Merci ! Votre demande de rendez-vous a bien été envoyée.',
     failed: "Impossible d'envoyer la demande pour le moment.",
   },
@@ -51,6 +61,8 @@ function enhance(form: HTMLFormElement) {
     sending: form.dataset.msgSending || fallback.sending,
     ok: form.dataset.msgOk || fallback.ok,
     failed: form.dataset.msgError || fallback.failed,
+    invalid: form.dataset.msgInvalid || fallback.invalid,
+    rateLimited: form.dataset.msgRateLimit || fallback.rateLimited,
   };
   const status = form.querySelector<HTMLElement>('.lead-status');
   const button = form.querySelector<HTMLButtonElement>('button[type="submit"]');
@@ -70,12 +82,11 @@ function enhance(form: HTMLFormElement) {
         form.reset();
         say(texts.ok);
       } else {
-        const data = await res.json().catch(() => ({}));
-        // Message d'erreur du serveur s'il en fournit un, sinon message traduit de la page
-        say((data && typeof data.error === 'string' && data.error) || texts.failed);
+        // Message traduit selon le code (trop d'envois, champ invalide, erreur)
+        say(errorMessageFor(res.status, texts));
       }
     } catch {
-      say(texts.failed);
+      say(errorMessageFor(0, texts));
     } finally {
       if (button) button.disabled = false;
     }
