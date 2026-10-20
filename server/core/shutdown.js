@@ -40,12 +40,23 @@ function pendingBackground() {
   return background.size;
 }
 
-// Compte les requêtes HTTP en cours du serveur (terminées à la fermeture de la réponse).
+// Compte les requêtes HTTP en cours du serveur : terminées à la fermeture de la réponse
+// ou de la connexion (la réponse d'une requête pipelinée dont la connexion se ferme
+// n'émet jamais « close »).
 function attachServer(server) {
   attachedServer = server;
   server.on('request', (req, res) => {
     active++;
-    res.once('close', () => { active--; });
+    const socket = req.socket;
+    let open = true;
+    const done = () => {
+      if (!open) return;
+      open = false;
+      active--;
+      if (socket) socket.removeListener('close', done);
+    };
+    res.once('close', done);
+    if (socket) socket.once('close', done);
   });
   return server;
 }

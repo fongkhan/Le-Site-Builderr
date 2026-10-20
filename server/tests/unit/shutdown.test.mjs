@@ -131,3 +131,22 @@ test('attachServer : compte les requêtes jusqu’à la fermeture de la réponse
   res.emit('close');
   assert.equal(shutdown.activeRequests(), before);
 });
+
+test('attachServer : connexion fermée sans « close » de la réponse (requête pipelinée)', () => {
+  const { EventEmitter } = require('node:events');
+  const server = new EventEmitter();
+  shutdown.attachServer(server);
+  const before = shutdown.activeRequests();
+  const socket = new EventEmitter();
+  const head = new EventEmitter();
+  const queued = new EventEmitter();
+  server.emit('request', { socket }, head);
+  server.emit('request', { socket }, queued);
+  assert.equal(shutdown.activeRequests(), before + 2);
+  head.emit('close');
+  assert.equal(socket.listenerCount('close'), 1, 'écouteur retiré à la fin de la réponse');
+  socket.emit('close');
+  assert.equal(shutdown.activeRequests(), before, 'la réponse orpheline n’est plus comptée');
+  queued.emit('close');
+  assert.equal(shutdown.activeRequests(), before, 'jamais décomptée deux fois');
+});

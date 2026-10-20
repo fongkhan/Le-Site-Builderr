@@ -121,17 +121,16 @@ function authLimiterFor(rawPath) {
   return hit ? hit[1] : null;
 }
 
-// Au plus `limit` traitements à la fois, les suivants attendent leur tour. La place est
-// tenue jusqu'à la fin du traitement lui-même, jamais jusqu'à un événement de la réponse :
-// Payload poursuit l'opération quand le client se déconnecte, et la réponse d'une requête
-// pipelinée dont la connexion se ferme n'émet ni « finish » ni « close ». Une requête dont
-// la connexion s'est fermée pendant l'attente n'est pas lancée. Renvoie le résultat du
-// traitement.
+// Au plus `limit` traitements à la fois, les suivants attendent leur tour. Le traitement
+// reçoit `release` : sa place est libérée au premier appel de `release` ou à la fin de sa
+// promesse, jamais sur un événement de la réponse (Payload poursuit l'opération quand le
+// client se déconnecte ; la réponse d'une requête pipelinée dont la connexion se ferme
+// n'émet ni « finish » ni « close »). Une requête dont la connexion s'est fermée pendant
+// l'attente n'est pas lancée. Renvoie le résultat du traitement.
 function concurrencyGate(limit) {
   let active = 0;
   const waiting = [];
-  const release = () => {
-    active -= 1;
+  const next = () => {
     while (waiting.length > 0 && active < limit) {
       const entry = waiting.shift();
       if (entry.req.socket?.destroyed) entry.resolve();
@@ -140,9 +139,16 @@ function concurrencyGate(limit) {
   };
   const start = ({ task, resolve, reject }) => {
     active += 1;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      active -= 1;
+      next();
+    };
     let result;
     try {
-      result = Promise.resolve(task());
+      result = Promise.resolve(task(release));
     } catch (err) {
       result = Promise.reject(err);
     }
@@ -191,7 +197,10 @@ const isForgotPasswordPath = (rawPath) => {
 };
 
 // Traitement d'une demande de mot de passe oublié (run : gestionnaire Next) derrière la
-// file d'attente. Corps trop gros : 413 ; connexion fermée avant la fin du corps : rien.
+// file d'attente. Place libérée quand la réponse est terminée (res.end : opération Payload
+// finie), même si elle n'est jamais envoyée : réponse pipelinée dont la connexion s'est
+// fermée, pour laquelle la promesse de Next ne se résout jamais. Corps trop gros : 413 ;
+// connexion fermée avant la fin du corps : rien.
 async function runForgotPassword(req, res, run) {
   if (!(await bodyReceived(req, FORGOT_PASSWORD_MAX_BODY))) {
     if (!req.socket?.destroyed && !res.headersSent) {
@@ -199,7 +208,14 @@ async function runForgotPassword(req, res, run) {
     }
     return;
   }
-  return forgotPasswordGate(req, run);
+  return forgotPasswordGate(req, (release) => {
+    const end = res.end;
+    res.end = function endAndRelease(...args) {
+      release();
+      return end.apply(this, args);
+    };
+    return run();
+  });
 }
 
 // Middleware unique : mêmes instances de limiteurs (donc même compteur par IP) quelle que

@@ -186,3 +186,42 @@ test('runForgotPassword — corps trop gros : 413 sans traitement', async () => 
   assert.equal(sent.Connection, 'close');
   assert.equal(await runForgotPassword({ headers: {}, complete: true, socket: { destroyed: false } }, res, () => 'traité'), 'traité');
 });
+
+test('concurrencyGate — release() libère la place avant la fin du traitement, une seule fois', async () => {
+  const { concurrencyGate } = require('../../core/http.js');
+  const gate = concurrencyGate(1);
+  const started = [];
+  const never = new Promise(() => {}); // promesse jamais résolue (réponse pipelinée orpheline)
+  let releaseFirst;
+  gate(fakeReq(), (release) => { started.push('a'); releaseFirst = release; return never; });
+  const second = deferred();
+  gate(fakeReq(), () => { started.push('b'); return second.promise; });
+  gate(fakeReq(), () => { started.push('c'); });
+  await tick();
+  assert.deepEqual(started, ['a']);
+  releaseFirst();
+  releaseFirst();
+  await tick();
+  assert.deepEqual(started, ['a', 'b'], 'un double release ne libère qu’une place');
+  second.resolve();
+  await tick();
+  await tick();
+  assert.deepEqual(started, ['a', 'b', 'c']);
+});
+
+test('runForgotPassword — place libérée à la fin de la réponse (res.end), promesse de Next en suspens', async () => {
+  const { runForgotPassword } = require('../../core/http.js');
+  const req = () => ({ headers: {}, complete: true, socket: { destroyed: false } });
+  const makeRes = () => ({ headersSent: false, ended: false, end() { this.ended = true; return this; } });
+  const responses = [makeRes(), makeRes(), makeRes()];
+  const started = [];
+  // Deux réponses terminées mais jamais envoyées : la promesse du gestionnaire ne se résout pas
+  for (const i of [0, 1]) runForgotPassword(req(), responses[i], () => { started.push(i); return new Promise(() => {}); });
+  const third = runForgotPassword(req(), responses[2], () => { started.push(2); return 'ok'; });
+  await tick();
+  assert.deepEqual(started, [0, 1]);
+  responses[0].end();
+  assert.equal(responses[0].ended, true, 'res.end d’origine toujours appelé');
+  assert.equal(await third, 'ok');
+  assert.deepEqual(started, [0, 1, 2]);
+});

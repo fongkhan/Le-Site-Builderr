@@ -63,17 +63,35 @@ test('scheduleBackups — une sauvegarde de sécurité récente ne repousse pas 
   const realSetInterval = globalThis.setInterval;
   const realSetTimeout = globalThis.setTimeout;
   const timers = [];
+  // Journaux du planificateur relevés au lieu d'être écrits : une écriture sur la sortie
+  // standard pendant que le lanceur de tests y transmet ses résultats corrompait parfois
+  // son flux (« Unable to deserialize cloned data »).
+  const realLog = console.log;
+  const logs = [];
+  console.log = (...args) => { logs.push(args.join(' ')); };
   globalThis.setInterval = (fn, ms) => { timers.push({ kind: 'interval', fn, ms }); return { unref() {} }; };
   globalThis.setTimeout = (fn, ms) => { timers.push({ kind: 'timeout', fn, ms }); return { unref() {} }; };
   try {
     backups.scheduleBackups();
+  } catch (err) {
+    console.log = realLog;
+    throw err;
   } finally {
     globalThis.setInterval = realSetInterval;
     globalThis.setTimeout = realSetTimeout;
   }
-  timers.find((t) => t.kind === 'interval').fn();
-  for (let i = 0; i < 100 && names().length < 3; i++) await sleep(25);
+  // Sauvegarde terminée (rétention et journal compris), pas seulement son fichier écrit
+  const shutdown = require('../../core/shutdown.js');
+  try {
+    timers.find((t) => t.kind === 'interval').fn();
+    for (let i = 0; i < 200 && shutdown.pendingBackground() > 0; i++) await sleep(25);
+  } finally {
+    console.log = realLog;
+  }
+  assert.equal(shutdown.pendingBackground(), 0, 'sauvegarde planifiée encore en cours');
+  assert.ok(logs.some((l) => l.includes('Planifiées toutes les 24 h')), logs.join(' | '));
   const regular = names().filter((n) => n !== safety && n !== OLD[0]);
   assert.equal(regular.length, 1, `sauvegarde planifiée non lancée : ${names().join(', ')}`);
   assert.doesNotMatch(regular[0], /-securite/);
+  assert.ok(logs.some((l) => l.includes(`Créée : ${regular[0]}`)), logs.join(' | '));
 });
