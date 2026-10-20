@@ -37,3 +37,28 @@ test('isAnonymousHttpCreate — seed (API locale), utilisateur connecté et autr
   assert.equal(isAnonymousHttpCreate({ operation: 'resetPassword', req: { payloadAPI: 'REST' } }), false);
   assert.equal(isAnonymousHttpCreate({ operation: 'forgotPassword', req: { payloadAPI: 'REST' } }), false);
 });
+
+test('canonicalApiPath / isLoginPath — formes du chemin servies par Next et Payload', () => {
+  const { canonicalApiPath, isLoginPath } = require('../../lib/account-guards.js');
+  for (const p of ['/api/users/login', '/api/users/login/', '/api/users/LOGIN', '/api/users/%6Cogin', '/api/%75sers/login', '/api//users/login', '/api/users/login?x=1']) {
+    assert.equal(isLoginPath(p), true, p);
+    assert.equal(canonicalApiPath(p), '/api/users/login', p);
+  }
+  for (const p of ['/api/users/me', '/api/users/loginx', '/api/users/%E0%A4%A', '/api/users', '', undefined]) {
+    assert.equal(isLoginPath(p), false, String(p));
+  }
+  // Encodage invalide : chaîne brute (sans exception), casse normalisée
+  assert.equal(canonicalApiPath('/API/users/%E0%A4%A'), '/api/users/%e0%a4%a');
+  assert.equal(canonicalApiPath(''), '/');
+  assert.equal(canonicalApiPath('/'), '/');
+});
+
+test('loginFailureReason — compte verrouillé ou identifiants', () => {
+  const { loginFailureReason } = require('../../lib/account-guards.js');
+  const locked = 'This user is locked due to having too many failed login attempts.';
+  assert.equal(loginFailureReason({ status: 401, message: locked }, locked), 'verrouille');
+  assert.equal(loginFailureReason({ status: 401, message: 'The email or password provided is incorrect.' }, locked), 'identifiants');
+  // Message de verrouillage inconnu (traduction absente) : jamais « verrouille » par défaut
+  assert.equal(loginFailureReason({ status: 401, message: locked }, undefined), 'identifiants');
+  assert.equal(loginFailureReason(null, locked), 'identifiants');
+});

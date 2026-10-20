@@ -60,3 +60,16 @@ test('jsonLimitFor — limite du corps JSON par méthode et par route', () => {
   assert.equal(jsonLimitFor('PUT', '/api/sites/demo'), '256kb');
   assert.equal(jsonLimitFor('POST', '/api/onboardx'), '256kb');
 });
+
+test('authLimiterFor — limiteurs de login et de réinitialisation, quelle que soit la forme du chemin', () => {
+  const { authLimiterFor } = require('../../core/http.js');
+  for (const p of ['/api/users/login', '/api/users/login/', '/api/users/LOGIN', '/api/users/%6Cogin', '/api/%75sers/login', '/api//users/login', '/api/users/login?x=1']) {
+    assert.equal(authLimiterFor(p), 'login', p);
+  }
+  for (const p of ['/api/users/forgot-password', '/api/users/forgot-p%61ssword', '/api/users/RESET-PASSWORD', '/api/users/reset-password/']) {
+    assert.equal(authLimiterFor(p), 'passwordReset', p);
+  }
+  for (const p of ['/api/users/me', '/api/onboard', '/api/sites', '/api/users/loginx', '/api/users/%E0%A4%A']) {
+    assert.equal(authLimiterFor(p), null, p);
+  }
+});

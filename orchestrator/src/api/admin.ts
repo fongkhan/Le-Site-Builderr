@@ -19,8 +19,10 @@ export function testHostingConnection(): Promise<{ ok: boolean; message?: string
   return apiFetch('/api/hosting/test', { method: 'POST' });
 }
 
-// Journal d'audit (admin only) : 50 dernières actions sensibles
+// Journal d'audit (admin only) : actions sensibles, plus récentes d'abord, par pages.
+// Filtres : action (préfixes séparés par des virgules), cible exacte (site ou email).
 export interface AuditEntry {
+  id: string | number;
   action: string;
   actor: string | null;
   target: string | null;
@@ -28,8 +30,23 @@ export interface AuditEntry {
   createdAt: string;
 }
 
-export function fetchAuditLog(): Promise<AuditEntry[]> {
-  return apiFetch<AuditEntry[]>('/api/audit');
+export interface AuditPage {
+  docs: AuditEntry[];
+  totalDocs: number;
+  page: number;
+  totalPages: number;
+  hasNextPage: boolean;
+  limit: number;
+  // Durée de conservation en jours (0 = illimitée)
+  retentionDays: number;
+}
+
+export function fetchAuditLog(params: { action?: string; target?: string; page?: number; limit?: number } = {}): Promise<AuditPage> {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && String(value) !== '') query.set(key, String(value));
+  }
+  return apiFetch<AuditPage>(`/api/audit?${query.toString()}`);
 }
 
 // Vue d'ensemble multi-sites (admin) : totaux + ligne par site (statut, domaine, visites)

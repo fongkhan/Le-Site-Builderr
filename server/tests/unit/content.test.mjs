@@ -133,6 +133,18 @@ test('planPageWrites (f) — doublon en base : le plus ancien est supprimé', ()
   assert.equal(plan.deletes[0].id, 5);
 });
 
+test('planPageWrites (g) — suppressions listées (removed) et doublons (duplicates) distingués', () => {
+  const old = dbPage({ id: 5, updatedAt: '2023-01-01T00:00:00.000Z', title: 'Vieux' });
+  const other = dbPage({ id: 12, slug: 'equipe', navOrder: 1 });
+  const plan = planPageWrites([old, dbPage(), other], [input()], new Set(['fr:equipe']));
+  assert.deepEqual(plan.removed.map((p) => p.id), [12]);
+  assert.deepEqual(plan.duplicates.map((p) => p.id), [5]);
+  // deletes reste la concaténation doublons puis pages listées
+  assert.deepEqual(plan.deletes.map((p) => p.id), [5, 12]);
+  const none = planPageWrites([dbPage()], [input()], new Set());
+  assert.deepEqual([none.removed, none.duplicates], [[], []]);
+});
+
 test('planPageWrites — inchangé après aller-retour par readSitePages', () => {
   const docs = [dbPage(), dbPage({ id: 12, slug: 'en-home', locale: 'en', navOrder: 1, hideFromNav: true, metaDescription: null, layout: [] })];
   const roundTrip = JSON.parse(JSON.stringify(docs.map(toEditorPage)));

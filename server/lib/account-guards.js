@@ -18,4 +18,30 @@ function isAnonymousHttpCreate({ operation, req }) {
   return operation === 'create' && !(req && req.user) && (!req || req.payloadAPI !== 'local');
 }
 
-module.exports = { isLoginFailure, isAnonymousHttpCreate };
+// Chemin d'API canonique, tel que Next et Payload le résolvent : Next décode les segments
+// de la route catch-all (/api/users/%6Cogin → login) et Payload compare les chemins sans
+// tenir compte de la casse (/api/users/LOGIN). Sert aux limiteurs et au hook de login.
+// Encodage invalide : chaîne brute conservée (Next répondra 400).
+function canonicalApiPath(raw) {
+  let p = String(raw ?? '').split('?')[0];
+  try {
+    p = decodeURIComponent(p);
+  } catch {
+    // encodage invalide : chemin laissé tel quel
+  }
+  p = p.toLowerCase().replace(/\/{2,}/g, '/');
+  if (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
+  return p || '/';
+}
+
+function isLoginPath(raw) {
+  return canonicalApiPath(raw) === '/api/users/login';
+}
+
+// Motif d'un échec de login pour le journal : compte verrouillé (message de LockedAuth,
+// dans la langue de la requête) ou identifiants refusés.
+function loginFailureReason(error, lockedMessage) {
+  return lockedMessage && error && error.message === lockedMessage ? 'verrouille' : 'identifiants';
+}
+
+module.exports = { isLoginFailure, isAnonymousHttpCreate, canonicalApiPath, isLoginPath, loginFailureReason };

@@ -109,6 +109,10 @@ jobs:
           cache: npm
           cache-dependency-path: server/package-lock.json
       - run: npm ci
+      # Base temporaire vide (créée puis supprimée) : premier compte, création anonyme,
+      # GraphQL, login unifié sur les chemins non canoniques, journal des échecs
+      - name: Contrôles d'authentification sur base vide
+        run: npx tsx tests/auth-empty-db-check.mjs
       - name: Démarrer le serveur
         run: |
           npx tsx index.js > server.log 2>&1 &

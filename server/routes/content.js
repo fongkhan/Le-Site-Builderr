@@ -6,6 +6,7 @@ const { generateSlug } = require('../lib/paths');
 const { validateTheme } = require('../lib/theme');
 const { sendError, createRouter } = require('../core/http');
 const { logAudit } = require('../core/audit');
+const { themeChangeSummary } = require('../lib/audit-events');
 const content = require('../services/content');
 const submissions = require('../services/submissions');
 const sitesStore = require('../sites-store');
@@ -27,7 +28,12 @@ router.post('/api/site-pages', ...siteAccess, async (req, res) => {
   const invalid = content.validatePagesBody(req.body);
   if (invalid) return res.status(400).json({ error: invalid });
   try {
-    await content.saveSitePages(req.query.site, req.body);
+    const site = req.query.site;
+    const r = (await content.saveSitePages(site, req.body)) || {};
+    // Journal : créations et suppressions de pages seulement. Les mises à jour de texte
+    // (enregistrement automatique de l'éditeur) et les doublons purgés ne sont pas tracés.
+    if (r.created && r.created.length) logAudit(req, 'page.creation', site, `pages=${r.created.join(',')}`);
+    if (r.deleted && r.deleted.length) logAudit(req, 'page.suppression', site, `pages=${r.deleted.join(',')}`);
     res.json({ success: true, message: "Pages enregistrées avec succès !" });
   } catch (e) {
     sendError(res, "Impossible d'enregistrer les pages.", e);
@@ -107,8 +113,13 @@ router.post('/api/theme', ...siteAccess, async (req, res) => {
   }
 
   try {
+    const site = req.query.site;
+    // Thème précédent : base du résumé des changements pour le journal d'audit
+    const prev = await content.readSiteTheme(site).catch(() => null);
     // Seul le thème validé est persisté (pas d'autres clés arbitraires du corps)
-    await content.saveSiteTheme(req.query.site, { theme: themeData.theme });
+    await content.saveSiteTheme(site, { theme: themeData.theme });
+    const summary = themeChangeSummary(prev && prev.theme, themeData.theme);
+    if (summary) logAudit(req, 'theme.modification', site, summary);
     res.json({ success: true, message: "Thème mis à jour avec succès !" });
   } catch (e) {
     sendError(res, "Impossible d'enregistrer le thème.", e);

@@ -100,6 +100,7 @@ import { ValidationError, Forbidden } from 'payload'
 import passwordPolicy from './lib/password-policy.js'
 import sessionOptions from './lib/session.js'
 import accountGuards from './lib/account-guards.js'
+import auditEvents from './lib/audit-events.js'
 
 // Message unique pour tout échec de login (mauvais identifiants OU compte verrouillé) :
 // ne révèle ni l'existence d'un compte ni son verrouillage.
@@ -127,6 +128,10 @@ export default buildConfig({
   secret: process.env.PAYLOAD_SECRET,
   cors: frontendOrigins,
   csrf: frontendOrigins,
+  // GraphQL inutilisé (orchestrateur et panel passent par l'API REST) : désactivé pour
+  // qu'aucune seconde porte d'entrée (login, création de compte…) n'échappe aux
+  // limiteurs Express. La dépendance graphql reste installée (requise par @payloadcms/next).
+  graphQL: { disable: true },
   // Sans SMTP_HOST, Payload écrit les emails dans la console (mode développement)
   ...(process.env.SMTP_HOST
     ? {
@@ -210,6 +215,14 @@ export default buildConfig({
       },
       hooks: {
         beforeOperation: [
+          // Tentative de login : email saisi mémorisé pour le journal d'audit (afterError),
+          // quelle que soit la forme du chemin. Jamais le mot de passe.
+          ({ args, operation, req }: any) => {
+            if (operation === 'login' && req?.context) {
+              req.context.loginAttempt = { email: typeof args?.data?.email === 'string' ? args.data.email : '' }
+            }
+            return args
+          },
           // Aucune création de compte par HTTP sans être connecté, y compris
           // /api/users/first-register (premier compte admin sur une base vide) : les
           // comptes viennent d'un admin ou du seed (API locale, SEED_ADMIN_EMAIL).
@@ -277,23 +290,36 @@ export default buildConfig({
           },
         ],
         afterChange: [
-          // Journal d'audit : trace la création de comptes (la création passe par
-          // l'API REST Payload, hors des endpoints Express — d'où le hook ici).
-          ({ req, doc, operation }) => {
-            if (operation === 'create') {
-              req.payload
-                .create({
-                  collection: 'audit_logs',
-                  data: {
-                    action: 'utilisateur.creation',
-                    actor: (req?.user as any)?.email || 'système',
-                    target: doc.email,
-                    details: `roles=${(doc.roles || []).join(',')}`,
-                  },
-                  overrideAccess: true,
-                })
-                .catch(() => {}) // l'audit n'est jamais bloquant
-            }
+          // Journal d'audit des comptes (création ; modification d'email, rôles, offre,
+          // quota IA, sites, mot de passe — jamais sa valeur). Les comptes passent par l'API
+          // REST Payload, hors des endpoints Express, d'où le hook. DOIT rester EN PREMIER :
+          // le hook suivant (révocation) remet context.passwordChanged à false (lu ici de
+          // façon synchrone). L'update interne de forgot-password (jeton) ne produit aucune
+          // entrée (diff vide). Écriture en arrière-plan : hook exécuté dans la transaction.
+          ({ req, doc, previousDoc, operation, context }: any) => {
+            if (operation !== 'create' && operation !== 'update') return doc
+            const payload = req?.payload
+            const actor = auditEvents.auditActor(req)
+            const passwordChanged = Boolean(context?.passwordChanged)
+            // Champs audités copiés maintenant (jamais password, hash, jeton, sessions)
+            const pick = (d: any) => ({ email: d?.email, roles: d?.roles, plan: d?.plan, aiDailyQuota: d?.aiDailyQuota, sites: d?.sites })
+            const before = pick(previousDoc)
+            const after = pick(doc)
+            // Relations en ids (previousDoc) ou peuplées (doc) : libellés résolus seulement
+            // si les sites changent
+            const sitesTouched = operation === 'create'
+              ? (after.sites || []).length > 0
+              : auditEvents.userChangeSummary({ sites: before.sites }, { sites: after.sites }) !== ''
+            if (operation === 'update' && !sitesTouched && !auditEvents.userChangeSummary(before, after, { passwordChanged })) return doc
+            auditEvents.auditInBackground(async () => {
+              const labels = sitesTouched ? await auditEvents.siteLabelsFor(payload, before.sites, after.sites) : {}
+              if (operation === 'create') {
+                await auditEvents.writeAudit(payload, { action: 'utilisateur.creation', actor, target: after.email, details: auditEvents.userCreationSummary(after, labels) })
+                return
+              }
+              const details = auditEvents.userChangeSummary(before, after, { passwordChanged, siteLabels: labels })
+              if (details) await auditEvents.writeAudit(payload, { action: 'utilisateur.modification', actor, target: after.email, details })
+            })
             return doc
           },
           // Mot de passe modifié : révoque les sessions ouvertes. Seule la session courante
@@ -317,14 +343,64 @@ export default buildConfig({
             return doc
           },
         ],
-        // Login : même réponse pour identifiants invalides et compte verrouillé
+        // Journal d'audit : suppression d'un compte (arrière-plan : dans la transaction)
+        afterDelete: [
+          ({ req, doc }: any) => {
+            const roles = (Array.isArray(doc?.roles) ? doc.roles.map(String).sort() : []).join(',') || '∅'
+            const entry = { action: 'utilisateur.suppression', actor: auditEvents.auditActor(req), target: doc?.email, details: `roles=${roles}` }
+            auditEvents.auditInBackground(() => auditEvents.writeAudit(req?.payload, entry))
+            return doc
+          },
+        ],
+        // Journal d'audit des opérations d'authentification réussies. Renvoie TOUJOURS
+        // result. forgotPassword : result est le jeton de réinitialisation, jamais écrit ;
+        // il n'est non nul que pour un compte existant (et ce hook s'exécute avant le
+        // commit : écriture en arrière-plan). resetPassword écrit par db.updateOne (sans
+        // afterChange) : tracé ici.
+        afterOperation: [
+          ({ args, operation, req, result }: any) => {
+            const email = typeof args?.data?.email === 'string' ? args.data.email.trim().toLowerCase() : ''
+            let entry: any = null
+            if (operation === 'unlock' && result && email) {
+              entry = { action: 'utilisateur.deverrouillage', actor: auditEvents.auditActor(req), target: email }
+            } else if (operation === 'forgotPassword' && result && email) {
+              entry = { action: 'motdepasse.demande-reinit', actor: auditEvents.auditActor(req), target: email, details: '' }
+            } else if (operation === 'resetPassword' && result?.user?.email) {
+              entry = { action: 'motdepasse.reinitialisation', actor: result.user.email, target: result.user.email }
+            }
+            if (entry) auditEvents.auditInBackground(() => auditEvents.writeAudit(req?.payload, entry))
+            return result
+          },
+        ],
+        // Journal d'audit : connexions réussies des admins (de tous les comptes si
+        // AUDIT_LOGINS=true). Arrière-plan : hook exécuté dans la transaction du login.
+        afterLogin: [
+          ({ req, user }: any) => {
+            if (auditEvents.shouldAuditLogin(user, process.env)) {
+              const entry = { action: 'connexion.succes', actor: user.email, target: user.email }
+              auditEvents.auditInBackground(() => auditEvents.writeAudit(req?.payload, entry))
+            }
+            return user
+          },
+        ],
+        // Login : même réponse pour identifiants invalides et compte verrouillé, quelle que
+        // soit la forme du chemin (/api/users/LOGIN, /api/users/%6Cogin…) ; échec tracé
+        // avec l'email masqué.
         afterError: [
-          ({ error, req }: any) => {
-            const where = String(req?.pathname || req?.url || '').split('?')[0]
-            if (!where.endsWith('/users/login')) return
+          async ({ error, req, context }: any) => {
+            const attempt = context?.loginAttempt || req?.context?.loginAttempt
+            if (!attempt && !accountGuards.isLoginPath(req?.pathname)) return
             // Statut 401 (LockedAuth, AuthenticationError) : error.name n'est pas fiable
             // une fois le bundle Next minifié en production
             if (!accountGuards.isLoginFailure(error)) return
+            // Écriture attendue : la transaction du login est déjà annulée (aucune
+            // connexion tenue) et l'entrée existe avant la réponse
+            await auditEvents.writeAudit(req?.payload, {
+              action: 'connexion.echec',
+              actor: 'anonyme',
+              target: auditEvents.maskEmail(attempt?.email),
+              details: `motif=${accountGuards.loginFailureReason(error, req?.t?.('error:userLocked'))}`,
+            })
             return { status: 401, response: { errors: [{ message: LOGIN_FAILED_MESSAGE }] } }
           },
         ],
@@ -778,9 +854,10 @@ export default buildConfig({
       ],
     },
     {
-      // Journal d'audit des actions sensibles (création/suppression de site, comptes,
-      // rollback, builds…). Écrit uniquement par le serveur (overrideAccess) ;
-      // lecture réservée aux admins, aucune modification possible.
+      // Journal d'audit des actions sensibles (sites, comptes, connexions, contenus,
+      // builds…). Écrit uniquement par le serveur (overrideAccess) ; ni modification ni
+      // suppression par l'API ou le panel ; purge de rétention côté serveur
+      // (services/retention.js). Lecture réservée aux admins.
       slug: 'audit_logs',
       admin: {
         useAsTitle: 'action',
@@ -790,7 +867,7 @@ export default buildConfig({
         read: isAdmin,
         create: () => false,
         update: () => false,
-        delete: isAdmin,
+        delete: () => false,
       },
       fields: [
         { name: 'action', type: 'text', required: true, index: true },
@@ -819,6 +896,39 @@ export default buildConfig({
       },
       admin: {
         useAsTitle: 'filename',
+      },
+      // Journal d'audit des ajouts et suppressions faits par l'API REST ou le panel. Les
+      // copies et purges internes (API locale) sont déjà tracées par site.duplication et
+      // site.suppression. Écriture en arrière-plan : hooks exécutés dans la transaction.
+      hooks: {
+        afterChange: [
+          ({ req, doc, operation }: any) => {
+            if (operation !== 'create' || req?.payloadAPI === 'local') return doc
+            const payload = req?.payload
+            const actor = auditEvents.auditActor(req)
+            auditEvents.auditInBackground(async () => auditEvents.writeAudit(payload, {
+              action: 'media.ajout',
+              actor,
+              target: await auditEvents.siteTargetFor(payload, doc?.site),
+              details: `fichier=${doc?.filename} ; type=${doc?.mimeType} ; taille=${doc?.filesize}`,
+            }))
+            return doc
+          },
+        ],
+        afterDelete: [
+          ({ req, doc }: any) => {
+            if (req?.payloadAPI === 'local') return doc
+            const payload = req?.payload
+            const actor = auditEvents.auditActor(req)
+            auditEvents.auditInBackground(async () => auditEvents.writeAudit(payload, {
+              action: 'media.suppression',
+              actor,
+              target: await auditEvents.siteTargetFor(payload, doc?.site),
+              details: `fichier=${doc?.filename}`,
+            }))
+            return doc
+          },
+        ],
       },
       access: {
         read: isAdminOrSiteClient,

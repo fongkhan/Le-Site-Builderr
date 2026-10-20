@@ -54,6 +54,17 @@ En production, l'email de l'admin initial est **obligatoire** (`SEED_ADMIN_EMAIL
 - Cookie de session `Secure` en production (`COOKIE_SECURE=true|false` pour forcer).
 - Les chemins serveur d'un site (`documentRoot`, `repositoryPath`) et le jeton de vérification de domaine ne sont lisibles que par un admin.
 
+### Journal d'audit
+
+Le panneau d'administration (« 🧾 Journal d'audit ») liste les actions sensibles, des plus récentes aux plus anciennes :
+- **Comptes** : création, modification (email, rôles, offre, quota IA, sites rattachés, mot de passe — mention « modifié », jamais la valeur), suppression, déverrouillage ; demande et réalisation d'une réinitialisation de mot de passe.
+- **Connexions** : chaque échec (email **masqué**, ex. `je***@exemple.fr`, et motif : identifiants refusés ou compte verrouillé) ; les connexions réussies des admins (de tous les comptes avec `AUDIT_LOGINS=true`).
+- **Sites et contenus** : sites (création, suppression, duplication, domaine…), pages créées ou supprimées, modifications du thème, articles, médias téléversés ou supprimés, publications, sauvegardes.
+
+Aucun secret, jeton, mot de passe ni adresse IP n'y est écrit. Le panneau filtre par catégorie et par cible exacte (slug d'un site ou email) et charge les entrées par pages (« Charger plus »). Les entrées ne sont ni modifiables ni supprimables, ni par l'API ni par le panel Payload : seule la purge de rétention du serveur les retire, une fois par jour, au-delà de `AUDIT_RETENTION_DAYS` jours (365 par défaut, `0` = jamais) ; chaque purge est elle-même tracée (`journal.purge`). L'historique des builds suit la même règle avec `BUILDS_RETENTION_DAYS`.
+
+Les limiteurs de connexion et de réinitialisation de mot de passe s'appliquent quelle que soit la forme du chemin (casse, caractères encodés, `/` final), comme le message d'échec unifié. L'API GraphQL de Payload est désactivée (l'orchestrateur et le panel n'utilisent que l'API REST). En CI, `npx tsx tests/auth-empty-db-check.mjs` vérifie sur une base vide temporaire qu'aucun premier compte ne peut être créé anonymement.
+
 ---
 
 ## 🚀 Démarrage Rapide

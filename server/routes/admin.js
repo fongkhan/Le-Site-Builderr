@@ -6,6 +6,7 @@ const hosting = require('../core/hosting');
 const stats = require('../lib/stats');
 const { sendError, createRouter } = require('../core/http');
 const { logAudit } = require('../core/audit');
+const { parseAuditQuery, parseRetentionDays } = require('../lib/audit-events');
 const { getPayloadInstance } = require('../core/payload');
 const { getSiteStatsFile } = require('../core/config');
 const { readJsonFile } = require('../services/content');
@@ -101,24 +102,44 @@ router.post('/api/hosting/test', auth.authenticate, auth.requireAdmin, async (re
 });
 
 // --- Journal d'audit (admin only, lecture seule) ---
+// Page d'entrées, plus récentes d'abord : ?page=1&limit=50 (1 à 200), filtres facultatifs
+// ?action=a.,b. (préfixes, contient), ?target= et ?actor= (valeur exacte).
 router.get('/api/audit', auth.authenticate, auth.requireAdmin, async (req, res) => {
+  const query = parseAuditQuery(req.query);
+  if (query.error) return res.status(400).json({ error: query.error });
+  const { page, limit, where } = query;
+  const retentionDays = parseRetentionDays(process.env.AUDIT_RETENTION_DAYS);
   try {
     const payloadInstance = getPayloadInstance();
-    if (!payloadInstance) return res.json([]);
+    if (!payloadInstance) {
+      return res.json({ docs: [], totalDocs: 0, page: 1, totalPages: 0, hasNextPage: false, limit, retentionDays });
+    }
     const out = await payloadInstance.find({
       collection: 'audit_logs',
-      sort: '-createdAt',
-      limit: 50,
+      // Identifiant en second critère : pagination stable à date égale
+      sort: ['-createdAt', '-id'],
+      page,
+      limit,
+      ...(where ? { where } : {}),
       depth: 0,
       overrideAccess: true,
     });
-    res.json(out.docs.map((d) => ({
-      action: d.action,
-      actor: d.actor,
-      target: d.target,
-      details: d.details,
-      createdAt: d.createdAt,
-    })));
+    res.json({
+      docs: out.docs.map((d) => ({
+        id: d.id,
+        action: d.action,
+        actor: d.actor,
+        target: d.target,
+        details: d.details,
+        createdAt: d.createdAt,
+      })),
+      totalDocs: out.totalDocs,
+      page: out.page,
+      totalPages: out.totalPages,
+      hasNextPage: out.hasNextPage,
+      limit,
+      retentionDays,
+    });
   } catch (e) {
     sendError(res, "Impossible de lire le journal d'audit.", e);
   }

@@ -93,12 +93,35 @@ const limiters = {
   ),
 };
 
+// Routes d'authentification servies par Payload (via Next) : le limiteur s'applique au
+// chemin CANONIQUE (décodé, sans casse, « / » répétés ou final ignorés), car Next et
+// Payload servent aussi /api/users/LOGIN ou /api/users/%6Cogin.
+const { canonicalApiPath } = require('../lib/account-guards');
+const AUTH_LIMITED_PATHS = [
+  ['/api/users/login', 'login'],
+  ['/api/users/forgot-password', 'passwordReset'],
+  ['/api/users/reset-password', 'passwordReset'],
+];
+
+// Nom du limiteur d'authentification d'un chemin brut (null : aucun).
+function authLimiterFor(rawPath) {
+  const p = canonicalApiPath(rawPath);
+  const hit = AUTH_LIMITED_PATHS.find(([prefix]) => p === prefix || p.startsWith(prefix + '/'));
+  return hit ? hit[1] : null;
+}
+
+// Middleware unique : mêmes instances de limiteurs (donc même compteur par IP) quelle que
+// soit la forme du chemin.
+function authRateLimits(req, res, next) {
+  const name = authLimiterFor(req.path);
+  if (name) return limiters[name](req, res, next);
+  next();
+}
+
 // Limiteurs montés par préfixe de chemin (le login est servi par Next : le limiter
 // appelle next() vers lui).
 function mountRateLimits(app) {
-  app.use('/api/users/login', limiters.login);
-  app.use('/api/users/forgot-password', limiters.passwordReset);
-  app.use('/api/users/reset-password', limiters.passwordReset);
+  app.use(authRateLimits);
   app.use('/api/onboard', limiters.onboard);
   app.use('/webhook/rebuild', limiters.webhook);
   app.use('/api/contact', limiters.contact);
@@ -214,6 +237,7 @@ module.exports = {
   makeLimiter,
   limiters,
   mountRateLimits,
+  authLimiterFor,
   EXPRESS_ROUTE_PREFIXES,
   isExpressRoute,
   isPublicRoute,

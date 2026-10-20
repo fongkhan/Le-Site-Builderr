@@ -385,7 +385,7 @@ function planPageWrites(existingDocs, inputDocs, deletedKeys) {
   });
   const sent = new Set(inputDocs.map((p) => pageKey(p.slug, p.locale)));
   const removed = [...existingByKey].filter(([key]) => deleted.has(key) && !sent.has(key)).map(([, page]) => page);
-  return { creates, updates, deletes: [...duplicates, ...removed] };
+  return { creates, updates, removed, duplicates, deletes: [...duplicates, ...removed] };
 }
 
 // Enregistre les pages d'un site. Payload : upsert par (site, slug, langue) des seules
@@ -394,6 +394,8 @@ function planPageWrites(existingDocs, inputDocs, deletedKeys) {
 // sa place dans le menu) : elle a pu être créée depuis un autre onglet ou par un autre
 // utilisateur. Une erreur de base est propagée (l'appelant répond 500, rien n'est perdu
 // en silence). Miroir JSON des pages reçues ensuite, s'il y a eu une écriture.
+// Renvoie les clés (langue:slug) des pages créées et supprimées (journal d'audit ;
+// doublons purgés non comptés) ; listes vides en mode sans base.
 async function saveSitePages(siteSlug, body) {
   const docs = body.docs;
   const sentKeys = new Set(docs.map((p) => pageKey(p.slug, p.locale)));
@@ -423,7 +425,10 @@ async function saveSitePages(siteSlug, body) {
     }
     const wrote = plan.creates.length + plan.updates.length + plan.deletes.length > 0;
     if (wrote || !fs.existsSync(getSitePagesFile(siteSlug))) writeJsonFile(getSitePagesFile(siteSlug), { docs });
-    return;
+    return {
+      created: plan.creates.map((p) => pageKey(p.slug, p.locale)),
+      deleted: plan.removed.map((p) => pageKey(p.slug, p.locale)),
+    };
   }
 
   // Mode sans base : même règle sur le fichier JSON (pages absentes conservées)
@@ -437,6 +442,7 @@ async function saveSitePages(siteSlug, body) {
     return !sentKeys.has(key) && !deletedKeys.has(key);
   });
   writeJsonFile(getSitePagesFile(siteSlug), { docs: [...docs, ...keptPrevious] });
+  return { created: [], deleted: [] };
 }
 
 // --- Blog / actualités : articles par site ---

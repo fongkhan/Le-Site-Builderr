@@ -44,6 +44,7 @@ nextApp.prepare()
       process.exit(1);
     });
     scheduleBackups();
+    require('./services/retention').scheduleRetention();
   })
   .catch((err) => {
     // Sans Next, ni l'admin ni l'authentification ne fonctionnent : inutile de survivre.
