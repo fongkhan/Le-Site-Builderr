@@ -38,6 +38,7 @@ const {
   getSiteOwnersMap,
 } = require('../services/sites');
 const build = require('../services/build');
+const { isShuttingDown } = require('../core/shutdown');
 
 const router = createRouter();
 
@@ -80,14 +81,17 @@ router.post('/api/sites', auth.authenticate, auth.requireAdmin, async (req, res)
   const invalid = invalidSiteFields({ name, domain, stack });
   if (invalid) return res.status(400).json({ error: invalid });
 
-  const slug = generateSlug(name);
-  if (!slug) return res.status(400).json({ error: "Nom de site invalide : au moins un caractère alphanumérique est requis." });
+  const baseSlug = generateSlug(name);
+  if (!baseSlug) return res.status(400).json({ error: "Nom de site invalide : au moins un caractère alphanumérique est requis." });
   if (!ensureConfinedPaths(res, { documentRoot, repositoryPath })) return;
 
   try {
-    if (await sitesStore.getSiteBySlug(slug)) {
+    if (await sitesStore.getSiteBySlug(baseSlug)) {
       return res.status(400).json({ error: "Un site avec ce nom/slug existe déjà." });
     }
+    // Restes d'un ancien site sous ce slug (dossier publié, dépôt, brouillon, versions,
+    // fichiers de données) : jamais repris, le nouveau site prend le premier slug libre.
+    const slug = await uniqueSlug(baseSlug);
 
     const newSite = await sitesStore.createSite({
       slug,
@@ -108,7 +112,7 @@ router.post('/api/sites', auth.authenticate, auth.requireAdmin, async (req, res)
     writeJsonFile(getSiteThemeFile(slug), DEFAULT_THEME);
 
     logAudit(req, 'site.creation', slug, `nom=${name}`);
-    res.json({ success: true, site: newSite });
+    res.json({ success: true, site: newSite, ...(slug !== baseSlug ? { renamedFrom: baseSlug } : {}) });
   } catch (e) {
     sendError(res, "Impossible de créer le site.", e);
   }
@@ -187,52 +191,59 @@ router.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (r
     if (build.isSiteBusy(slug)) {
       return res.status(409).json({ error: "Un build ou une prévisualisation de ce site est en cours : réessayez quand il sera terminé." });
     }
-
-    // Fichiers de production : jamais hors du périmètre ni la racine partagée elle-même
-    // (un documentRoot hérité invalide n'est pas supprimé, le site l'est quand même).
-    let removableRoot = null;
-    if (deleteFiles && site.documentRoot) {
-      try {
-        removableRoot = assertStrictlyInside(site.documentRoot, PUBLIC_HTML_DIR);
-      } catch {
-        console.error(`⚠️ [Sites] documentRoot hors périmètre conservé lors de la suppression de ${slug} : ${site.documentRoot}`);
+    // Suppression en cours (posée sans await depuis le contrôle ci-dessus) : rollback,
+    // prévisualisation et publication de ce site sont refusés jusqu'à la fin.
+    build.markDeleting(slug);
+    try {
+      // Fichiers de production : jamais hors du périmètre ni la racine partagée elle-même
+      // (un documentRoot hérité invalide n'est pas supprimé, le site l'est quand même).
+      let removableRoot = null;
+      if (deleteFiles && site.documentRoot) {
+        try {
+          removableRoot = assertStrictlyInside(site.documentRoot, PUBLIC_HTML_DIR);
+        } catch {
+          console.error(`⚠️ [Sites] documentRoot hors périmètre conservé lors de la suppression de ${slug} : ${site.documentRoot}`);
+        }
       }
-    }
 
-    // La suppression Payload nettoie aussi les contenus rattachés (médias et leurs
-    // fichiers compris, sauf ceux qu'un autre site cite encore) et la relation users.sites.
-    // Elle passe AVANT tout retrait de fichiers : si elle échoue, le site reste intact et
-    // en ligne (jamais un site hors ligne mais toujours en base).
-    await sitesStore.deleteSite(slug);
-    // En attente dans la file : retiré (son build serait de toute façon annulé)
-    build.dequeue(slug);
-    purgeSiteData(slug);
+      // La suppression Payload nettoie aussi les contenus rattachés (médias et leurs
+      // fichiers compris, sauf ceux qu'un autre site cite encore) et la relation users.sites.
+      // Elle passe AVANT tout retrait de fichiers : si elle échoue, le site reste intact et
+      // en ligne (jamais un site hors ligne mais toujours en base).
+      await sitesStore.deleteSite(slug);
+      // En attente dans la file : retiré (son build serait de toute façon annulé)
+      build.dequeue(slug);
+      // Données locales, et copie du modèle créée par l'outil pour ce site (dépôt marqué)
+      purgeSiteData(slug, { repositoryPath: site.repositoryPath });
 
-    if (removableRoot && fs.existsSync(removableRoot)) {
-      fs.rmSync(removableRoot, { recursive: true, force: true });
-    }
-
-    // Hébergement distant (cPanel) : retrait du site en ligne, domaine personnalisé lu sur
-    // la fiche déjà chargée. Chaque étape est tentée ; un retrait partiel est signalé.
-    let remote = null;
-    if (hosting.isRemote && deleteFiles) {
-      try {
-        remote = await hosting.removeSite(slug, { customDomain: site.customDomain || '' });
-      } catch (e) {
-        console.error(`⚠️ [Sites] Retrait distant de ${slug} refusé : ${e.message}`);
-        remote = { removed: false, customDomain: 'failed', subdomain: 'failed', files: 'failed' };
+      if (removableRoot && fs.existsSync(removableRoot)) {
+        fs.rmSync(removableRoot, { recursive: true, force: true });
       }
-    }
 
-    const remoteAudit = remote ? ` distant=${remote.removed ? 'ok' : 'partiel'}` : '';
-    logAudit(req, 'site.suppression', req.params.slug, `fichiers=${Boolean(deleteFiles)}${remoteAudit}`);
-    res.json({
-      success: true,
-      message: remote && !remote.removed
-        ? "Site supprimé, mais son retrait de l'hébergement est incomplet : vérifiez le serveur."
-        : "Site supprimé avec succès.",
-      remote,
-    });
+      // Hébergement distant (cPanel) : retrait du site en ligne, domaine personnalisé lu sur
+      // la fiche déjà chargée. Chaque étape est tentée ; un retrait partiel est signalé.
+      let remote = null;
+      if (hosting.isRemote && deleteFiles) {
+        try {
+          remote = await hosting.removeSite(slug, { customDomain: site.customDomain || '' });
+        } catch (e) {
+          console.error(`⚠️ [Sites] Retrait distant de ${slug} refusé : ${e.message}`);
+          remote = { removed: false, customDomain: 'failed', subdomain: 'failed', files: 'failed' };
+        }
+      }
+
+      const remoteAudit = remote ? ` distant=${remote.removed ? 'ok' : 'partiel'}` : '';
+      logAudit(req, 'site.suppression', req.params.slug, `fichiers=${Boolean(deleteFiles)}${remoteAudit}`);
+      res.json({
+        success: true,
+        message: remote && !remote.removed
+          ? "Site supprimé, mais son retrait de l'hébergement est incomplet : vérifiez le serveur."
+          : "Site supprimé avec succès.",
+        remote,
+      });
+    } finally {
+      build.unmarkDeleting(slug);
+    }
   } catch (e) {
     sendError(res, "Impossible de supprimer le site.", e);
   }
@@ -492,14 +503,17 @@ router.get('/api/sites/:slug/builds', auth.authenticate, auth.requireAuth, auth.
 // rien publier. Accessible au propriétaire du site (comme le CMS qu'il édite).
 router.post('/api/sites/:slug/preview-build', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.params.slug), async (req, res) => {
   const slug = req.params.slug;
+  const restarting = () => res.status(503).json({ error: 'Le serveur redémarre : relancez la prévisualisation dans un instant.' });
+  if (isShuttingDown()) return restarting();
   // Astro écrit dans un dossier dist unique : pas de build concurrent. Réservation
   // SYNCHRONE du créneau (aucun await avant) : deux demandes simultanées ne peuvent
-  // pas compiler en même temps.
-  if (!build.tryReserve()) {
+  // pas compiler en même temps. Le site réservé est visible par la suppression (409).
+  if (!build.tryReserve(slug)) {
     return res.status(409).json({ error: "Un build est en cours : réessayez dans un instant." });
   }
   let handedOver = false;
   try {
+    if (build.isSiteDeleting(slug)) return res.status(409).json({ error: 'Ce site est en cours de suppression.' });
     const site = await sitesStore.getSiteBySlug(slug);
     if (!site) return res.status(404).json({ error: "Site non trouvé." });
 
@@ -508,6 +522,8 @@ router.post('/api/sites/:slug/preview-build', auth.authenticate, auth.requireAut
     logAudit(req, 'site.previsualisation', slug);
     res.json({ success: true, url });
   } catch (e) {
+    // Brouillon interrompu par l'arrêt du serveur : rien d'anormal à signaler
+    if (isShuttingDown() && !res.headersSent) return restarting();
     sendError(res, "Impossible de générer la prévisualisation.", e);
   } finally {
     if (!handedOver) build.release();
@@ -517,12 +533,16 @@ router.post('/api/sites/:slug/preview-build', auth.authenticate, auth.requireAut
 // Rollback : republie une version conservée dans le documentRoot (bascule atomique).
 router.post('/api/sites/:slug/rollback', auth.authenticate, auth.requireAdmin, async (req, res) => {
   const slug = req.params.slug;
+  if (isShuttingDown()) return res.status(503).json({ error: 'Le serveur redémarre : réessayez dans un instant.' });
   // Pas de rollback pendant un build (le pipeline remplace justement la cible) ; le
-  // créneau est réservé pendant toute la bascule pour qu'aucun build ne démarre en parallèle.
-  if (!build.tryReserve()) {
+  // créneau est réservé pendant toute la bascule pour qu'aucun build ne démarre en parallèle,
+  // et au nom du site : une suppression attend la fin (409) au lieu de passer pendant les
+  // await et de laisser republier la version d'un site supprimé.
+  if (!build.tryReserve(slug)) {
     return res.status(409).json({ error: "Un build est en cours : réessayez quand il sera terminé." });
   }
   try {
+    if (build.isSiteDeleting(slug)) return res.status(409).json({ error: 'Ce site est en cours de suppression.' });
     const site = await sitesStore.getSiteBySlug(slug);
     if (!site) return res.status(404).json({ error: "Site non trouvé." });
 

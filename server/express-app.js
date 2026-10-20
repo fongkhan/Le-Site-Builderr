@@ -9,11 +9,17 @@ const { mountRateLimits, jsonBodyForExpressRoutes, jsonErrorHandler, isPublicRou
 const auth = require('./auth');
 const { isValidSlug } = require('./lib/paths');
 const { isSwapDirRequest } = require('./lib/fs-swap');
+const fs = require('fs');
+const path = require('path');
+const { assertSafePath } = require('./lib/paths');
+const { notFoundCandidates } = require('./lib/static-404');
+const { isShuttingDown } = require('./core/shutdown');
 
 const ROUTERS = [
   require('./routes/health'),
   require('./routes/sites'),
   require('./routes/admin'),
+  require('./routes/system'),
   require('./routes/content'),
   require('./routes/domains'),
   require('./routes/public'),
@@ -74,6 +80,28 @@ function guardDraft(req, res, next) {
   draftSiteAccess(req, res, next);
 }
 
+// Fichier absent sous /preview ou /draft : la page 404 du site (la plus proche du chemin
+// demandé : /en/404.html pour une page anglaise), sinon une page lisible (navigateur) ou du
+// JSON (API) — jamais la 404 de Next. Lecture plutôt que sendFile : jamais de 304 sur une 404.
+function siteNotFound(root) {
+  return (req, res) => {
+    for (const rel of notFoundCandidates(req.path)) {
+      const file = path.join(root, ...rel.split('/'));
+      try {
+        assertSafePath(file, root);
+        if (!fs.statSync(file).isFile()) continue;
+        return res.status(404).type('html').send(fs.readFileSync(file));
+      } catch {
+        // candidat absent, illisible ou hors de la racine : suivant
+      }
+    }
+    if (req.accepts(['html', 'json']) === 'html') {
+      return sendSignInPage(res, 404, 'Page introuvable', "Cette page n'existe pas (ou plus) sur ce site.");
+    }
+    res.status(404).json({ error: 'Ressource introuvable.' });
+  };
+}
+
 // Brouillon non publié : jamais conservé par un cache partagé ni par le navigateur.
 const noStore = (req, res, next) => {
   res.setHeader('Cache-Control', 'private, no-store');
@@ -82,6 +110,13 @@ const noStore = (req, res, next) => {
 
 function createApp({ nextHandler }) {
   const app = express();
+
+  // Arrêt en cours : la connexion est fermée après la réponse (aucun keep-alive ne retient
+  // le client sur un serveur qui s'arrête).
+  app.use((req, res, next) => {
+    if (isShuttingDown()) res.setHeader('Connection', 'close');
+    next();
+  });
 
   // Derrière un reverse-proxy (o2switch/nginx), faire confiance au proxy pour déduire
   // l'IP client réelle (utilisée par le rate-limit). Conditionné par env : en dev/CI on ne
@@ -112,8 +147,8 @@ function createApp({ nextHandler }) {
 
   // Sites générés servis sous /preview/<slug>/ (le préfixe /sites est réservé aux
   // routes du dashboard React) et brouillons sous /draft/<slug>/ (accès contrôlé).
-  app.use('/preview', noindex, hideSwapDirs, express.static(PUBLIC_HTML_DIR, staticOptions));
-  app.use('/draft', auth.authenticate, guardDraft, noindex, noStore, hideSwapDirs, express.static(DRAFTS_DIR, staticOptions));
+  app.use('/preview', noindex, hideSwapDirs, express.static(PUBLIC_HTML_DIR, staticOptions), siteNotFound(PUBLIC_HTML_DIR));
+  app.use('/draft', auth.authenticate, guardDraft, noindex, noStore, hideSwapDirs, express.static(DRAFTS_DIR, staticOptions), siteNotFound(DRAFTS_DIR));
 
   for (const router of ROUTERS) app.use(router);
 

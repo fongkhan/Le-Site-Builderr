@@ -16,12 +16,13 @@ export function formatDateTimeFr(iso: string | null | undefined): string {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
 }
 
-// Octets → « 12,3 Ko ».
+// Octets → « 12,3 Ko », « 1,5 Go ».
 export function formatBytes(bytes: number | null | undefined): string {
   const n = Number(bytes) || 0;
   if (n < 1024) return `${n} o`;
   if (n < 1024 * 1024) return `${(n / 1024).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Ko`;
-  return `${(n / (1024 * 1024)).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Mo`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Mo`;
+  return `${(n / (1024 * 1024 * 1024)).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Go`;
 }
 
 // Date du jour (heure locale) au format AAAA-MM-JJ, pour un <input type="date">.

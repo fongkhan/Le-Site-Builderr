@@ -11,6 +11,7 @@ import { CreateClientModal } from './CreateClientModal';
 import { StatsBanner } from './panels/StatsBanner';
 import { OverviewPanel } from './panels/OverviewPanel';
 import { HostingPanel } from './panels/HostingPanel';
+import { SystemPanel } from './panels/SystemPanel';
 import { BackupsPanel } from './panels/BackupsPanel';
 import { ScanPanel } from './panels/ScanPanel';
 import { CreateSitePanel } from './panels/CreateSitePanel';
@@ -89,6 +90,8 @@ export function AdminPanel() {
       <OverviewPanel version={version} />
 
       <HostingPanel />
+
+      <SystemPanel version={version} />
 
       <BackupsPanel />
 

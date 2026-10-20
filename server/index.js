@@ -14,6 +14,7 @@ const { seedDefaultData } = require('./services/content');
 const build = require('./services/build');
 const { scheduleBackups } = require('./services/backups');
 const { createApp } = require('./express-app');
+const shutdown = require('./core/shutdown');
 
 if (auth.DEV_NO_AUTH) {
   if (config.IS_PRODUCTION) {
@@ -26,6 +27,8 @@ if (auth.DEV_NO_AUTH) {
 // L'instance Payload n'existe qu'après le boot : les modules reçoivent un getter.
 auth.init(getPayloadInstance);
 config.ensureRuntimeDirs();
+// Sauvegarde interrompue par un arrêt brutal (.part) : aucune ne peut être en cours au démarrage
+for (const n of require('./services/system').removePartialBackups()) console.warn('♻️ [Reprise] sauvegarde interrompue supprimée : ' + n);
 sitesStore.init({ getPayload: getPayloadInstance, sitesFile: config.SITES_FILE });
 seedDefaultData();
 build.resetOnBoot();
@@ -36,9 +39,15 @@ const app = createApp({ nextHandler: nextApp.getRequestHandler() });
 nextApp.prepare()
   .then(async () => {
     await initPayload();
+    // Signal reçu pendant le démarrage : ne pas ouvrir le port
+    if (shutdown.isShuttingDown()) return;
     const server = app.listen(config.PORT, () => {
       console.log(`Serveur Meta-Builder démarré sur http://localhost:${config.PORT}`);
+      // File de builds conservée à l'arrêt : relancée une fois le canal interne
+      // (127.0.0.1:PORT, lu par le build Astro) joignable
+      build.restoreQueue().catch((e) => console.error('♻️ [Reprise] File de builds non restaurée :', e.message));
     });
+    shutdown.attachServer(server);
     server.on('error', (err) => {
       console.error(`❌ [Serveur] Écoute impossible sur le port ${config.PORT} :`, err.message);
       process.exit(1);

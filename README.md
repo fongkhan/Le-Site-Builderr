@@ -216,6 +216,18 @@ Ce que fait le mode cPanel :
 * **Reprise après crash** : au démarrage, un site écarté par une bascule interrompue (`<dossier>.old-…`) est restauré s'il manque, les copies partielles (`.tmp-…`) et les releases inachevées (`<id>.partial`) sont supprimées ; le scan d'import ignore ces dossiers.
 * Copie du bundle statique vers le `documentRoot` du site (simulation o2switch).
 
+### Exploitation : arrêt propre, reprise et panneau Système
+* **Arrêt propre** (`SIGTERM`, `SIGINT`, Ctrl+C) : le serveur cesse d'accepter des connexions, termine les requêtes en cours et attend les tâches de fond (historique, emails), au plus `SHUTDOWN_GRACE_MS` (15 s en production, 3 s sinon). Pendant l'arrêt, `GET /api/health/ready` répond `503 { "status": "stopping" }` ; un second signal (plus d'une seconde après le premier) force l'arrêt.
+* **Build interrompu repris au redémarrage** : un build en cours est arrêté et remis en tête de file, sans échec ni email ; un rollback ou une prévisualisation demandés pendant l'arrêt reçoivent un `503` explicite.
+* **File de publications conservée** dans `server/data/build-queue.json` à chaque changement et relancée au démarrage (les sites supprimés entre-temps sont écartés) : seul un arrêt brutal pendant un build perd ce build.
+* Régler le délai d'arrêt du superviseur **au-dessus** de `SHUTDOWN_GRACE_MS` (systemd `TimeoutStopSec`, `docker stop -t`, PM2 `kill_timeout`).
+* Le lanceur (`npm start`, `start.js`) démarre le serveur et l'orchestrateur sans shell intermédiaire et attend leur arrêt : plus de processus orphelin ni d'`EADDRINUSE` au redémarrage.
+* **Panneau Système** (administration) : version, Node, environnement, hébergement, durée de fonctionnement, espace disque, taille des dossiers (données, médiathèque, sites publiés, versions, brouillons, sauvegardes, dépôts), build et file d'attente, état des sauvegardes.
+* **Données orphelines** (fichiers de données, versions, brouillons et copies du modèle de sites supprimés) : listées puis nettoyées après confirmation (journal d'audit `maintenance.purge`). L'inventaire est recalculé par le serveur ; les dossiers publiés sans site et les dépôts non créés par l'outil sont seulement signalés, jamais supprimés. Nettoyage indisponible sans base de données.
+* La copie du modèle créée par l'outil pour un site (`repositories/<slug>`, marquée) est supprimée avec le site ; un dépôt importé ou préexistant est conservé. Un site créé sur les restes d'un ancien site (dossier publié, versions, données) reçoit un identifiant suffixé (`mon-site-2`).
+* Une page absente sous `/preview` ou `/draft` renvoie la page 404 du site (celle de la langue si elle existe).
+* Publication cPanel : délai d'envoi proportionnel à la taille de l'archive (`CPANEL_UPLOAD_TIMEOUT_MS` pour le fixer) et messages d'erreur explicites (étape, délai), sans hôte ni jeton.
+
 ### Supervision : endpoints de santé
 Publics, sans authentification, sans secret, version ni chemin dans la réponse :
 * `GET /api/health` — vivacité : `200 { "status": "ok", "uptimeS": 42 }` dès que le process répond.

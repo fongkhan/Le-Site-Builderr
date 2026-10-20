@@ -66,6 +66,23 @@ async function listSites() {
   return readJson().map(toApiSite);
 }
 
+// TOUS les sites, sans limite (pagination: false) : inventaire du nettoyage des données
+// orphelines, où un site manquant serait pris pour un site supprimé. listSites reste
+// borné pour l'interface.
+async function listAllSites() {
+  const payload = getPayloadInstance();
+  if (payload) {
+    const res = await payload.find({
+      collection: 'payload_sites',
+      pagination: false,
+      depth: 0,
+      overrideAccess: true
+    });
+    return res.docs.map(toApiSite);
+  }
+  return readJson().map(toApiSite);
+}
+
 async function getSiteBySlug(slug) {
   const payload = getPayloadInstance();
   if (payload) {
@@ -328,6 +345,7 @@ async function migrateFromJson() {
 module.exports = {
   init,
   listSites,
+  listAllSites,
   getSiteBySlug,
   createSite,
   updateSite,

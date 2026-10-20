@@ -115,7 +115,8 @@ jobs:
         run: npx tsx tests/auth-empty-db-check.mjs
       - name: Démarrer le serveur
         run: |
-          npx tsx index.js > server.log 2>&1 &
+          # CLI de tsx lancée directement : SIGTERM lui parvient et il le relaie au serveur
+          node node_modules/tsx/dist/cli.mjs index.js > server.log 2>&1 &
           echo $! > server.pid
           # Attendre que le serveur soit prêt (init Payload + push du schéma + seeding) :
           # /api/health/ready renvoie 200 seulement quand la base répond (-f : 503 = échec)
@@ -131,6 +132,25 @@ jobs:
           exit 1
       - name: Vérifier la matrice de sécurité
         run: node tests/security-check.mjs
+      - name: Arrêt propre (SIGTERM)
+        run: |
+          PID="$(cat server.pid)"
+          kill -TERM "$PID"
+          # Le serveur doit s'arrêter seul (requêtes terminées) en moins de 20 s
+          for i in $(seq 1 40); do
+            kill -0 "$PID" 2>/dev/null || break
+            sleep 0.5
+          done
+          if kill -0 "$PID" 2>/dev/null; then
+            echo "::error::Le serveur tourne encore 20 s après SIGTERM."
+            exit 1
+          fi
+          grep -q "Arrêt propre terminé" server.log || { echo "::error::Arrêt propre non journalisé."; exit 1; }
+          if curl -fsS -o /dev/null http://localhost:4000/api/health 2>/dev/null; then
+            echo "::error::Le port 4000 répond encore après l'arrêt."
+            exit 1
+          fi
+          echo "Arrêt propre OK."
       - name: Logs serveur (en cas d'échec)
         if: failure()
         run: cat server.log

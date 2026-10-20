@@ -184,3 +184,37 @@ test('brouillon — site supprimé pendant la compilation : aucun brouillon écr
   assert.equal(build.isSiteBusy('supprime-en-brouillon'), false);
   assert.equal(build.isBusy(), false);
 });
+
+test('tryReserve(slug) — le site réservé (rollback, brouillon) est occupé jusqu’à release', () => {
+  assert.equal(build.isSiteBusy('reserve'), false);
+  assert.equal(build.tryReserve('reserve'), true);
+  assert.equal(build.isSiteBusy('reserve'), true);
+  assert.equal(build.isSiteBusy('autre'), false);
+  build.release();
+  assert.equal(build.isSiteBusy('reserve'), false);
+  // Sans slug : créneau réservé, aucun site occupé
+  assert.equal(build.tryReserve(), true);
+  assert.equal(build.isSiteBusy('reserve'), false);
+  build.release();
+});
+
+test('markDeleting / unmarkDeleting — suppression en cours visible jusqu’à la dernière fin', () => {
+  assert.equal(build.isSiteDeleting('en-suppression'), false);
+  build.markDeleting('en-suppression');
+  build.markDeleting('en-suppression'); // deux suppressions concurrentes
+  assert.equal(build.isSiteDeleting('en-suppression'), true);
+  assert.equal(build.isSiteDeleting('autre'), false);
+  build.unmarkDeleting('en-suppression');
+  assert.equal(build.isSiteDeleting('en-suppression'), true, 'la seconde suppression est encore en cours');
+  build.unmarkDeleting('en-suppression');
+  assert.equal(build.isSiteDeleting('en-suppression'), false);
+  assert.equal(build.isSiteDeleting(''), false);
+});
+
+test('buildHistoryExcerpt — chemins du serveur masqués, 1 500 derniers caractères', () => {
+  const excerpt = build.buildHistoryExcerpt(`${'x'.repeat(3000)}\nÉcrit dans ${path.join(config.PROJECT_DIR, 'client-template', 'dist')}`);
+  assert.ok(excerpt.length <= 1500);
+  assert.ok(!excerpt.includes(config.PROJECT_DIR), excerpt.slice(-200));
+  assert.match(excerpt, /Écrit dans \.\/client-template\/dist$/);
+  assert.equal(build.buildHistoryExcerpt(undefined), '');
+});

@@ -28,7 +28,9 @@ export function CreateSitePanel({ onCreated }: { onCreated: () => void }) {
         documentRoot: documentRoot.trim() || undefined,
         repositoryPath: repositoryPath.trim() || undefined,
       });
-      toast.success(`Site « ${data.site.name} » créé avec succès !`);
+      toast.success(data.renamedFrom
+        ? `Site « ${data.site.name} » créé sous l'identifiant « ${data.site.slug} » : des fichiers d'un ancien site occupaient « ${data.renamedFrom} ».`
+        : `Site « ${data.site.name} » créé avec succès !`);
       setName('');
       setDomain('');
       setDocumentRoot('');

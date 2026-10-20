@@ -64,6 +64,10 @@ function ensureConfinedPaths(res, { documentRoot, repositoryPath }) {
   }
 }
 
+// Marqueur déposé par provisionRepository dans les dépôts qu'il crée : seuls ceux-là sont
+// supprimés avec leur site (un dépôt importé ou préexistant n'est jamais effacé).
+const PROVISIONED_MARKER = '.meta-builder-provisioned';
+
 // Copie le client-template dans le dépôt local du site (code source complet, sans Git).
 // Renvoie true si le dossier a été créé par cet appel (un dossier existant n'est jamais
 // touché : l'appelant ne doit supprimer que ce qu'il a créé).
@@ -71,6 +75,8 @@ function provisionRepository(repoPath) {
   if (repoPath && !fs.existsSync(repoPath)) {
     try {
       fs.mkdirSync(repoPath, { recursive: true });
+      // Dossier créé par l'outil : marqué avant la copie (même interrompue, il est à nous)
+      fs.writeFileSync(path.join(repoPath, PROVISIONED_MARKER), `Copie du modèle créée par Meta-Builder le ${new Date().toISOString()}\n`);
       fs.cpSync(ASTRO_PROJECT_DIR, repoPath, {
         recursive: true,
         filter: (src) => {
@@ -91,7 +97,9 @@ function provisionRepository(repoPath) {
 // Supprime les données locales d'un site : fichiers JSON (pages, thème, articles,
 // statistiques), versions conservées et brouillon. Un site recréé plus tard sous le même
 // slug repart ainsi de zéro (pas de rollback possible vers le contenu de l'ancien site).
-function purgeSiteData(slug) {
+// La copie du modèle (REPOSITORIES_DIR/<slug>) n'est supprimée que si c'est bien le dépôt
+// du site ET que l'outil l'a créée (marqueur) : un dépôt importé ou préexistant est conservé.
+function purgeSiteData(slug, { repositoryPath } = {}) {
   if (!isValidSlug(slug)) return;
   for (const file of [getSitePagesFile(slug), getSiteThemeFile(slug), getSitePostsFile(slug), getSiteStatsFile(slug)]) {
     try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch (e) { console.error(`Suppression de ${file} impossible :`, e.message); }
@@ -105,25 +113,55 @@ function purgeSiteData(slug) {
       console.error(`Nettoyage de ${base}/${slug} impossible :`, e.message);
     }
   }
+  if (repositoryPath) {
+    try {
+      const ownRepo = path.resolve(REPOSITORIES_DIR, slug);
+      if (path.resolve(String(repositoryPath)) === ownRepo && isProvisionedRepository(ownRepo)) {
+        fs.rmSync(assertStrictlyInside(ownRepo, REPOSITORIES_DIR), { recursive: true, force: true });
+      }
+    } catch (e) {
+      console.error(`Nettoyage du dépôt de ${slug} impossible :`, e.message);
+    }
+  }
 }
 
-// Dossiers qu'un nouveau site occuperait sous ce slug et qui existent déjà (site supprimé
-// en conservant ses fichiers, dossier repéré par le scan mais pas importé…). Un brouillon
-// resté sous ce slug (build de brouillon terminé après la suppression du site) compte
-// aussi : le garde /draft/<slug> le servirait sinon au propriétaire du nouveau site.
+// Vrai si le dossier est un dépôt créé par provisionRepository (marqueur présent).
+function isProvisionedRepository(dir) {
+  try {
+    return fs.lstatSync(path.join(dir, PROVISIONED_MARKER)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+// Restes qu'un nouveau site reprendrait sous ce slug (site supprimé en conservant ses
+// fichiers, dossier repéré par le scan mais pas importé, données orphelines…) : dossier
+// publié, dépôt, brouillon (le garde /draft/<slug> le servirait au propriétaire du nouveau
+// site), versions conservées (rollback vers l'ancien site), fichiers de données (pages,
+// thème, articles, statistiques, messages reçus). Slug invalide : toujours occupé.
 function slugHasLeftovers(slug) {
-  return fs.existsSync(defaultDocumentRoot(slug))
-    || fs.existsSync(path.join(REPOSITORIES_DIR, slug))
-    || fs.existsSync(path.join(DRAFTS_DIR, slug));
+  try {
+    return fs.existsSync(defaultDocumentRoot(slug))
+      || fs.existsSync(path.join(REPOSITORIES_DIR, slug))
+      || fs.existsSync(path.join(DRAFTS_DIR, slug))
+      || fs.existsSync(path.join(RELEASES_DIR, slug))
+      || [getSitePagesFile, getSiteThemeFile, getSitePostsFile, getSiteStatsFile].some((fileOf) => fs.existsSync(fileOf(slug)))
+      || fs.existsSync(require('./submissions').getSubmissionsFile(slug));
+  } catch {
+    return true;
+  }
 }
 
 // Premier slug libre : base, base-2, base-3… Libre = ni enregistré, ni déjà présent sur le
 // disque : un nouveau site n'écrit (et, en cas d'échec, ne supprime) jamais un dossier
-// qu'il n'a pas créé.
+// qu'il n'a pas créé. Un slug qui deviendrait invalide (trop long) arrête la recherche.
 async function uniqueSlug(base) {
   let slug = base;
   let suffix = 2;
-  while ((await sitesStore.getSiteBySlug(slug)) || slugHasLeftovers(slug)) slug = `${base}-${suffix++}`;
+  while ((await sitesStore.getSiteBySlug(slug)) || slugHasLeftovers(slug)) {
+    slug = `${base}-${suffix++}`;
+    if (!isValidSlug(slug)) throw new Error(`Aucun identifiant de site disponible pour ${JSON.stringify(String(base).slice(0, 60))}.`);
+  }
   return slug;
 }
 
@@ -258,4 +296,7 @@ module.exports = {
   getSiteOwnersMap,
   getSiteOwners,
   attachSiteToUser,
+  slugHasLeftovers,
+  isProvisionedRepository,
+  PROVISIONED_MARKER,
 };

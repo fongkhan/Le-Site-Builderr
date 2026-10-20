@@ -12,7 +12,9 @@ export function fetchSiteOwners(): Promise<Record<string, string[]>> {
   return apiFetch<Record<string, string[]>>('/api/sites/owners');
 }
 
-export function createSite(input: { name: string; domain?: string; stack?: string; documentRoot?: string; repositoryPath?: string }): Promise<{ success: boolean; site: Site }> {
+// renamedFrom : slug d'origine, occupé par les fichiers d'un ancien site (le site a reçu
+// un slug suffixé, ex. « mon-site-2 »)
+export function createSite(input: { name: string; domain?: string; stack?: string; documentRoot?: string; repositoryPath?: string }): Promise<{ success: boolean; site: Site; renamedFrom?: string }> {
   return apiFetch('/api/sites', { method: 'POST', body: JSON.stringify(input) });
 }
 

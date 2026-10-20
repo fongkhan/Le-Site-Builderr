@@ -139,6 +139,8 @@ export interface RebuildResponse {
   queued?: boolean;
   position?: number;
   alreadyBuilding?: boolean;
+  // Serveur en cours d'arrêt : la publication démarrera à sa reprise
+  restarting?: boolean;
 }
 
 export interface FileEntry {

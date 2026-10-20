@@ -17,6 +17,10 @@ const { getPayloadInstance } = require('../core/payload');
 const { sendMail } = require('../core/mail');
 const { LOG_PATH_MASKS, redactLogText, appendBuildLog, appendRawBuildLog, resetBuildLog } = require('../core/build-log');
 const { createPathRedactor, displayPath } = require('../lib/log-redact');
+const { serializeQueue, parseQueue } = require('../lib/build-queue');
+const { writeJsonAtomic } = require('../lib/json-file');
+const { trackBackground } = require('../core/shutdown');
+const { BUILD_QUEUE_FILE } = require('../core/config');
 const {
   envInt,
   PORT,
@@ -46,9 +50,23 @@ const buildStatus = {
   buildingSite: null
 };
 
-// File d'attente FIFO de slugs (dédupliquée). Perdue au restart : acceptable,
-// le verrou physique orphelin est nettoyé au boot (resetOnBoot).
+// File d'attente FIFO de slugs (dédupliquée), conservée sur disque à chaque changement
+// (data/build-queue.json, relue au démarrage par restoreQueue). Le verrou physique
+// orphelin est nettoyé au boot (resetOnBoot).
 const buildQueue = [];
+
+// Arrêt du serveur en cours (beginShutdown) : plus aucun build lancé, la file est gardée.
+let draining = false;
+// Fichier de la file : null tant que restoreQueue n'a pas été appelé (persistance inactive :
+// les tests unitaires n'écrivent jamais dans data/).
+let queueFile = null;
+// Raison de l'interruption du build en cours : 'shutdown' → remis en file, pas d'échec.
+let abortReason = null;
+// Site d'une opération exclusive réservée (rollback, brouillon, webhook) : vu par isSiteBusy.
+let reservedSite = null;
+// Sites en cours de suppression (nombre de suppressions en cours par slug) : ni rollback,
+// ni brouillon, ni publication demandée pour eux tant qu'elle dure.
+const deletingSites = new Map();
 
 // Déclencheur (email) et heure de départ des builds, pour l'historique (collection
 // « builds ») et les notifications. Volatiles comme la file : perte au restart OK.
@@ -98,6 +116,66 @@ function resetOnBoot() {
   }
 }
 
+// Sauvegarde de la file (après chaque changement) : un arrêt, même brutal, ne perd jamais
+// une publication acceptée (202 « en file »). Inactive tant que restoreQueue n'a pas été
+// appelé. Un échec d'écriture est journalisé, jamais bloquant.
+function persistQueue() {
+  if (!queueFile) return;
+  try {
+    const entries = buildQueue.map((slug) => ({ slug, triggeredBy: queuedTriggers.get(slug) || 'système' }));
+    writeJsonAtomic(queueFile, serializeQueue(entries), { pretty: false });
+  } catch (e) {
+    console.error("⚠️ [Build] File d'attente non sauvegardée :", e.message);
+  }
+}
+
+// Démarrage : relit la file conservée et relance les publications en attente. La relecture
+// et la remise en file sont synchrones (aucun build ne peut s'intercaler) ; les sites
+// supprimés pendant l'arrêt sont ensuite écartés. Le journal de build (lisible par
+// d'autres clients) ne cite aucun slug. Renvoie le nombre de publications relancées.
+async function restoreQueue({ file = BUILD_QUEUE_FILE } = {}) {
+  if (draining) return 0;
+  let entries = [];
+  try {
+    entries = parseQueue(fs.readFileSync(file, 'utf-8'));
+  } catch (e) {
+    if (e.code !== 'ENOENT') console.error('♻️ [Reprise] File de builds illisible, ignorée :', e.message);
+  }
+  queueFile = file;
+  const restored = [];
+  for (const { slug, triggeredBy } of entries) {
+    if (buildQueue.includes(slug)) continue;
+    buildQueue.push(slug);
+    queuedTriggers.set(slug, triggeredBy);
+    restored.push(slug);
+  }
+  persistQueue();
+
+  for (const slug of restored) {
+    let site;
+    try {
+      site = await sitesStore.getSiteBySlug(slug);
+    } catch {
+      continue; // base injoignable : gardé (startBuild revérifie)
+    }
+    if (site) continue;
+    const idx = buildQueue.indexOf(slug);
+    if (idx !== -1) {
+      buildQueue.splice(idx, 1);
+      queuedTriggers.delete(slug);
+    }
+    console.warn(`♻️ [Reprise] build de « ${slug} » abandonné : site supprimé.`);
+  }
+
+  const remaining = restored.filter((slug) => buildQueue.includes(slug));
+  persistQueue();
+  if (remaining.length === 0) return 0;
+  console.log(`♻️ [Reprise] File de builds restaurée : ${remaining.length} site(s) (${remaining.join(', ')}).`);
+  appendBuildLog(`REPRISE : ${remaining.length} publication(s) en attente relancée(s) après le redémarrage.`);
+  drainQueue();
+  return remaining.length;
+}
+
 // Comparaison à temps constant (pas d'indice sur le jeton via le temps de réponse).
 function isValidBuildToken(value) {
   if (typeof value !== 'string' || value.length !== BUILD_TOKEN.length) return false;
@@ -109,9 +187,27 @@ function isValidBuildToken(value) {
 let launchingSite = null;
 let draftSite = null;
 
-// Vrai si un build ou un brouillon de CE site est en cours (ou en train de démarrer).
+// Vrai si un build, un brouillon ou une opération réservée (rollback) de CE site est en
+// cours (ou en train de démarrer).
 function isSiteBusy(siteSlug) {
-  return Boolean(siteSlug) && (buildStatus.buildingSite === siteSlug || launchingSite === siteSlug || draftSite === siteSlug);
+  return Boolean(siteSlug) && (buildStatus.buildingSite === siteSlug || launchingSite === siteSlug || draftSite === siteSlug || reservedSite === siteSlug);
+}
+
+// Suppression d'un site en cours (DELETE /api/sites/:slug) : posée de façon synchrone
+// juste après le contrôle isSiteBusy, retirée en fin de suppression (succès ou échec).
+function markDeleting(siteSlug) {
+  if (!siteSlug) return;
+  deletingSites.set(siteSlug, (deletingSites.get(siteSlug) || 0) + 1);
+}
+
+function unmarkDeleting(siteSlug) {
+  const count = deletingSites.get(siteSlug) || 0;
+  if (count <= 1) deletingSites.delete(siteSlug);
+  else deletingSites.set(siteSlug, count - 1);
+}
+
+function isSiteDeleting(siteSlug) {
+  return Boolean(siteSlug) && deletingSites.has(siteSlug);
 }
 
 // Retire un site de la file d'attente (site supprimé). Vrai s'il y attendait.
@@ -120,6 +216,7 @@ function dequeue(siteSlug) {
   if (idx === -1) return false;
   buildQueue.splice(idx, 1);
   queuedTriggers.delete(siteSlug);
+  persistQueue();
   appendBuildLog(`FILE D'ATTENTE : "${siteSlug}" retiré (site supprimé).`);
   return true;
 }
@@ -171,9 +268,12 @@ function isBusy() {
 
 // Réserve SYNCHRONEMENT le créneau de build s'il est libre (aucun await intercalé :
 // Node étant mono-thread, deux requêtes concurrentes ne peuvent pas réserver toutes deux).
-function tryReserve() {
-  if (isBusy()) return false;
+// siteSlug : site concerné, visible par isSiteBusy (une suppression attend la fin). Jamais
+// de réservation pendant l'arrêt du serveur.
+function tryReserve(siteSlug = null) {
+  if (draining || isBusy()) return false;
   buildLockHeld = true;
+  reservedSite = siteSlug || null;
   return true;
 }
 
@@ -182,14 +282,29 @@ function tryReserve() {
 function release() {
   buildLockHeld = false;
   launchingSite = null;
+  reservedSite = null;
   drainQueue();
 }
 
 // Lance un build dont le créneau est déjà réservé ; un échec de lancement libère le
 // verrou et relance la file.
 function launch(siteSlug, triggeredBy, failureLabel = 'Erreur de lancement du build :') {
+  if (draining) {
+    // Créneau réservé juste avant l'arrêt : le site repart en tête de file, et sera publié
+    // au redémarrage
+    const idx = buildQueue.indexOf(siteSlug);
+    if (idx !== -1) buildQueue.splice(idx, 1);
+    buildQueue.unshift(siteSlug);
+    queuedTriggers.set(siteSlug, triggeredBy || 'système');
+    persistQueue();
+    buildLockHeld = false;
+    launchingSite = null;
+    reservedSite = null;
+    return;
+  }
   buildTriggers.set(siteSlug, triggeredBy || 'système');
   launchingSite = siteSlug;
+  reservedSite = null; // relayé par launchingSite puis buildingSite
   startBuild(siteSlug).catch((e) => {
     console.error(failureLabel, e.message);
     buildStatus.inProgress = false;
@@ -205,16 +320,19 @@ function enqueue(siteSlug, triggeredBy) {
   if (existingIdx !== -1) return existingIdx + 1;
   const position = buildQueue.push(siteSlug);
   queuedTriggers.set(siteSlug, triggeredBy || 'système');
+  persistQueue();
   appendBuildLog(`FILE D'ATTENTE : "${siteSlug}" ajouté (position ${position}).`);
   return position;
 }
 
 // Dépile et lance le build suivant. Appelée à CHAQUE fin de build (succès ou erreur).
+// Jamais pendant l'arrêt du serveur : la file est conservée pour le redémarrage.
 function drainQueue() {
-  if (buildQueue.length === 0 || buildLockHeld || fs.existsSync(LOCK_FILE)) return;
+  if (draining || buildQueue.length === 0 || buildLockHeld || fs.existsSync(LOCK_FILE)) return;
   const nextSlug = buildQueue.shift();
   const triggeredBy = queuedTriggers.get(nextSlug);
   queuedTriggers.delete(nextSlug);
+  persistQueue();
   buildLockHeld = true; // réserver le créneau avant l'await de startBuild
   appendBuildLog(`FILE D'ATTENTE : lancement du build suivant (${nextSlug}), ${buildQueue.length} restant(s).`);
   launch(nextSlug, triggeredBy, 'Erreur de lancement du build en file :');
@@ -265,7 +383,8 @@ function finalizeBuild(siteSlug, siteName, status, excerpt) {
   buildStartTimes.delete(siteSlug);
   buildTriggers.delete(siteSlug);
 
-  (async () => {
+  // Tâches de fond attendues par l'arrêt propre (core/shutdown)
+  trackBackground((async () => {
     const payloadInstance = getPayloadInstance();
     if (!payloadInstance) return;
     // Lecture seule : un site supprimé pendant son build n'est jamais recréé.
@@ -273,14 +392,21 @@ function finalizeBuild(siteSlug, siteName, status, excerpt) {
     if (!siteId) return;
     await payloadInstance.create({
       collection: 'builds',
-      data: { site: siteId, status, durationMs, triggeredBy, logExcerpt: String(excerpt || '').slice(-1500) },
+      data: { site: siteId, status, durationMs, triggeredBy, logExcerpt: buildHistoryExcerpt(excerpt) },
       overrideAccess: true,
     });
-  })().catch((e) => console.error('Historique de build non enregistré :', e.message));
+  })()).catch((e) => console.error('Historique de build non enregistré :', e.message));
 
-  notifyBuildResult(siteSlug, siteName, status, durationMs).catch((e) =>
+  trackBackground(notifyBuildResult(siteSlug, siteName, status, durationMs)).catch((e) =>
     console.error('Notification de build non envoyée :', e.message)
   );
+}
+
+// Extrait de sortie conservé dans l'historique des builds (lisible par le client
+// propriétaire), quel que soit le statut : chemins du serveur masqués, 1 500 derniers
+// caractères.
+function buildHistoryExcerpt(text) {
+  return redactLogText(String(text || '')).slice(-1500);
 }
 
 // Email de fin de build aux propriétaires du site.
@@ -312,6 +438,13 @@ let currentRun = null;
 // le dist. log=true : la sortie est recopiée en direct dans le journal (plafonnée) ; un
 // brouillon ne l'écrit pas (journal lisible par les propriétaires du dernier build).
 function runAstroBuild(command, env, callback, { log = true } = {}) {
+  // Arrêt du serveur commencé pendant la préparation (thème, lecture du site) : rien n'est
+  // compilé, le build est remis en file comme s'il avait été interrompu
+  if (draining) {
+    const error = new Error('Build interrompu : le serveur redémarre.');
+    error.interrupted = true;
+    return callback(error, '', '');
+  }
   let written = 0;
   let capped = false;
   const writeOutput = (text) => {
@@ -342,25 +475,67 @@ function runAstroBuild(command, env, callback, { log = true } = {}) {
       if (currentRun === run) currentRun = null;
       flushOutput();
       let error = null;
-      if (timedOut) {
+      if (abortReason === 'shutdown' && !timedOut) {
+        // Interrompu par l'arrêt du serveur : remis en file, ni échec ni notification
+        error = new Error('Build interrompu : le serveur redémarre.');
+        error.interrupted = true;
+      } else if (timedOut) {
         error = new Error(`Build interrompu après ${Math.round(BUILD_TIMEOUT_MS / 1000)} s (délai maximal BUILD_TIMEOUT_MS dépassé).`);
       } else if (code !== 0) {
         error = new Error(signal ? `Build interrompu (signal ${signal}).` : `Build échoué (code de sortie ${code}).`);
       }
+      abortReason = null;
       callback(error, tail, tail);
     },
     (err) => {
       if (currentRun === run) currentRun = null;
+      abortReason = null;
       callback(err, '', '');
     }
   );
 }
 
-// Arrêt gracieux : tue l'arbre de processus du build en cours (s'il y en a un). Le build
-// se termine alors en erreur par son chemin normal (verrou libéré dans le finally).
-function abortCurrent() {
+// Tue l'arbre de processus du build en cours (s'il y en a un). Le build se termine alors
+// par son chemin normal (verrou libéré dans le finally) : en erreur, ou remis en file si
+// reason vaut 'shutdown'.
+function abortCurrent({ reason = null } = {}) {
   if (!currentRun) return false;
+  abortReason = reason;
   currentRun.kill();
+  return true;
+}
+
+// Arrêt du serveur : plus aucun build lancé, file sauvegardée, build en cours interrompu
+// (il sera remis en tête de file). Vrai si un build a été interrompu.
+function beginShutdown() {
+  draining = true;
+  persistQueue();
+  return abortCurrent({ reason: 'shutdown' });
+}
+
+// Remet un build interrompu par l'arrêt en tête de file (repris au redémarrage). Ni statut
+// de site, ni historique, ni email : ce n'est pas un échec.
+function requeueForRestart(siteSlug, message) {
+  if (buildQueue[0] !== siteSlug) {
+    const idx = buildQueue.indexOf(siteSlug);
+    if (idx !== -1) buildQueue.splice(idx, 1);
+    buildQueue.unshift(siteSlug);
+    queuedTriggers.set(siteSlug, buildTriggers.get(siteSlug) || queuedTriggers.get(siteSlug) || 'système');
+  }
+  buildStartTimes.delete(siteSlug);
+  buildTriggers.delete(siteSlug);
+  buildStatus.status = 'error';
+  buildStatus.error = message;
+  appendBuildLog(`INTERROMPU : ${message}`, { gap: true });
+  persistQueue();
+}
+
+// Délai d'arrêt dépassé pendant une publication : le site est remis en tête de file avant
+// la sortie du process (dont le gestionnaire 'exit' tue l'arbre du build). Vrai si remis.
+function requeueCurrentForRestart() {
+  const siteSlug = buildStatus.buildingSite;
+  if (!siteSlug || buildQueue[0] === siteSlug) return false;
+  requeueForRestart(siteSlug, "Arrêt du serveur pendant la publication : le déploiement reprendra au redémarrage.");
   return true;
 }
 
@@ -386,6 +561,7 @@ function buildCommand() {
 // Ne touche NI la production (documentRoot), NI les releases, NI le statut du site.
 // Partage le verrou de build : Astro écrit dans le même dossier dist.
 async function startDraftBuild(siteSlug) {
+  if (draining) { const e = new Error('Le serveur redémarre.'); e.interrupted = true; throw e; }
   const site = await sitesStore.getSiteBySlug(siteSlug);
   if (!site) throw new Error('Site introuvable.');
 
@@ -583,6 +759,10 @@ function cancelDeletedSiteBuild(siteSlug) {
 async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
   activeBuildingSite = null;
   activeBasePath = '/';
+  if (error && error.interrupted) {
+    requeueForRestart(siteSlug, "Build interrompu par l'arrêt du serveur : il reprendra automatiquement au redémarrage.");
+    return;
+  }
 
   if (error) {
     console.error(`Erreur de build : ${error.message}`);
@@ -662,8 +842,8 @@ async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
     }
     try {
       appendBuildLog(`Publication cPanel vers public_html/${siteSlug}...`);
-      await hosting.publish(siteSlug, DIST_DIR);
-      appendBuildLog(`PUBLICATION cPanel SUCCÈS (https://${site.domain}).`);
+      const published = await hosting.publish(siteSlug, DIST_DIR);
+      appendBuildLog(`PUBLICATION cPanel SUCCÈS (https://${site.domain}) — archive de ${((Number(published && published.bytes) || 0) / (1024 * 1024)).toFixed(1).replace('.', ',')} Mo.`);
       try {
         const ssl = await hosting.getSslStatus(site.domain);
         await sitesStore.updateSite(siteSlug, { sslStatus: ssl });
@@ -705,4 +885,12 @@ module.exports = {
   dequeue,
   sanitizedEnv,
   abortCurrent,
+  restoreQueue,
+  persistQueue,
+  beginShutdown,
+  requeueCurrentForRestart,
+  markDeleting,
+  unmarkDeleting,
+  isSiteDeleting,
+  buildHistoryExcerpt,
 };
