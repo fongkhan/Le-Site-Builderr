@@ -19,3 +19,31 @@ process.on('uncaughtException', (err) => {
   }
   console.error('⚠️ [Process] Exception non-capturée (tolérée en dev) :', (err && err.stack) || err);
 });
+
+// Arrêt du serveur (Ctrl+C, docker stop, systemctl stop…) : le build en cours tourne
+// dans son propre groupe de processus (setsid) et ne reçoit donc PAS le signal du
+// terminal. On l'interrompt (abortCurrent) puis on sort ; à la sortie, quelle qu'en soit
+// la cause (signal, process.exit après une exception), tout arbre de commande encore
+// vivant est tué de façon synchrone : aucun npm/astro orphelin n'écrit dans le dist
+// pendant le build du serveur suivant.
+const { killActiveSync } = require('../lib/run-command');
+
+process.on('exit', () => {
+  killActiveSync('SIGKILL');
+});
+
+let shuttingDown = false;
+function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`🛑 [Process] ${signal} reçu : arrêt du serveur.`);
+  try {
+    // Chargé à la demande : ce module est requis avant tout le reste au démarrage
+    if (require('../services/build').abortCurrent()) console.log('🛑 [Process] Build en cours interrompu.');
+  } catch (err) {
+    console.error('⚠️ [Process] Interruption du build impossible :', err && err.message);
+  }
+  process.exit(0);
+}
+
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => shutdown(signal));

@@ -3,6 +3,7 @@ import { postgresAdapter } from '@payloadcms/db-postgres'
 import { lexicalEditor } from '@payloadcms/richtext-lexical'
 import { nodemailerAdapter } from '@payloadcms/email-nodemailer'
 import path from 'path'
+import { createRequire } from 'module'
 import { fileURLToPath } from 'url'
 import { Access } from 'payload'
 
@@ -17,6 +18,18 @@ if (!process.env.PAYLOAD_SECRET || process.env.PAYLOAD_SECRET.length < 16) {
 }
 
 const dbUri = process.env.DATABASE_URI
+
+// Médiathèque : taille maximale d'un fichier téléversé (Mo, défaut 8).
+const MEDIA_MAX_MB = Number.parseInt(process.env.MEDIA_MAX_MB ?? '', 10) || 8
+
+// sharp (redimensionnement des images) est optionnel : sans lui, les fichiers sont
+// conservés tels quels.
+let sharp: any = null
+try {
+  sharp = createRequire(import.meta.url)('sharp')
+} catch {
+  console.warn('⚠️ [Médias] sharp indisponible : les images téléversées ne seront pas redimensionnées.')
+}
 
 // Access Control Helpers
 const userIsAdmin = (user: any) => Boolean(user && user.roles && user.roles.includes('admin'))
@@ -80,6 +93,36 @@ const frontendOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:5173')
 // Lien de réinitialisation pointant vers le front (première origine configurée)
 const resetPasswordUrl = (token: string) => `${frontendOrigins[0]}/reset-password?token=${token}`
 
+// --- Comptes : politique de mot de passe, sessions, login (collection users) ---
+// Imports regroupés ici (hissés par ESM) pour isoler les modifications de la collection users.
+// Modules CommonJS du serveur : import par défaut (interop tsx et Next).
+import { ValidationError, Forbidden } from 'payload'
+import passwordPolicy from './lib/password-policy.js'
+import sessionOptions from './lib/session.js'
+import accountGuards from './lib/account-guards.js'
+
+// Message unique pour tout échec de login (mauvais identifiants OU compte verrouillé) :
+// ne révèle ni l'existence d'un compte ni son verrouillage.
+const LOGIN_FAILED_MESSAGE = 'Email ou mot de passe incorrect, ou compte temporairement verrouillé.'
+
+// Email servant à la politique de mot de passe : celui envoyé, sinon celui du compte visé.
+async function passwordPolicyEmail({ args, operation, req }: any): Promise<string> {
+  if (typeof args.data?.email === 'string') return args.data.email
+  try {
+    if (operation === 'update' && args.id !== undefined) {
+      const doc = await req.payload.findByID({ collection: 'users', id: args.id, depth: 0, overrideAccess: true, req })
+      return doc?.email || ''
+    }
+    if (operation === 'resetPassword' && typeof args.data?.token === 'string') {
+      const doc = await req.payload.db.findOne({ collection: 'users', where: { resetPasswordToken: { equals: args.data.token } }, req })
+      return doc?.email || ''
+    }
+  } catch {
+    // compte introuvable : l'opération échouera ensuite d'elle-même
+  }
+  return ''
+}
+
 export default buildConfig({
   secret: process.env.PAYLOAD_SECRET,
   cors: frontendOrigins,
@@ -101,6 +144,19 @@ export default buildConfig({
         }),
       }
     : {}),
+  // Téléversements : taille bornée (413 au-delà) et un seul fichier par requête. Les
+  // fichiers en transit restent en MÉMOIRE (useTempFiles: false) : Payload analyse le
+  // multipart AVANT le contrôle d'accès et n'efface ses fichiers temporaires qu'après une
+  // création réussie, si bien qu'une requête refusée (même anonyme) laisserait un
+  // fichier sur disque à chaque appel. Au plus MEDIA_MAX_MB en mémoire, libérés en fin
+  // de requête.
+  upload: {
+    limits: { fileSize: MEDIA_MAX_MB * 1024 * 1024, files: 1 },
+    abortOnLimit: true,
+    responseOnLimit: `Image trop volumineuse (${MEDIA_MAX_MB} Mo maximum).`,
+    useTempFiles: false,
+  },
+  ...(sharp ? { sharp } : {}),
   editor: lexicalEditor({}),
   db: postgresAdapter({
     pool: {
@@ -112,6 +168,8 @@ export default buildConfig({
     {
       slug: 'users',
       auth: {
+        // Cookie Secure en production (surchargeable par COOKIE_SECURE)
+        cookies: sessionOptions.authCookieOptions(process.env),
         forgotPassword: {
           generateEmailSubject: () => 'Réinitialisation de votre mot de passe — MetaSite Builder',
           generateEmailHTML: (args) => {
@@ -146,9 +204,65 @@ export default buildConfig({
         delete: isAdmin,
         read: isAdminOrSelf,
         update: isAdminOrSelf,
+        // Déverrouillage réservé aux admins. L'accès est vérifié avant la recherche du
+        // compte : 403 identique que l'email existe ou non (pas d'énumération).
+        unlock: isAdmin,
       },
       hooks: {
+        beforeOperation: [
+          // Aucune création de compte par HTTP sans être connecté, y compris
+          // /api/users/first-register (premier compte admin sur une base vide) : les
+          // comptes viennent d'un admin ou du seed (API locale, SEED_ADMIN_EMAIL).
+          ({ args, operation, req }: any) => {
+            if (accountGuards.isAnonymousHttpCreate({ operation, req })) throw new Forbidden(req.t)
+            return args
+          },
+          // Politique de mot de passe sur les appels HTTP (REST, GraphQL). L'API locale
+          // (seed de développement) n'est pas concernée.
+          async ({ args, operation, req }: any) => {
+            if (!['create', 'update', 'resetPassword'].includes(operation)) return args
+            if (operation === 'resetPassword') req.context.resetPassword = true
+            if (req.payloadAPI === 'local') return args
+            const password = args.data?.password
+            if (password === undefined || password === null || password === '') return args
+            // Opération que le contrôle d'accès refusera de toute façon : on le laisse
+            // répondre (403) sans rien révéler du compte visé.
+            const user = req.user
+            const admin = userIsAdmin(user)
+            if (operation === 'create' && !admin) return args
+            if (operation === 'update' && !admin) {
+              if (!user || (args.id !== undefined && String(args.id) !== String(user.id))) return args
+            }
+            // Mise à jour groupée (sans id) par un client : seul son propre compte est visé
+            const email = operation === 'update' && args.id === undefined && !admin && typeof args.data?.email !== 'string'
+              ? user.email
+              : await passwordPolicyEmail({ args, operation, req })
+            const message = passwordPolicy.checkPassword(password, { email })
+            if (message) {
+              const err = new ValidationError({ collection: 'users', errors: [{ message, path: 'password' }] }, req.t)
+              // Message principal en français (affiché tel quel par l'orchestrateur)
+              err.message = message
+              throw err
+            }
+            return args
+          },
+        ],
+        beforeValidate: [
+          // Réinitialisation du mot de passe : toutes les sessions existantes sont
+          // révoquées (Payload ajoute ensuite la session de la réinitialisation).
+          ({ data, req }: any) => {
+            if (req?.context?.resetPassword && data) data.sessions = []
+            return data
+          },
+        ],
         beforeChange: [
+          // Changement de mot de passe : les autres sessions seront révoquées après écriture
+          ({ data, operation, context }: any) => {
+            if (operation === 'update' && typeof data?.password === 'string' && data.password) {
+              context.passwordChanged = true
+            }
+            return data
+          },
           // Empêche un client de s'auto-promouvoir, de s'attribuer des sites ou de modifier
           // son quota IA : seuls les admins (ou les appels système sans user) le peuvent.
           ({ req, data, originalDoc, operation }) => {
@@ -181,6 +295,37 @@ export default buildConfig({
                 .catch(() => {}) // l'audit n'est jamais bloquant
             }
             return doc
+          },
+          // Mot de passe modifié : révoque les sessions ouvertes. Seule la session courante
+          // est conservée quand l'utilisateur modifie son propre compte.
+          async ({ req, doc, operation, context }: any) => {
+            if (operation !== 'update' || !context?.passwordChanged) return doc
+            context.passwordChanged = false
+            try {
+              const self = req?.user && String(req.user.id) === String(doc.id)
+              const current = self && req.user._sid
+              // Document complet relu en base, comme le fait Payload (logout) : une écriture
+              // partielle { sessions } effacerait les champs select multiples (roles).
+              const stored = await req.payload.db.findOne({ collection: 'users', where: { id: { equals: doc.id } }, req })
+              if (!stored) return doc
+              stored.sessions = current ? (stored.sessions || []).filter((s: any) => s?.id === current) : []
+              stored.updatedAt = null // date de modification déjà posée par la mise à jour
+              await req.payload.db.updateOne({ collection: 'users', id: doc.id, data: stored, req, returning: false })
+            } catch (err: any) {
+              console.error('❌ [Comptes] Révocation des sessions impossible :', err?.message || err)
+            }
+            return doc
+          },
+        ],
+        // Login : même réponse pour identifiants invalides et compte verrouillé
+        afterError: [
+          ({ error, req }: any) => {
+            const where = String(req?.pathname || req?.url || '').split('?')[0]
+            if (!where.endsWith('/users/login')) return
+            // Statut 401 (LockedAuth, AuthenticationError) : error.name n'est pas fiable
+            // une fois le bundle Next minifié en production
+            if (!accountGuards.isLoginFailure(error)) return
+            return { status: 401, response: { errors: [{ message: LOGIN_FAILED_MESSAGE }] } }
           },
         ],
       },
@@ -262,10 +407,14 @@ export default buildConfig({
         {
           name: 'documentRoot',
           type: 'text',
+          // Chemin serveur : jamais exposé aux clients par l'API REST
+          access: { read: isAdmin },
         },
         {
           name: 'repositoryPath',
           type: 'text',
+          // Chemin serveur : jamais exposé aux clients par l'API REST
+          access: { read: isAdmin },
         },
         {
           name: 'stack',
@@ -312,6 +461,7 @@ export default buildConfig({
         {
           name: 'domainVerifyToken',
           type: 'text',
+          access: { read: isAdmin },
           admin: { description: 'Jeton de vérification TXT (généré automatiquement).' },
         },
         // --- Mesure d'audience (analytics) : chargée après consentement RGPD ---
@@ -379,6 +529,18 @@ export default buildConfig({
           // SEO : <meta name="description">
           name: 'metaDescription',
           type: 'textarea',
+        },
+        {
+          // Position dans le menu (écrite par le CMS) ; sans valeur : en fin de menu
+          name: 'navOrder',
+          type: 'number',
+          index: true,
+        },
+        {
+          // Page publiée mais absente du menu de navigation (reste dans le sitemap)
+          name: 'hideFromNav',
+          type: 'checkbox',
+          defaultValue: false,
         },
         siteRelationField(),
         {
@@ -644,7 +806,16 @@ export default buildConfig({
       slug: 'media',
       upload: {
         staticDir: path.resolve(dirname, 'uploads'),
-        mimeTypes: ['image/*'],
+        // Images matricielles uniquement : un SVG peut embarquer du script (XSS sur le
+        // domaine du site publié).
+        mimeTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif'],
+        // Grandes photos ramenées à 2400 px maximum (jamais agrandies), si sharp est là.
+        ...(sharp ? { resizeOptions: { width: 2400, height: 2400, fit: 'inside', withoutEnlargement: true } } : {}),
+        // Fichiers servis à des comptes authentifiés : cache navigateur seulement.
+        modifyResponseHeaders: ({ headers }: { headers: Headers }) => {
+          headers.set('Cache-Control', 'private, max-age=86400')
+          return headers
+        },
       },
       admin: {
         useAsTitle: 'filename',
@@ -694,6 +865,40 @@ export default buildConfig({
         { name: 'durationMs', type: 'number' },
         { name: 'triggeredBy', type: 'text' },
         { name: 'logExcerpt', type: 'textarea' },
+      ],
+    },
+    {
+      // Messages reçus par les formulaires des sites publiés (contact, rendez-vous).
+      // Écrits uniquement par le serveur (overrideAccess) ; le propriétaire du site les
+      // lit et les supprime, l'orchestrateur passe par /api/sites/:slug/submissions.
+      slug: 'submissions',
+      admin: {
+        useAsTitle: 'name',
+        defaultColumns: ['site', 'kind', 'name', 'email', 'read', 'createdAt'],
+      },
+      access: {
+        read: isAdminOrSiteClient,
+        create: () => false,
+        update: () => false,
+        delete: isAdminOrSiteClient,
+      },
+      fields: [
+        siteRelationField({ index: true }),
+        {
+          name: 'kind',
+          type: 'select',
+          options: [
+            { label: 'Contact', value: 'contact' },
+            { label: 'Rendez-vous', value: 'appointment' },
+          ],
+          defaultValue: 'contact',
+          required: true,
+        },
+        { name: 'name', type: 'text', required: true },
+        { name: 'email', type: 'text', required: true },
+        { name: 'phone', type: 'text' },
+        { name: 'message', type: 'textarea', required: true },
+        { name: 'read', type: 'checkbox', defaultValue: false, index: true },
       ],
     },
   ],

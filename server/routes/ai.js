@@ -8,6 +8,7 @@ const hosting = require('../core/hosting');
 const plans = require('../lib/plans');
 const { runOnboard, runAssist } = require('../ai');
 const { generateSlug } = require('../lib/paths');
+const { publicSiteView } = require('../lib/sites-view');
 const { sendError, createRouter } = require('../core/http');
 const { logAudit } = require('../core/audit');
 const { getPayloadInstance } = require('../core/payload');
@@ -52,6 +53,8 @@ router.get('/api/config', auth.authenticate, auth.requireAuth, (req, res) => {
     devNoAuth: auth.DEV_NO_AUTH,
     // Où consulter un site publié : vrai domaine (cpanel) ou copie locale (simulation)
     hostingMode: hosting.isRemote ? 'cpanel' : 'simulation',
+    // Taille maximale d'une image téléversée (Mo), alignée sur la limite de Payload
+    mediaMaxMb: require('../lib/media-policy').mediaMaxMb(),
     // null = illimité (admin) ; sinon { limit, used, remaining }
     aiQuota: aiQuota.getQuota(req.user),
     // Offre du compte : null = sans limite (admin). Sinon { plan, label, maxSites, aiDailyQuota }
@@ -176,7 +179,8 @@ router.post('/api/onboard', auth.authenticate, auth.requireAuth, async (req, res
       qualification: result.qualification,
       pages,
       theme,
-      site: newSite
+      // Chemins serveur et jeton de domaine : jamais renvoyés à un client
+      site: publicSiteView(newSite, { isAdmin: auth.isAdmin(req.user) })
     });
   } catch (error) {
     // Aucun site exploitable : création défaite et créneau IA rendu (jamais décompté).

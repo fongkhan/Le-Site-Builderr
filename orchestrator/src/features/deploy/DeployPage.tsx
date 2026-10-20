@@ -170,7 +170,10 @@ export function DeployPage() {
         )}
 
         <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', borderTop: '1px solid var(--border-color)', paddingTop: 15 }}>
-          <strong>Note :</strong> les fichiers compilés sont copiés vers <code>{site.documentRoot}</code>.
+          <strong>Note :</strong>{' '}
+          {site.documentRoot
+            ? <>les fichiers compilés sont copiés vers <code>{site.documentRoot}</code>.</>
+            : <>les fichiers compilés sont copiés dans l'espace d'hébergement de votre site.</>}
         </div>
       </div>
 

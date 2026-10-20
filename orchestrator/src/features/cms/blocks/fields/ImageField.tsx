@@ -1,10 +1,9 @@
 import { useId, useRef, useState } from 'react';
 import { uploadMedia } from '../../../../api/media';
-import { errorMessage } from '../../../../api/client';
 import { useToast } from '../../../../components/ui/ToastContext';
+import { useConfig } from '../../../../state/ConfigContext';
 import { COMPACT_INPUT_STYLE, ICON_BUTTON_STYLE } from './styles';
-
-const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+import { ACCEPTED_TYPES, FORMAT_ERROR, exceedsUploadLimit, sizeErrorMessage, uploadErrorMessage, uploadLimitMb } from './uploadPolicy';
 
 interface ImageFieldProps {
   siteSlug: string;
@@ -24,16 +23,18 @@ export function ImageField({ siteSlug, value, placeholder, onChange, label, aria
   const id = useId();
   const toast = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
+  // Limite annoncée par le serveur (MEDIA_MAX_MB) ; inconnue → le serveur seul en juge
+  const limitMb = uploadLimitMb(useConfig().config?.mediaMaxMb);
   const [uploading, setUploading] = useState(false);
 
   const handleFile = async (file: File | undefined) => {
     if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      toast.error('Veuillez choisir un fichier image (PNG, JPEG, WebP…).');
+    if (!ACCEPTED_TYPES.includes(file.type)) {
+      toast.error(FORMAT_ERROR);
       return;
     }
-    if (file.size > MAX_UPLOAD_BYTES) {
-      toast.error('Image trop volumineuse (4 Mo maximum).');
+    if (exceedsUploadLimit(file.size, limitMb)) {
+      toast.error(sizeErrorMessage(limitMb));
       return;
     }
     setUploading(true);
@@ -42,7 +43,7 @@ export function ImageField({ siteSlug, value, placeholder, onChange, label, aria
       onChange(url);
       toast.success('Image téléversée dans la médiathèque.');
     } catch (err) {
-      toast.error(errorMessage(err, 'Échec du téléversement.'));
+      toast.error(uploadErrorMessage(err, limitMb));
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -74,7 +75,7 @@ export function ImageField({ siteSlug, value, placeholder, onChange, label, aria
         >
           {uploading ? '…' : '📤'}
         </button>
-        <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => handleFile(e.target.files?.[0])} />
+        <input ref={fileRef} type="file" accept={ACCEPTED_TYPES.join(',')} style={{ display: 'none' }} onChange={(e) => handleFile(e.target.files?.[0])} />
       </div>
     </div>
   );

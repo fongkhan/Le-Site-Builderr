@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { PagesData } from '../../../types';
 import {
+  canMovePage,
+  duplicateBlock,
+  editGroupKey,
   findBlock,
+  insertBlockAt,
+  moveAnnouncement,
+  movePage,
+  restoreItem,
+  restoreRemovedItem,
   insertBlock,
   moveBlock,
   pageDeletionBlocker,
@@ -142,5 +150,127 @@ describe('opérations sur les pages', () => {
     expect(toServerPages(next, deleted)).toMatchObject({ deleted: [{ slug: 'contact', locale: 'fr' }] });
     expect(toServerPages(next)).not.toHaveProperty('deleted');
     expect(removedPages(pages, updatePage(pages, pages[1].id, (p) => { p.title = 'x'; }))).toEqual([]);
+  });
+});
+
+describe('ordre du menu : movePage', () => {
+  const three = () => toEditorPages({
+    docs: [
+      { title: 'Accueil', slug: 'home', layout: [] },
+      { title: 'Home', slug: 'home', locale: 'en', layout: [] },
+      { title: 'Tarifs', slug: 'tarifs', layout: [] },
+      { title: 'Équipe', slug: 'equipe', layout: [] },
+    ],
+  });
+
+  it('échange avec la page voisine de même langue, sans bouger les autres langues', () => {
+    const pages = three();
+    const up = movePage(pages, pages[2].id, -1);
+    expect(up.map((p) => p.slug)).toEqual(['tarifs', 'home', 'home', 'equipe']);
+    expect(up[1]).toBe(pages[1]); // page anglaise à sa place
+    const down = movePage(pages, pages[2].id, 1);
+    expect(down.map((p) => p.slug)).toEqual(['home', 'home', 'equipe', 'tarifs']);
+  });
+
+  it('aux bornes du menu de sa langue, ou page inconnue : aucun effet', () => {
+    const pages = three();
+    expect(movePage(pages, pages[0].id, -1)).toBe(pages);
+    expect(movePage(pages, pages[3].id, 1)).toBe(pages);
+    expect(movePage(pages, pages[1].id, 1)).toBe(pages); // seule page anglaise
+    expect(movePage(pages, 'inconnue', 1)).toBe(pages);
+    expect(canMovePage(pages, pages[0].id, -1)).toBe(false);
+    expect(canMovePage(pages, pages[0].id, 1)).toBe(true);
+    expect(canMovePage(pages, pages[1].id, -1)).toBe(false);
+  });
+
+  it('l’ordre de la liste envoyée suit le déplacement (navOrder côté serveur)', () => {
+    const pages = three();
+    expect(toServerPages(movePage(pages, pages[3].id, -1)).docs.map((p) => p.slug)).toEqual(['home', 'home', 'equipe', 'tarifs']);
+  });
+});
+
+describe('duplication et restauration', () => {
+  it('duplicateBlock : copie profonde, nouvel identifiant, insérée après l’original', () => {
+    const pages = load();
+    const faq = pages[0].layout[1];
+    const next = duplicateBlock(pages, faq.id);
+    const layout = next[0].layout;
+    expect(layout).toHaveLength(4);
+    expect(layout[1]).toBe(faq);
+    expect(layout[2].id).not.toBe(faq.id);
+    expect({ ...layout[2], id: faq.id }).toEqual(faq);
+    expect(layout[2].items).not.toBe(faq.items); // copie profonde
+    expect(next[1]).toBe(pages[1]);
+    expect(duplicateBlock(pages, 'inconnu')).toBe(pages);
+  });
+
+  it('restoreItem : réinsère à l’index, borné à la longueur actuelle', () => {
+    const list = ['a', 'c'];
+    expect(restoreItem(list, 1, 'b')).toEqual(['a', 'b', 'c']);
+    expect(restoreItem(list, 9, 'z')).toEqual(['a', 'c', 'z']);
+    expect(restoreItem([], 3, 'x')).toEqual(['x']);
+    expect(list).toEqual(['a', 'c']); // liste d'origine intacte
+  });
+
+  it('duplicateBlock : la copie ne reprend aucun identifiant de ligne (base : clé en double)', () => {
+    const pages = toEditorPages({
+      docs: [{ title: 'A', slug: 'home', layout: [{ blockType: 'faq', title: 'FAQ', items: [{ id: 'row-1', question: 'Q', answer: 'R' }] } as never] }],
+    });
+    const original = pages[0].layout[0];
+    const copy = duplicateBlock(pages, original.id)[0].layout[1];
+    expect(JSON.stringify(copy)).not.toContain('row-1');
+    expect(copy.items).toEqual([{ question: 'Q', answer: 'R' }]);
+    expect(original.items?.[0]).toHaveProperty('id', 'row-1'); // original intact
+  });
+
+  it('restoreRemovedItem : « Annuler » du toast après un Ctrl+Z ne crée pas de doublon', () => {
+    const q2 = { question: 'Q2', answer: 'R2' };
+    const before = [{ question: 'Q1', answer: 'R1' }, q2, { question: 'Q3', answer: 'R3' }];
+    const after = [before[0], before[2]];
+    expect(restoreRemovedItem(after, 1, q2, 0)).toEqual(before);
+    // Déjà rétabli par l'historique : rien à faire
+    expect(restoreRemovedItem(structuredClone(before), 1, q2, 0)).toBeNull();
+    // Deux éléments identiques (gabarits vides) : l'autre copie ne bloque pas la restauration
+    const blank = { question: '', answer: '' };
+    expect(restoreRemovedItem([blank], 1, blank, 1)).toEqual([blank, blank]);
+    expect(restoreRemovedItem([blank, blank], 1, blank, 1)).toBeNull();
+  });
+
+  it('updateBlock : recette sans effet → pages d’origine (ni historique ni envoi)', () => {
+    const pages = load();
+    const faq = pages[0].layout[1];
+    expect(updateBlock(pages, faq.id, () => {})).toBe(pages);
+    expect(updateBlock(pages, faq.id, (b) => { b.title = 'FAQ'; })).toBe(pages);
+    expect(updateBlock(pages, faq.id, (b) => { b.title = 'Questions'; })).not.toBe(pages);
+  });
+
+  it('insertBlockAt : remet une section supprimée à sa place, une seule fois', () => {
+    const pages = load();
+    const faq = pages[0].layout[1];
+    const without = removeBlock(pages, faq.id);
+    const back = insertBlockAt(without, pages[0].id, faq, 1);
+    expect(back[0].layout.map((b) => b.id)).toEqual(pages[0].layout.map((b) => b.id));
+    expect(insertBlockAt(back, pages[0].id, faq, 1)).toBe(back);
+    expect(insertBlockAt(without, 'page-disparue', faq, 1)).toBe(without);
+  });
+});
+
+describe('annonces et regroupement de l’historique', () => {
+  it('moveAnnouncement : position humaine (à partir de 1)', () => {
+    expect(moveAnnouncement('FAQ', 0, 3)).toBe('Section FAQ déplacée en position 1 sur 3.');
+    expect(moveAnnouncement('Pied de page', 2, 3)).toBe('Section Pied de page déplacée en position 3 sur 3.');
+  });
+
+  it('editGroupKey : page + bloc + champ, sinon pas de regroupement', () => {
+    const pages = load();
+    const hero = pages[0].layout[0];
+    const typed = updateBlock(pages, hero.id, (b) => { b.title = 'Bienvenue !'; });
+    expect(editGroupKey(pages, typed)).toBe(`${pages[0].id}:${hero.id}:title`);
+    const two = updateBlock(pages, hero.id, (b) => { b.title = 'x'; b.subtitle = 'y'; });
+    expect(editGroupKey(pages, two)).toBeUndefined();
+    const renamed = updatePage(pages, pages[1].id, (p) => { p.title = 'Nous écrire'; });
+    expect(editGroupKey(pages, renamed)).toBe(`${pages[1].id}::title`);
+    expect(editGroupKey(pages, moveBlock(pages, hero.id, 1))).toBeUndefined();
+    expect(editGroupKey(pages, removePage(pages, pages[1].id))).toBeUndefined();
   });
 });

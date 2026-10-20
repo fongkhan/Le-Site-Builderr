@@ -1,5 +1,6 @@
 ---
 import { safeHttpUrl } from '../../lib/url';
+import { t } from '../../lib/ui-strings.mjs';
 
 interface ProductItem {
   name?: string;
@@ -14,10 +15,13 @@ interface Props {
   };
   /** Cible du bouton selon son libellé (ancre du formulaire de la page) ; sans cible, pas de bouton. */
   ctaTarget?: (label?: string) => string | null;
+  /** Langue de la page (libellés d'interface, lib/ui-strings.mjs). */
+  locale?: string;
 }
 
-const { data, ctaTarget } = Astro.props;
-// Pas de lien d'achat côté CMS : « Commander » mène au formulaire de la page.
+const { data, ctaTarget, locale } = Astro.props;
+// Pas de lien d'achat côté CMS : « Commander » mène au formulaire de la page. La cible
+// est choisie sur le libellé français (règle de ctaTarget) ; seul le texte affiché est traduit.
 const ctaHref = ctaTarget ? ctaTarget('Commander') : null;
 const products = (data.products || []).filter(Boolean).map((p) => ({ ...p, image: safeHttpUrl(p.image) }));
 ---
@@ -35,7 +39,7 @@ const products = (data.products || []).filter(Boolean).map((p) => ({ ...p, image
             {product.name && <h3>{product.name}</h3>}
             {product.price && <span class="price">{product.price}</span>}
             {ctaHref && (
-              <a class="buy-button" href={ctaHref} aria-label={product.name ? `Commander « ${product.name} »` : undefined}>Commander</a>
+              <a class="buy-button" href={ctaHref} aria-label={product.name ? t(locale, 'orderProduct', { name: product.name }) : undefined}>{t(locale, 'order')}</a>
             )}
           </div>
         </div>

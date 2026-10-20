@@ -1,14 +1,67 @@
-import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { useEffect, useRef } from 'react';
+import { Link, NavigationType, NavLink, Outlet, useLocation, useNavigate, useNavigation, useNavigationType } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { useBuildStatus } from '../../state/BuildStatusContext';
 import { useConfig } from '../../state/ConfigContext';
+import { useSites } from '../../state/SitesContext';
+import { APP_BRAND, routeTitle } from '../../lib/routeTitle';
 import { SparklesIcon, CPanelIcon, BlocksIcon } from '../ui/Icons';
+
+// Titre de l'onglet selon la route (nom du site courant si connu). La marque seule est
+// rétablie en quittant l'espace connecté (page de connexion).
+function useDocumentTitle(pathname: string) {
+  const { getSite } = useSites();
+  const slugMatch = /^\/sites\/([^/]+)/.exec(pathname);
+  let siteName: string | undefined;
+  if (slugMatch) {
+    try {
+      siteName = getSite(decodeURIComponent(slugMatch[1]))?.name;
+    } catch {
+      siteName = undefined;
+    }
+  }
+  useEffect(() => {
+    document.title = routeTitle(pathname, siteName);
+  }, [pathname, siteName]);
+  useEffect(() => () => {
+    document.title = APP_BRAND;
+  }, []);
+}
+
+// Le focus doit-il passer sur le contenu principal ? Seulement pour un changement de page
+// demandé par l'utilisateur (lien, retour arrière : PUSH ou POP). Une redirection (REPLACE :
+// « / » → /sites, site → onglet Design, à l'ouverture de l'application) ne le déplace
+// pas : au premier Tab, le lien d'évitement et le menu restent accessibles.
+// eslint-disable-next-line react-refresh/only-export-components
+export function shouldFocusMain(previousPath: string, pathname: string, navigationType: NavigationType): boolean {
+  return previousPath !== pathname && navigationType !== NavigationType.Replace;
+}
+
+// Focus sur le contenu principal à chaque changement de page (lecteurs d'écran, clavier) :
+// jamais au premier affichage (redirections initiales comprises), ni quand seul le
+// query-string change.
+function useFocusMainOnNavigation(pathname: string) {
+  const mainRef = useRef<HTMLElement>(null);
+  const previous = useRef(pathname);
+  const navigationType = useNavigationType();
+  useEffect(() => {
+    const focus = shouldFocusMain(previous.current, pathname, navigationType);
+    previous.current = pathname;
+    if (focus) mainRef.current?.focus({ preventScroll: true });
+  }, [pathname, navigationType]);
+  return mainRef;
+}
 
 export function AppLayout() {
   const { user, isAdmin, logout } = useAuth();
   const navigate = useNavigate();
   const buildStatus = useBuildStatus();
   const devNoAuth = Boolean(useConfig().config?.devNoAuth);
+  const { pathname } = useLocation();
+  // Chargement d'une page à la demande (route lazy) : barre fine + aria-busy
+  const pageLoading = useNavigation().state === 'loading';
+  useDocumentTitle(pathname);
+  const mainRef = useFocusMainOnNavigation(pathname);
 
   const handleLogout = async () => {
     await logout();
@@ -17,6 +70,19 @@ export function AppLayout() {
 
   return (
     <div className="app-container">
+      <a
+        href="#contenu"
+        className="skip-link"
+        onClick={(e) => {
+          // Focus direct : l'URL ne garde pas d'ancre et le routeur n'est pas sollicité
+          e.preventDefault();
+          mainRef.current?.focus();
+        }}
+      >
+        Aller au contenu
+      </a>
+      {pageLoading && <div className="route-progress" aria-hidden />}
+      <div role="status" className="sr-only">{pageLoading ? 'Chargement de la page…' : ''}</div>
       {devNoAuth && (
         <div className="dev-banner">
           ⚠️ Mode développement sans authentification (DEV_NO_AUTH) — toutes les requêtes sont traitées comme un admin. Ne jamais utiliser en production.
@@ -60,7 +126,7 @@ export function AppLayout() {
           </div>
         </div>
       </header>
-      <main className="main-content">
+      <main id="contenu" tabIndex={-1} ref={mainRef} className="main-content" aria-busy={pageLoading || undefined}>
         <Outlet />
       </main>
     </div>

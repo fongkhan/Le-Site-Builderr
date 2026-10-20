@@ -45,3 +45,18 @@ test('asyncHandler — une promesse rejetée est transmise à next()', async () 
   const errMw = (err, req, res, next) => next(err);
   assert.equal(asyncHandler(errMw), errMw); // middlewares d'erreur inchangés
 });
+
+test('jsonLimitFor — limite du corps JSON par méthode et par route', () => {
+  const { jsonLimitFor } = require('../../core/http.js');
+  assert.equal(jsonLimitFor('GET', '/api/site-pages'), null);
+  assert.equal(jsonLimitFor('DELETE', '/api/sites/demo'), null);
+  assert.equal(jsonLimitFor('HEAD', '/api/sites'), null);
+  assert.equal(jsonLimitFor('OPTIONS', '/api/onboard'), null);
+  assert.equal(jsonLimitFor('POST', '/api/onboard'), '10mb');
+  assert.equal(jsonLimitFor('POST', '/api/site-pages'), '2mb');
+  assert.equal(jsonLimitFor('POST', '/api/site-posts'), '2mb');
+  assert.equal(jsonLimitFor('POST', '/api/theme'), '2mb');
+  assert.equal(jsonLimitFor('POST', '/api/sites'), '256kb');
+  assert.equal(jsonLimitFor('PUT', '/api/sites/demo'), '256kb');
+  assert.equal(jsonLimitFor('POST', '/api/onboardx'), '256kb');
+});

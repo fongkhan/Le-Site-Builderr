@@ -592,3 +592,100 @@ body {
   font-size: 0.85rem;
   font-weight: 600;
 }
+
+/* ---- Accessibilité : focus visible, navigation clavier, animations réduites ---- */
+
+/* Anneau de focus clavier sur tout élément interactif (spécificité nulle : un
+   composant peut le personnaliser, jamais le supprimer sans alternative). */
+:where(a, button, select, input, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+}
+
+/* Champs : l'outline est remplacé par une ombre bien contrastée */
+.input-text:focus-visible {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.65);
+}
+
+/* Contenu principal focalisé par programme (changement de page) : pas d'anneau */
+#contenu:focus {
+  outline: none;
+}
+
+/* Masqué à l'écran, lu par les lecteurs d'écran */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Lien d'évitement : hors écran jusqu'au focus clavier */
+.skip-link {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 3000;
+  padding: 10px 16px;
+  border-radius: 8px;
+  background: var(--accent-blue);
+  color: white;
+  font-weight: 600;
+  text-decoration: none;
+  transform: translateY(-200%);
+}
+
+.skip-link:focus,
+.skip-link:focus-visible {
+  transform: none;
+  outline: 2px solid white;
+  outline-offset: 2px;
+}
+
+/* Barre fine de chargement d'une page (route chargée à la demande) */
+.route-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  z-index: 2500;
+  background: linear-gradient(90deg, transparent, var(--accent-blue), var(--accent-purple), transparent);
+  background-size: 50% 100%;
+  background-repeat: no-repeat;
+  animation: route-progress 1.1s ease-in-out infinite;
+}
+
+@keyframes route-progress {
+  from { background-position: -50% 0; }
+  to { background-position: 150% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Exception : le spinner reste animé (sinon plus rien n'indique le chargement),
+     mais nettement ralenti. */
+  .spinner {
+    animation-duration: 2.4s !important;
+    animation-iteration-count: infinite !important;
+  }
+
+  /* Barre de chargement : statique */
+  .route-progress {
+    background-size: 100% 100%;
+  }
+}

@@ -33,6 +33,33 @@
   border: 0 !important;
 }
 
+/* Lien d'évitement : hors écran, visible dès qu'il reçoit le focus clavier */
+.skip-link {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 10000;
+  padding: 10px 16px;
+  background-color: var(--color-primary);
+  color: #ffffff;
+  font-weight: 600;
+  text-decoration: none;
+  border-radius: var(--border-radius);
+  transform: translateY(-200%);
+}
+
+.skip-link:focus,
+.skip-link:focus-visible {
+  transform: none;
+  outline: 3px solid var(--color-text);
+  outline-offset: 2px;
+}
+
+/* Cible du lien d'évitement : focalisable par script, sans contour à l'arrivée */
+main:focus {
+  outline: none;
+}
+
 /* Ancres internes (#contact, #rendez-vous) : défilement doux, sans masquer le titre */
 html {
   scroll-behavior: smooth;

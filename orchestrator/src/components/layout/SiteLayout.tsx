@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useParams } from 'react-router-dom';
+import { fetchSubmissions, onUnreadChange } from '../../api/submissions';
 import { useSites } from '../../state/SitesContext';
 import { useConfig } from '../../state/ConfigContext';
 import { publishedSiteUrl } from '../../lib/siteUrls';
@@ -72,9 +74,28 @@ export function SiteLayout() {
   );
 }
 
+// Nombre de messages non lus du site : chargé à l'ouverture du site, puis tenu à jour
+// par la page Messages (marquage, suppression). Un échec laisse simplement le compteur vide.
+function useUnreadCount(slug: string): number {
+  const [unread, setUnread] = useState<{ slug: string; count: number } | null>(null);
+  useEffect(() => {
+    let active = true;
+    const off = onUnreadChange((s, count) => { if (s === slug) setUnread({ slug, count }); });
+    fetchSubmissions(slug)
+      .then((d) => { if (active) setUnread((prev) => (prev?.slug === slug ? prev : { slug, count: d.unread ?? 0 })); })
+      .catch(() => {});
+    return () => {
+      active = false;
+      off();
+    };
+  }, [slug]);
+  return unread?.slug === slug ? unread.count : 0;
+}
+
 function SiteHeader({ site }: { site: Site }) {
   const deployed = site.status === 'active';
   const { config } = useConfig();
+  const unread = useUnreadCount(site.slug);
   return (
     <div className="glass-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 15, padding: '16px 24px' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -112,6 +133,16 @@ function SiteHeader({ site }: { site: Site }) {
             </NavLink>
           </span>
         ))}
+        <span className="site-step-sep" aria-hidden>·</span>
+        <NavLink to="messages" className={({ isActive }) => `site-step ${isActive ? 'active' : ''}`}>
+          Messages
+          {unread > 0 && (
+            <span className="site-step-num" style={{ background: 'var(--accent-rose)', color: 'white', width: 'auto', minWidth: 20, padding: '0 6px', borderRadius: 10 }}>
+              {unread}
+              <span className="sr-only"> non lu{unread > 1 ? 's' : ''}</span>
+            </span>
+          )}
+        </NavLink>
       </nav>
     </div>
   );

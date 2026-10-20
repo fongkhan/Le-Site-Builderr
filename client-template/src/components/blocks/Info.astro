@@ -1,5 +1,6 @@
 ---
 import { safeHttpUrl, safeMailto, safeTel } from '../../lib/url';
+import { t } from '../../lib/ui-strings.mjs';
 
 interface Props {
   data: {
@@ -10,9 +11,11 @@ interface Props {
     hours?: string;
     googleBusinessUrl?: string;
   };
+  /** Langue de la page (libellés d'interface, lib/ui-strings.mjs). */
+  locale?: string;
 }
 
-const { data } = Astro.props;
+const { data, locale } = Astro.props;
 
 // Liens construits depuis des saisies du client : fiche Google en http(s) uniquement,
 // téléphone réduit aux chiffres, email plausible. Une valeur refusée est affichée
@@ -27,13 +30,13 @@ const mailHref = safeMailto(data.email);
 
 <section class="info-section">
   <div class="container">
-    <h2>{data.title || 'Infos pratiques'}</h2>
+    <h2>{data.title || t(locale, 'infoTitle')}</h2>
     <div class="info-card">
       {data.address && <div class="info-row"><span class="info-icon" aria-hidden="true">📍</span><span class="info-multiline">{data.address}</span></div>}
       {data.phone && <div class="info-row"><span class="info-icon" aria-hidden="true">📞</span>{telHref ? <a href={telHref}>{data.phone}</a> : <span>{data.phone}</span>}</div>}
       {data.email && <div class="info-row"><span class="info-icon" aria-hidden="true">✉️</span>{mailHref ? <a href={mailHref}>{data.email}</a> : <span>{data.email}</span>}</div>}
       {data.hours && <div class="info-row"><span class="info-icon" aria-hidden="true">🕒</span><span class="info-hours">{data.hours}</span></div>}
-      {googleUrl && <div class="info-row"><span class="info-icon" aria-hidden="true">⭐</span><a href={googleUrl} target="_blank" rel="noopener noreferrer">Voir notre fiche Google</a></div>}
+      {googleUrl && <div class="info-row"><span class="info-icon" aria-hidden="true">⭐</span><a href={googleUrl} target="_blank" rel="noopener noreferrer">{t(locale, 'googleListing')}</a></div>}
     </div>
   </div>
 </section>

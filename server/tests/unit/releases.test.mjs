@@ -69,3 +69,34 @@ test('pruneReleases — keep invalide : la release la plus récente est toujours
   }
   fs.rmSync(base, { recursive: true, force: true });
 });
+
+const { removePartialReleases } = require('../../lib/releases.js');
+
+test('(c) release interrompue (.partial) : ignorée par list, resolve et prune, supprimée au boot', () => {
+  const { base, dist } = setup();
+  const ok = saveRelease(base, 's', dist, 1000000000000);
+  const partial = path.join(base, 's', '1700000000000.partial');
+  fs.mkdirSync(partial);
+  fs.writeFileSync(path.join(partial, 'index.html'), '<h1>moitié</h1>');
+
+  assert.deepEqual(listReleases(base, 's').map((r) => r.id), [ok]);
+  assert.equal(resolveRelease(base, 's', '1700000000000'), null);
+  assert.equal(resolveRelease(base, 's', '1700000000000.partial'), null);
+  assert.deepEqual(pruneReleases(base, 's', 1), []);
+  assert.ok(fs.existsSync(path.join(base, 's', ok)), 'la bonne release n’est pas chassée');
+
+  assert.deepEqual(removePartialReleases(base), ['s/1700000000000.partial']);
+  assert.ok(!fs.existsSync(partial));
+  assert.deepEqual(removePartialReleases(path.join(base, 'absent')), []);
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('saveRelease — aucune copie .partial ne subsiste, même en cas d’échec', () => {
+  const { base, dist } = setup();
+  saveRelease(base, 's', dist, 1000000000000);
+  assert.deepEqual(fs.readdirSync(path.join(base, 's')), ['1000000000000']);
+  // Source introuvable : erreur relancée, rien de partiel laissé
+  assert.throws(() => saveRelease(base, 's', path.join(base, 'introuvable'), 1000000000001));
+  assert.deepEqual(fs.readdirSync(path.join(base, 's')), ['1000000000000']);
+  fs.rmSync(base, { recursive: true, force: true });
+});

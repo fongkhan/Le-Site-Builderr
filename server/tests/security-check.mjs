@@ -342,11 +342,11 @@ if (admin.token) {
 
   const created = await req('/api/users', {
     method: 'POST',
-    body: { email, password: 'password123', roles: ['client'], plan: 'free', sites: siteId ? [siteId] : [] },
+    body: { email, password: 'Cheval-Correct-42!', roles: ['client'], plan: 'free', sites: siteId ? [siteId] : [] },
     token: admin.token,
   });
   const freeId = created.json?.doc?.id;
-  const freeLogin = await login(email, 'password123');
+  const freeLogin = await login(email, 'Cheval-Correct-42!');
   if (freeLogin.token && siteId) {
     const refused = await req('/api/onboard', { method: 'POST', body: { description: 'un site de test' }, token: freeLogin.token });
     check("Offre : client Découverte au maximum -> 403 (avant tout appel IA)", refused.status === 403 && /offre/i.test(refused.json?.error || ''), `HTTP ${refused.status} ${JSON.stringify(refused.json?.error)}`);
@@ -382,10 +382,10 @@ if (admin.token && client.token) {
   const existingId = existing.json?.docs?.[0]?.id;
   if (existingId) await req(`/api/users/${existingId}`, { method: 'DELETE', token: admin.token });
 
-  const adminCreate = await req('/api/users', { method: 'POST', body: { email: testEmail, password: 'password123', roles: ['client'] }, token: admin.token });
+  const adminCreate = await req('/api/users', { method: 'POST', body: { email: testEmail, password: 'Cheval-Correct-42!', roles: ['client'] }, token: admin.token });
   check('Users : POST /api/users par un admin -> crée le compte', adminCreate.status === 200 || adminCreate.status === 201, `HTTP ${adminCreate.status}`);
 
-  const newLogin = await req('/api/users/login', { method: 'POST', body: { email: testEmail, password: 'password123' } });
+  const newLogin = await req('/api/users/login', { method: 'POST', body: { email: testEmail, password: 'Cheval-Correct-42!' } });
   check('Users : le client créé peut se connecter', newLogin.status === 200, `HTTP ${newLogin.status}`);
 
   // Nettoyage
@@ -400,7 +400,8 @@ if (admin.token && client.token) {
   check('Contact : message valide -> 200', ok.status === 200 && ok.json?.success === true, `HTTP ${ok.status}`);
   check('Contact : site inconnu -> 404', (await req('/api/contact/site-inexistant', { method: 'POST', body: valid })).status === 404);
   check('Contact : corps invalide -> 400', (await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { name: '', email: 'pas-un-email', message: '' } })).status === 400);
-  const hp = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { ...valid, company: 'robot inc' } });
+  // Message propre à cette exécution : le bloc « Messages reçus » vérifie qu'il n'est jamais stocké
+  const hp = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { ...valid, message: `honeypot-${process.pid}`, company: 'robot inc' } });
   check('Contact : honeypot rempli -> 200 silencieux', hp.status === 200 && hp.json?.success === true);
 }
 
@@ -605,6 +606,507 @@ if (admin.token) {
 {
   const r = await req('/api/config');
   check('Helmet : en-tête X-Content-Type-Options=nosniff présent', r.res.headers.get('x-content-type-options') === 'nosniff', r.res.headers.get('x-content-type-options') || 'absent');
+}
+
+// ---- Comptes et sessions : mot de passe, révocation, anti-énumération, chemins serveur ----
+// Sept échecs de login ici (email inconnu, puis verrouillage d'un compte jetable : 5 échecs
+// + 1 essai verrouillé), sous le budget du limiteur par IP (RL_LOGIN_MAX, 8 par défaut) :
+// le contrôle final de rate-limit atteint toujours son 429.
+{
+  const STRONG = 'Cheval-Correct-42!';
+  const LOGIN_FAILED = 'Email ou mot de passe incorrect, ou compte temporairement verrouillé.';
+
+  // Échec de login : message unifié (aucune distinction compte inconnu / verrouillé)
+  const unknownLogin = await req('/api/users/login', { method: 'POST', body: { email: 'lot1-inconnu@nulle-part.example', password: 'mauvais-mot-de-passe' } });
+  check('Login : email inconnu -> 401 + message unifié', unknownLogin.status === 401 && unknownLogin.json?.errors?.[0]?.message === LOGIN_FAILED, `HTTP ${unknownLogin.status} ${JSON.stringify(unknownLogin.json?.errors?.[0]?.message)}`);
+
+  // Déverrouillage : admin only, 403 identique que le compte existe ou non
+  if (client.token) {
+    const u1 = await req('/api/users/unlock', { method: 'POST', body: { email: 'admin@admin.com' }, token: client.token });
+    const u2 = await req('/api/users/unlock', { method: 'POST', body: { email: 'lot1-inconnu@nulle-part.example' }, token: client.token });
+    check('Unlock : client sur un compte existant -> 403', u1.status === 403, `HTTP ${u1.status}`);
+    check('Unlock : client sur un email inexistant -> même 403', u2.status === 403 && JSON.stringify(u2.json) === JSON.stringify(u1.json), `HTTP ${u2.status}`);
+  }
+  const anonUnlock = await req('/api/users/unlock', { method: 'POST', body: { email: 'admin@admin.com' } });
+  check('Unlock : anonyme -> 403', anonUnlock.status === 403, `HTTP ${anonUnlock.status}`);
+
+  // Chemins serveur des sites : lisibles par un admin seulement
+  if (client.token) {
+    const list = await req('/api/sites', { token: client.token });
+    const s = Array.isArray(list.json) ? list.json[0] : null;
+    check('Sites : client GET /api/sites sans documentRoot/repositoryPath, avec previewPath', Boolean(s) && !('documentRoot' in s) && !('repositoryPath' in s) && !('domainVerifyToken' in s) && typeof s.previewPath === 'string', JSON.stringify(s && Object.keys(s)));
+    const rest = await req('/api/payload_sites?depth=0', { token: client.token });
+    const d = rest.json?.docs?.[0];
+    check('Sites : client GET /api/payload_sites sans chemins serveur', Boolean(d) && d.documentRoot === undefined && d.repositoryPath === undefined && d.domainVerifyToken === undefined, JSON.stringify(d && Object.keys(d)));
+    const me = await req('/api/users/me', { token: client.token });
+    const populated = (me.json?.user?.sites || []).find((x) => x && typeof x === 'object');
+    check('Sites : client /api/users/me, sites peuplés sans chemins serveur', Boolean(populated) && populated.documentRoot === undefined && populated.repositoryPath === undefined, JSON.stringify(populated && Object.keys(populated)));
+  }
+  if (admin.token) {
+    const list = await req('/api/sites', { token: admin.token });
+    const s = Array.isArray(list.json) ? list.json.find((x) => x.slug === 'boulangerie-artisanale') : null;
+    check('Sites : admin GET /api/sites avec documentRoot', Boolean(s?.documentRoot) && 'repositoryPath' in s, JSON.stringify(s && Object.keys(s)));
+    const rest = await req('/api/payload_sites?depth=0&where[slug][equals]=boulangerie-artisanale', { token: admin.token });
+    const d = rest.json?.docs?.[0];
+    check('Sites : admin GET /api/payload_sites avec documentRoot', Boolean(d?.documentRoot), JSON.stringify(d && Object.keys(d)));
+  }
+
+  // Corps JSON : limite par route (256 Ko hors contenu/onboarding), avant toute auth
+  {
+    const big = { name: 'x'.repeat(3 * 1024 * 1024) };
+    const r = await req('/api/sites', { method: 'POST', body: big });
+    check('Corps : POST /api/sites anonyme avec 3 Mo de JSON -> 413', r.status === 413, `HTTP ${r.status}`);
+  }
+
+  // Politique de mot de passe (API REST)
+  if (client.token) {
+    const me = await req('/api/users/me', { token: client.token });
+    const myId = me.json?.user?.id;
+    if (myId) {
+      const weak = await req(`/api/users/${myId}`, { method: 'PATCH', body: { password: 'abc' }, token: client.token });
+      check('Mot de passe : client PATCH de son mot de passe à « abc » -> 400', weak.status === 400, `HTTP ${weak.status}`);
+      const weakBulk = await req(`/api/users?where[id][equals]=${myId}`, { method: 'PATCH', body: { password: 'abc' }, token: client.token });
+      check('Mot de passe : client PATCH groupé (where) à « abc » -> 400', weakBulk.status === 400, `HTTP ${weakBulk.status}`);
+      const still = await login('client@client.com', CLIENT_PASSWORD);
+      check('Mot de passe : refus sans effet (ancien mot de passe valide)', still.status === 200, `HTTP ${still.status}`);
+    }
+  }
+
+  if (admin.token) {
+    const email = 'lot1-sessions@nulle-part.example';
+    const purge = async () => {
+      const existing = await req(`/api/users?where[email][equals]=${encodeURIComponent(email)}`, { token: admin.token });
+      const id = existing.json?.docs?.[0]?.id;
+      if (id) await req(`/api/users/${id}`, { method: 'DELETE', token: admin.token });
+    };
+    await purge();
+
+    const weakCreate = await req('/api/users', { method: 'POST', body: { email, password: 'abc', roles: ['client'] }, token: admin.token });
+    check('Mot de passe : admin crée un compte avec « abc » -> 400', weakCreate.status === 400, `HTTP ${weakCreate.status}`);
+    const sameAsEmail = await req('/api/users', { method: 'POST', body: { email, password: email, roles: ['client'] }, token: admin.token });
+    check("Mot de passe : identique à l'email -> 400", sameAsEmail.status === 400, `HTTP ${sameAsEmail.status}`);
+
+    // Révocation des sessions au changement de mot de passe
+    const created = await req('/api/users', { method: 'POST', body: { email, password: STRONG, roles: ['client'] }, token: admin.token });
+    const id = created.json?.doc?.id;
+    check('Sessions : compte jetable créé (mot de passe robuste)', Boolean(id), `HTTP ${created.status}`);
+    if (id) {
+      const a = await login(email, STRONG);
+      const b = await login(email, STRONG);
+      const changed = await req(`/api/users/${id}`, { method: 'PATCH', body: { password: 'Nouveau-Cheval-43?' }, token: a.token });
+      check('Sessions : changement de son mot de passe -> 200', changed.status === 200, `HTTP ${changed.status}`);
+      const meB = await req('/api/users/me', { token: b.token });
+      check('Sessions : autre session (B) révoquée après changement', meB.status === 200 && meB.json?.user === null, `user=${JSON.stringify(meB.json?.user?.email ?? null)}`);
+      const meA = await req('/api/users/me', { token: a.token });
+      check('Sessions : session courante (A) conservée', meA.json?.user?.email === email, `user=${JSON.stringify(meA.json?.user?.email ?? null)}`);
+      check('Sessions : rôles du compte intacts après révocation', JSON.stringify(meA.json?.user?.roles) === '["client"]', JSON.stringify(meA.json?.user?.roles));
+
+      // Changement par un admin : toutes les sessions du compte sont révoquées
+      await req(`/api/users/${id}`, { method: 'PATCH', body: { password: 'Encore-Cheval-44!' }, token: admin.token });
+      const meA2 = await req('/api/users/me', { token: a.token });
+      check('Sessions : changement par un admin -> session du compte révoquée', meA2.json?.user === null, `user=${JSON.stringify(meA2.json?.user?.email ?? null)}`);
+      const meAdmin = await req('/api/users/me', { token: admin.token });
+      check("Sessions : la session de l'admin reste valide", meAdmin.json?.user?.email === 'admin@admin.com');
+
+      // Compte verrouillé (maxLoginAttempts = 5) : même 401 et même message qu'un compte
+      // inconnu, même avec le bon mot de passe (le hook se fonde sur le statut, pas sur
+      // le nom de classe de l'erreur, raccourci par la minification de production)
+      for (let i = 0; i < 5; i++) {
+        await req('/api/users/login', { method: 'POST', body: { email, password: 'mauvais-mot-de-passe' } });
+      }
+      const locked = await req('/api/users/login', { method: 'POST', body: { email, password: 'Encore-Cheval-44!' } });
+      check('Login : compte verrouillé -> 401 + même message que pour un compte inconnu', locked.status === 401 && locked.json?.errors?.[0]?.message === LOGIN_FAILED && JSON.stringify(locked.json) === JSON.stringify(unknownLogin.json), `HTTP ${locked.status} ${JSON.stringify(locked.json)}`);
+
+      const unlocked = await req('/api/users/unlock', { method: 'POST', body: { email }, token: admin.token });
+      check('Unlock : admin -> 200', unlocked.status === 200, `HTTP ${unlocked.status}`);
+    }
+    await purge();
+  }
+}
+
+// ---- Médias, brouillons protégés, suppression et duplication de site ----
+{
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const serverDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+  const projectDir = path.dirname(serverDir);
+  const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+  const upload = async (token, siteId, data, type, name) => {
+    const form = new FormData();
+    form.append('file', new Blob([data], { type }), name);
+    form.append('_payload', JSON.stringify({ site: siteId }));
+    const res = await fetch(`${BASE}/api/media`, { method: 'POST', headers: { Origin: ORIGIN, Cookie: `payload-token=${token}` }, body: form });
+    let json = null;
+    try { json = await res.clone().json(); } catch { /* non-JSON */ }
+    return { status: res.status, json };
+  };
+  const payloadSiteId = async (slug) => (await req(`/api/payload_sites?where[slug][equals]=${slug}&depth=0`, { token: admin.token })).json?.docs?.[0]?.id;
+  const raw = (p, headers = {}) => fetch(`${BASE}${p}`, { headers: { Origin: ORIGIN, ...headers } });
+
+  // Médiathèque : formats matriciels uniquement, taille bornée, cache privé
+  if (client.token && admin.token) {
+    const ownId = await payloadSiteId('boulangerie-artisanale');
+    if (ownId) {
+      const svg = '<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg"><script>alert(document.cookie)</script></svg>';
+      const svgUp = await upload(client.token, ownId, svg, 'image/svg+xml', 'logo.svg');
+      check('Media : SVG avec <script> (prologue XML) -> 400', svgUp.status === 400, `HTTP ${svgUp.status}`);
+      if (svgUp.json?.doc?.id) await req(`/api/media/${svgUp.json.doc.id}`, { method: 'DELETE', token: admin.token });
+
+      const big = Buffer.alloc(9 * 1024 * 1024, 0);
+      pixel.copy(big);
+      const bigUp = await upload(client.token, ownId, big, 'image/png', 'enorme.png');
+      check('Media : PNG de 9 Mo -> 413', bigUp.status === 413, `HTTP ${bigUp.status}`);
+      if (bigUp.json?.doc?.id) await req(`/api/media/${bigUp.json.doc.id}`, { method: 'DELETE', token: admin.token });
+
+      const ok = await upload(client.token, ownId, pixel, 'image/png', 'pixel-lot2.png');
+      check('Media : PNG 1 px -> 201', ok.status === 201, `HTTP ${ok.status}`);
+      const filename = ok.json?.doc?.filename;
+      if (filename) {
+        const file = await raw(`/api/media/file/${encodeURIComponent(filename)}`, { Cookie: `payload-token=${client.token}` });
+        const cache = file.headers.get('cache-control') || '';
+        check('Media : fichier servi avec Cache-Control private', file.status === 200 && cache.includes('private'), `HTTP ${file.status} ${cache}`);
+      }
+      if (ok.json?.doc?.id) await req(`/api/media/${ok.json.doc.id}`, { method: 'DELETE', token: admin.token });
+    }
+  }
+
+  // Aperçu : un SVG présent dans un site est servi dans un bac à sable ; les copies de
+  // bascule interrompues ne sont jamais servies
+  {
+    const siteDir = path.join(projectDir, 'simulated_public_html', 'boulangerie-artisanale');
+    const createdDir = !fs.existsSync(siteDir);
+    fs.mkdirSync(siteDir, { recursive: true });
+    const svgFile = path.join(siteDir, 'csp-test.svg');
+    fs.writeFileSync(svgFile, '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
+    try {
+      const r = await raw('/preview/boulangerie-artisanale/csp-test.svg');
+      const csp = r.headers.get('content-security-policy') || '';
+      check('Aperçu : SVG servi avec une CSP « sandbox »', r.status === 200 && csp.includes('sandbox'), `HTTP ${r.status} ${csp}`);
+    } finally {
+      fs.rmSync(svgFile, { force: true });
+      if (createdDir) fs.rmSync(siteDir, { recursive: true, force: true });
+    }
+    const swapDir = path.join(projectDir, 'simulated_public_html', 'sc-bascule.tmp-deploy');
+    fs.mkdirSync(swapDir, { recursive: true });
+    fs.writeFileSync(path.join(swapDir, 'index.html'), '<h1>copie interrompue</h1>');
+    try {
+      const r = await raw('/preview/sc-bascule.tmp-deploy/index.html');
+      check('Aperçu : copie de bascule (.tmp-*) jamais servie -> 404', r.status === 404, `HTTP ${r.status}`);
+    } finally {
+      fs.rmSync(swapDir, { recursive: true, force: true });
+    }
+  }
+
+  // Brouillons : réservés aux comptes ayant accès au site
+  {
+    const draftDir = path.join(projectDir, 'drafts', 'boulangerie-artisanale');
+    const draftFile = path.join(draftDir, 'index.html');
+    const createdDraftDir = !fs.existsSync(draftDir);
+    const createdDraft = !fs.existsSync(draftFile);
+    if (createdDraft) {
+      fs.mkdirSync(draftDir, { recursive: true });
+      fs.writeFileSync(draftFile, '<!doctype html><title>Brouillon</title>');
+    }
+    const url = '/draft/boulangerie-artisanale/index.html';
+    try {
+      const anonHtml = await raw(url, { Accept: 'text/html' });
+      check('Brouillon : anonyme (navigateur) -> 401 en page HTML', anonHtml.status === 401 && (anonHtml.headers.get('content-type') || '').includes('text/html'), `HTTP ${anonHtml.status}`);
+      const anonJson = await raw(url, { Accept: 'application/json' });
+      check('Brouillon : anonyme (API) -> 401 JSON', anonJson.status === 401 && (anonJson.headers.get('content-type') || '').includes('json'), `HTTP ${anonJson.status}`);
+
+      if (client.token) {
+        const own = await raw(url, { Cookie: `payload-token=${client.token}` });
+        const cache = own.headers.get('cache-control') || '';
+        check('Brouillon : propriétaire -> 200 avec no-store', own.status === 200 && cache.includes('no-store'), `HTTP ${own.status} ${cache}`);
+        const traversal = await raw('/draft/..%2F..%2Fetc/passwd', { Cookie: `payload-token=${client.token}` });
+        check('Brouillon : traversée encodée -> jamais 200', traversal.status !== 200, `HTTP ${traversal.status}`);
+        const traversal2 = await raw('/draft/%2e%2e/%2e%2e/server/.env', { Cookie: `payload-token=${client.token}` });
+        check('Brouillon : traversée « %2e%2e » -> jamais 200', traversal2.status !== 200, `HTTP ${traversal2.status}`);
+      }
+
+      if (admin.token) {
+        // Client d'un AUTRE site : compte jetable rattaché à un site jetable
+        const email = 'sec-check-draft@nulle-part.example';
+        const existing = await req(`/api/users?where[email][equals]=${encodeURIComponent(email)}`, { token: admin.token });
+        if (existing.json?.docs?.[0]?.id) await req(`/api/users/${existing.json.docs[0].id}`, { method: 'DELETE', token: admin.token });
+        const other = await req('/api/sites', { method: 'POST', body: { name: 'Brouillon SC' }, token: admin.token });
+        const otherSlug = other.json?.site?.slug;
+        const otherId = otherSlug ? await payloadSiteId(otherSlug) : null;
+        const user = otherId
+          ? await req('/api/users', { method: 'POST', body: { email, password: 'Cheval-Correct-42!', roles: ['client'], sites: [otherId] }, token: admin.token })
+          : null;
+        const otherLogin = user?.json?.doc?.id ? await login(email, 'Cheval-Correct-42!') : { token: null };
+        if (otherLogin.token) {
+          const foreign = await raw(url, { Cookie: `payload-token=${otherLogin.token}` });
+          check("Brouillon : client d'un autre site -> 403", foreign.status === 403, `HTTP ${foreign.status}`);
+        } else {
+          check("Brouillon : client d'un autre site -> 403", false, 'compte de test non créé');
+        }
+        if (user?.json?.doc?.id) await req(`/api/users/${user.json.doc.id}`, { method: 'DELETE', token: admin.token });
+        if (otherSlug) await req(`/api/sites/${otherSlug}`, { method: 'DELETE', token: admin.token });
+      }
+    } finally {
+      if (createdDraftDir) fs.rmSync(draftDir, { recursive: true, force: true });
+      else if (createdDraft) fs.rmSync(draftFile, { force: true });
+    }
+  }
+
+  // Suppression d'un site : ses médias (fiches et fichiers) partent avec lui
+  if (admin.token) {
+    const created = await req('/api/sites', { method: 'POST', body: { name: 'Suppression SC' }, token: admin.token });
+    const slug = created.json?.site?.slug;
+    const siteId = slug ? await payloadSiteId(slug) : null;
+    if (siteId) {
+      const up = await upload(admin.token, siteId, pixel, 'image/png', 'suppression-sc.png');
+      const mediaId = up.json?.doc?.id;
+      const filename = up.json?.doc?.filename;
+      check('Suppression : média téléversé sur le site', up.status === 201 && Boolean(filename), `HTTP ${up.status}`);
+      const del = await req(`/api/sites/${slug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+      check('Suppression : DELETE ?deleteFiles=true (simulation) -> 200', del.status === 200 && (del.json?.remote ?? null) === null, `HTTP ${del.status} remote=${JSON.stringify(del.json?.remote)}`);
+      const left = await req(`/api/payload_sites?where[slug][equals]=${slug}&depth=0`, { token: admin.token });
+      check('Suppression : fiche payload_sites retirée', left.json?.totalDocs === 0, `${left.json?.totalDocs} fiche(s)`);
+      if (mediaId) {
+        check('Suppression : fiche média retirée -> 404', (await req(`/api/media/${mediaId}`, { token: admin.token })).status === 404);
+      }
+      if (filename) {
+        const file = await raw(`/api/media/file/${encodeURIComponent(filename)}`, { Cookie: `payload-token=${admin.token}` });
+        // Payload ne cherche pas la fiche pour un admin (accès total) : fichier absent du
+        // disque -> 500 générique côté admin, 404 pour un client. Jamais 200.
+        check('Suppression : fichier média plus servi', file.status !== 200 && file.status >= 400, `HTTP ${file.status}`);
+        check('Suppression : fichier média effacé du disque', !fs.existsSync(path.join(serverDir, 'uploads', filename)));
+      }
+    } else if (slug) {
+      check('Suppression : site de test créé dans Payload', false);
+      await req(`/api/sites/${slug}`, { method: 'DELETE', token: admin.token });
+    }
+  }
+
+  // Suppression d'un site dont un AUTRE site cite encore un média (jumeau dupliqué avant
+  // la copie des images) : le média est rattaché à ce site, son fichier conservé
+  if (admin.token) {
+    const source = await req('/api/sites', { method: 'POST', body: { name: 'Source partagee SC' }, token: admin.token });
+    const twin = await req('/api/sites', { method: 'POST', body: { name: 'Jumeau ancien SC' }, token: admin.token });
+    const sourceSlug = source.json?.site?.slug;
+    const twinSlug = twin.json?.site?.slug;
+    const sourceId = sourceSlug ? await payloadSiteId(sourceSlug) : null;
+    const twinId = twinSlug ? await payloadSiteId(twinSlug) : null;
+    if (sourceId && twinId) {
+      const up = await upload(admin.token, sourceId, pixel, 'image/png', 'partage-sc.png');
+      const mediaId = up.json?.doc?.id;
+      const filename = up.json?.doc?.filename;
+      const save = await req(`/api/site-pages?site=${twinSlug}`, {
+        method: 'POST',
+        body: { docs: [{ title: 'Accueil', slug: 'home', layout: [{ blockType: 'hero', title: 'Ancien jumeau', backgroundImage: `/api/media/file/${filename}` }] }] },
+        token: admin.token,
+      });
+      if (mediaId && save.status === 200) {
+        const del = await req(`/api/sites/${sourceSlug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+        check('Suppression : site source dont un média est cité ailleurs -> 200', del.status === 200, `HTTP ${del.status}`);
+        const media = await req(`/api/media/${mediaId}?depth=0`, { token: admin.token });
+        const owner = media.json?.site && typeof media.json.site === 'object' ? media.json.site.id : media.json?.site;
+        check('Suppression : média encore cité rattaché au site qui le cite', media.status === 200 && String(owner) === String(twinId), `HTTP ${media.status} site=${owner}`);
+        check('Suppression : fichier du média encore cité conservé', Boolean(filename) && fs.existsSync(path.join(serverDir, 'uploads', filename)));
+      } else {
+        check('Suppression : préparation du média partagé', false, `upload=${up.status} pages=${save.status}`);
+      }
+    } else {
+      check('Suppression : sites de test du média partagé créés', false);
+    }
+    if (twinSlug) await req(`/api/sites/${twinSlug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+    if (sourceSlug) await req(`/api/sites/${sourceSlug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+  }
+
+  // Suppression pendant une prévisualisation du site : refusée (409), puis aucun
+  // brouillon ne survit à la suppression
+  if (admin.token) {
+    const created = await req('/api/sites', { method: 'POST', body: { name: 'Brouillon en cours SC' }, token: admin.token });
+    const slug = created.json?.site?.slug;
+    if (slug) {
+      let previewDone = false;
+      const preview = req(`/api/sites/${slug}/preview-build`, { method: 'POST', token: admin.token }).finally(() => { previewDone = true; });
+      await new Promise((r) => setTimeout(r, 400));
+      const busy = await req(`/api/sites/${slug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+      check('Suppression : brouillon du site en cours -> 409', busy.status === 409 && /en cours/.test(busy.json?.error || ''), `HTTP ${busy.status} (brouillon déjà terminé : ${previewDone})`);
+      await preview;
+      const del = await req(`/api/sites/${slug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+      check('Suppression : après le brouillon -> 200', del.status === 200, `HTTP ${del.status}`);
+      check('Suppression : aucun brouillon conservé', !fs.existsSync(path.join(projectDir, 'drafts', slug)));
+    }
+  }
+
+  // Duplication : le jumeau reçoit ses propres copies d'images, citées par ses pages
+  if (admin.token) {
+    const created = await req('/api/sites', { method: 'POST', body: { name: 'Duplication SC' }, token: admin.token });
+    const slug = created.json?.site?.slug;
+    const siteId = slug ? await payloadSiteId(slug) : null;
+    let twinSlug = null;
+    if (siteId) {
+      const up = await upload(admin.token, siteId, pixel, 'image/png', 'duplication-sc.png');
+      const filename = up.json?.doc?.filename;
+      const imageUrl = `/api/media/file/${filename}`;
+      const save = await req(`/api/site-pages?site=${slug}`, {
+        method: 'POST',
+        body: { docs: [{ title: 'Accueil', slug: 'home', layout: [{ blockType: 'hero', title: 'Bienvenue', backgroundImage: imageUrl }] }] },
+        token: admin.token,
+      });
+      const dup = await req(`/api/sites/${slug}/duplicate`, { method: 'POST', token: admin.token });
+      twinSlug = dup.json?.site?.slug || null;
+      const twinId = twinSlug ? await payloadSiteId(twinSlug) : null;
+      if (filename && save.status === 200 && twinId) {
+        const twinMedia = await req(`/api/media?where[site][equals]=${twinId}&depth=0`, { token: admin.token });
+        const newName = twinMedia.json?.docs?.[0]?.filename;
+        check('Duplication : le jumeau possède 1 média', twinMedia.json?.totalDocs === 1, `${twinMedia.json?.totalDocs} média(s)`);
+        const twinPages = JSON.stringify((await req(`/api/site-pages?site=${twinSlug}`, { token: admin.token })).json || {});
+        check('Duplication : les pages du jumeau citent la copie', Boolean(newName) && newName !== filename && twinPages.includes(`/api/media/file/${newName}`) && !twinPages.includes(imageUrl), `${filename} -> ${newName}`);
+      } else {
+        check('Duplication : préparation du site source', false, `upload=${up.status} pages=${save.status} jumeau=${twinSlug}`);
+      }
+    }
+    if (twinSlug) await req(`/api/sites/${twinSlug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+    if (slug) await req(`/api/sites/${slug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+  }
+}
+
+// ---- Santé du serveur ----
+{
+  const live = await req('/api/health');
+  check('Santé : GET /api/health anonyme -> 200 status ok', live.status === 200 && live.json?.status === 'ok' && Number.isFinite(live.json?.uptimeS), `HTTP ${live.status}`);
+  const ready = await req('/api/health/ready');
+  check('Santé : GET /api/health/ready -> 200 avec database ok', ready.status === 200 && ready.json?.checks?.database === 'ok', `HTTP ${ready.status} ${JSON.stringify(ready.json)}`);
+  check('Santé : ready détaille storage et build', ready.json?.checks?.storage === 'ok' && typeof ready.json?.checks?.build?.inProgress === 'boolean' && Number.isInteger(ready.json?.checks?.build?.queueLength));
+  // Aucune fuite : ni chaîne de connexion, ni secret, ni chemin absolu, ni version
+  const bodies = `${JSON.stringify(live.json)}${JSON.stringify(ready.json)}`;
+  const secret = process.env.PAYLOAD_SECRET;
+  check('Santé : réponses sans chaîne de connexion postgres://', !bodies.includes('postgres://'));
+  check('Santé : réponses sans PAYLOAD_SECRET', !secret || !bodies.includes(secret));
+  check('Santé : réponses sans chemin absolu', !/"(\/[A-Za-z0-9._-]+){2,}|[A-Za-z]:\\\\/.test(bodies), bodies);
+  check('Santé : réponses sans numéro de version', !/version/i.test(bodies));
+  // Une sonde fréquente (toutes les 5 s = 180 appels / 15 min) n'est jamais refusée :
+  // résultat mis en cache, aucun limiteur de débit.
+  const probes = [];
+  for (let i = 0; i < 130; i += 10) {
+    probes.push(...await Promise.all(Array.from({ length: 10 }, () => req('/api/health/ready'))));
+  }
+  check('Santé : 130 appels à /api/health/ready -> aucun 429', probes.every((r) => r.status === 200), probes.map((r) => r.status).filter((s) => s !== 200).join(','));
+  check('Santé : /api/health/ready sans limiteur de débit (pas d\'en-tête RateLimit)', probes.every((r) => !r.res.headers.get('ratelimit-policy') && !r.res.headers.get('ratelimit')));
+}
+
+// ---- Pages : ordre du menu et sauvegarde ciblée ----
+// Ordre du menu (navOrder) : contrôle distinct du tri alphabétique ci-dessus. Sauvegarde
+// ciblée : renvoyer tel quel ce que l'éditeur a lu ne réécrit aucune page.
+if (admin.token) {
+  const created = await req('/api/sites', { method: 'POST', body: { name: 'Ordre menu SC' }, token: admin.token });
+  const slug = created.json?.site?.slug;
+  if (slug) {
+    const url = `/api/site-pages?site=${slug}`;
+    const pg = (s, extra = {}) => ({ title: s, slug: s, layout: [], ...extra });
+    const order = async () => ((await req(url, { token: admin.token })).json?.docs || []).map((p) => p.slug).join(',');
+    await req(url, { method: 'POST', body: { docs: [pg('home'), pg('tarifs'), pg('equipe')] }, token: admin.token });
+    check('Pages : ordre du menu conservé (home, tarifs, equipe)', (await order()) === 'home,tarifs,equipe', await order());
+    await req(url, { method: 'POST', body: { docs: [pg('equipe'), pg('tarifs'), pg('home')] }, token: admin.token });
+    check("Pages : ordre du menu inversé à l'enregistrement", (await order()) === 'equipe,tarifs,home', await order());
+
+    const badNav = await req(url, { method: 'POST', body: { docs: [pg('home', { hideFromNav: 'oui' })] }, token: admin.token });
+    check('Pages : hideFromNav non booléen -> 400', badNav.status === 400, `HTTP ${badNav.status}`);
+
+    // Contenu varié (listes, cases, groupe, galerie), masqué du menu, puis aller-retour
+    const layout = [
+      { blockType: 'hero', title: 'Bienvenue', subtitle: '', ctaText: 'Voir' },
+      { blockType: 'gallery', title: 'Photos', images: ['https://exemple.fr/a.jpg'] },
+      { blockType: 'pricing', title: 'Tarifs', plans: [{ name: 'Base', price: '0 €', isPopular: false, features: [{ feature: 'x' }] }] },
+      { blockType: 'testimonials', title: 'Avis', testimonials: [{ quote: 'Super', author: 'A', rating: 5 }] },
+      { blockType: 'faq', title: 'FAQ', items: [{ question: 'Q1 ?', answer: 'R1' }, { question: 'Q2 ?', answer: 'R2' }] },
+      { blockType: 'footer', text: '©', socials: { instagram: 'https://instagram.com/x' } },
+    ];
+    await req(url, { method: 'POST', body: { docs: [pg('home', { layout }), pg('tarifs', { hideFromNav: true }), pg('equipe')] }, token: admin.token });
+    const read = await req(url, { token: admin.token });
+    const tarifs = read.json?.docs?.find((p) => p.slug === 'tarifs');
+    check('Pages : hideFromNav enregistré et relu', tarifs?.hideFromNav === true, JSON.stringify(tarifs?.hideFromNav));
+    const siteDoc = await req(`/api/payload_sites?where[slug][equals]=${slug}&depth=0`, { token: admin.token });
+    const siteId = siteDoc.json?.docs?.[0]?.id;
+    const stamps = async () => ((await req(`/api/pages?where[site][equals]=${siteId}&depth=0&limit=50&sort=slug`, { token: admin.token })).json?.docs || []).map((p) => `${p.slug}@${p.updatedAt}`).join(',');
+    if (siteId && Array.isArray(read.json?.docs)) {
+      const before = await stamps();
+      const resave = await req(url, { method: 'POST', body: { docs: read.json.docs }, token: admin.token });
+      const after = await stamps();
+      check("Pages : renvoyer le contenu lu n'écrit aucune page (sauvegarde ciblée)", resave.status === 200 && before !== '' && before === after, `${before} → ${after}`);
+
+      // Section dupliquée dans l'éditeur : la copie porte les identifiants de lignes de
+      // l'original (listes imbriquées) — le serveur ne doit jamais les renvoyer à la base.
+      const raw = await req(`/api/pages?where[site][equals]=${siteId}&where[slug][equals]=home&depth=0&limit=1`, { token: admin.token });
+      const homeLayout = raw.json?.docs?.[0]?.layout || [];
+      const faq = homeLayout.find((b) => b.blockType === 'faq');
+      const rowIds = Boolean(faq?.items?.[0]?.id);
+      const withCopy = read.json.docs.map((p) => (p.slug === 'home' ? { ...p, layout: [...homeLayout, structuredClone(faq)] } : p));
+      const dupSave = await req(url, { method: 'POST', body: { docs: withCopy }, token: admin.token });
+      check('Pages : section dupliquée avec éléments de liste (mêmes id de lignes) -> 200', rowIds && dupSave.status === 200, `HTTP ${dupSave.status}, id de lignes en base : ${rowIds}`);
+      const reread = await req(url, { token: admin.token });
+      const faqs = (reread.json?.docs?.find((p) => p.slug === 'home')?.layout || []).filter((b) => b.blockType === 'faq');
+      check('Pages : copie de section enregistrée, sans identifiant de ligne renvoyé à l’éditeur', faqs.length === 2 && faqs.every((b) => b.items?.length === 2 && !('id' in b.items[0])), JSON.stringify(faqs.map((b) => b.items)));
+
+      // Site dupliqué (FAQ avec éléments) : ses pages, renvoyées telles quelles, s'enregistrent
+      const twin = await req(`/api/sites/${slug}/duplicate`, { method: 'POST', token: admin.token });
+      const twinSlug = twin.json?.site?.slug;
+      if (twinSlug) {
+        const twinUrl = `/api/site-pages?site=${twinSlug}`;
+        const twinPages = await req(twinUrl, { token: admin.token });
+        const twinSave = await req(twinUrl, { method: 'POST', body: { docs: twinPages.json?.docs || [] }, token: admin.token });
+        check('Pages : site dupliqué (FAQ avec éléments), pages renvoyées -> 200', twinPages.status === 200 && twinSave.status === 200, `HTTP ${twinPages.status} / ${twinSave.status}`);
+        await req(`/api/sites/${twinSlug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
+      } else {
+        check('Pages : duplication du site de test -> 200', false, `HTTP ${twin.status}`);
+      }
+    }
+    await req(`/api/sites/${slug}`, { method: 'DELETE', token: admin.token });
+  }
+}
+
+// ---- Messages reçus (boîte de réception) ----
+// Boîte de réception : le message posté plus haut par le formulaire de contact est
+// conservé, lisible par le seul propriétaire du site, et jamais écrit par l'API REST.
+{
+  const inbox = '/api/sites/boulangerie-artisanale/submissions';
+  check('Messages : lecture anonyme -> 401', (await req(inbox)).status === 401);
+  if (client.token) {
+    check("Messages : client sur un autre site -> 403", (await req('/api/sites/site-dun-autre/submissions', { token: client.token })).status === 403);
+    const own = await req(inbox, { token: client.token });
+    const items = Array.isArray(own.json?.items) ? own.json.items : [];
+    // Messages de CETTE exécution (les plus récents d'abord) : un reste d'une exécution
+    // précédente ne peut pas satisfaire le contrôle.
+    const recent = (s) => Date.parse(s.createdAt) > Date.now() - 15 * 60 * 1000;
+    const mine = items.find((s) => s.email === 'jean@exemple.fr' && s.message === 'Bonjour, ceci est un test.' && recent(s));
+    check('Messages : propriétaire -> 200 et message du formulaire présent', own.status === 200 && Boolean(mine), `HTTP ${own.status}, ${items.length} message(s)`);
+    check('Messages : honeypot jamais stocké', own.status === 200 && !items.some((s) => s.message === `honeypot-${process.pid}`));
+    check('Messages : demande de RDV du formulaire présente', items.some((s) => s.kind === 'appointment' && s.email === 'rdv@example.com' && recent(s)));
+
+    if (admin.token) {
+      const siteRes = await req('/api/payload_sites?where[slug][equals]=boulangerie-artisanale&limit=1&depth=0', { token: admin.token });
+      const siteId = siteRes.json?.docs?.[0]?.id;
+      const forged = await req('/api/submissions', { method: 'POST', body: { site: siteId, kind: 'contact', name: 'x', email: 'x@x.fr', message: 'forgé' }, token: client.token });
+      check('Messages : création via REST Payload par un client -> 403', forged.status === 403, `HTTP ${forged.status}`);
+    }
+
+    if (mine) {
+      const patched = await req(`${inbox}/${mine.id}`, { method: 'PATCH', body: { read: true }, token: client.token });
+      check('Messages : marquer comme lu -> 200', patched.status === 200 && patched.json?.read === true, `HTTP ${patched.status}`);
+      check('Messages : marquage sans booléen -> 400', (await req(`${inbox}/${mine.id}`, { method: 'PATCH', body: { read: 'oui' }, token: client.token })).status === 400);
+      check("Messages : marquage depuis un autre site -> 403", (await req(`/api/sites/site-dun-autre/submissions/${mine.id}`, { method: 'PATCH', body: { read: true }, token: client.token })).status === 403);
+      const del = await req(`${inbox}/${mine.id}`, { method: 'DELETE', token: client.token });
+      check('Messages : suppression par le propriétaire -> 200', del.status === 200, `HTTP ${del.status}`);
+      const after = await req(inbox, { token: client.token });
+      check('Messages : message supprimé absent de la liste', after.status === 200 && !(after.json?.items || []).some((s) => s.id === mine.id));
+      check('Messages : suppression d\'un message inexistant -> 404', (await req(`${inbox}/${mine.id}`, { method: 'DELETE', token: client.token })).status === 404);
+    }
+
+    // Nettoyage : aucun message de test (formulaire, RDV, honeypot) ne reste dans la boîte
+    // du compte de démonstration, y compris ceux d'exécutions précédentes interrompues.
+    const isTestMessage = (s) => s.email === 'jean@exemple.fr' || s.email === 'rdv@example.com';
+    const leftovers = ((await req(inbox, { token: client.token })).json?.items || []).filter(isTestMessage);
+    for (const s of leftovers) await req(`${inbox}/${s.id}`, { method: 'DELETE', token: client.token });
+    const remaining = ((await req(inbox, { token: client.token })).json?.items || []).filter(isTestMessage);
+    check('Messages : messages de test supprimés en fin de contrôle', remaining.length === 0, `${remaining.length} restant(s)`);
+  }
 }
 
 // ---- Rate-limit login (EN DERNIER : consomme le budget d'échecs de l'IP) ----

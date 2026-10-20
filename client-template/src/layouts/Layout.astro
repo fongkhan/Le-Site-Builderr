@@ -7,6 +7,7 @@ import 'virtual:theme-fonts.css';
 import { localePath, normalizeLocale, LOCALE_LABELS, DEFAULT_LOCALE } from '../lib/i18n.mjs';
 import { withBase, stripBase, absoluteUrl } from '../lib/url';
 import { jsonLdString } from '../lib/jsonld';
+import { t } from '../lib/ui-strings.mjs';
 
 interface NavPage {
 	title: string;
@@ -27,6 +28,8 @@ interface Props {
 	ogType?: 'website' | 'article';
 	/** Données structurées schema.org de la page (une balise par entrée). */
 	jsonLd?: unknown[];
+	/** Page à ne pas indexer (page 404). */
+	noindex?: boolean;
 }
 
 const {
@@ -40,6 +43,7 @@ const {
 	image,
 	ogType = 'website',
 	jsonLd = [],
+	noindex = false,
 } = Astro.props;
 const pageLocale = normalizeLocale(locale);
 // Lien interne vers une page de la langue courante (règle partagée avec le serveur),
@@ -72,7 +76,8 @@ const analyticsEnabled = Boolean(analyticsProvider && analyticsId);
 
 // Le site public est servi à la racine de son domaine : on retire le chemin de base du
 // build (« /preview/<slug> » en publication simulée) pour obtenir l'URL publique réelle.
-const canonicalUrl = siteUrl ? siteUrl + stripBase(Astro.url.pathname) : '';
+// Pas d'URL canonique pour une page non indexable (404 : servie à n'importe quelle adresse).
+const canonicalUrl = siteUrl && !noindex ? siteUrl + stripBase(Astro.url.pathname) : '';
 const ogImage = image ? absoluteUrl(image, siteUrl) : '';
 
 // hreflang : sur chaque page d'accueil d'un site multilingue, liens vers l'accueil de
@@ -97,7 +102,7 @@ const jsonLdScripts = (jsonLd || []).filter(Boolean).map((d) => jsonLdString(d))
 		<meta name="generator" content={Astro.generator} />
 		<title>{title}</title>
 		{description && <meta name="description" content={description} />}
-		{isDraft && <meta name="robots" content="noindex, nofollow" />}
+		{isDraft ? <meta name="robots" content="noindex, nofollow" /> : noindex && <meta name="robots" content="noindex" />}
 		{canonicalUrl && <link rel="canonical" href={canonicalUrl} />}
 		{hreflangs.map((h) => <link rel="alternate" hreflang={h.lang} href={h.href} />)}
 
@@ -118,39 +123,41 @@ const jsonLdScripts = (jsonLd || []).filter(Boolean).map((d) => jsonLdString(d))
 		{jsonLdScripts.map((ld) => <script type="application/ld+json" set:html={ld} />)}
 	</head>
 	<body>
+		{/* Lien d'évitement : premier élément focalisable, mène au contenu principal
+		    (chaque page pose id="contenu" sur son <main>). */}
+		<a class="skip-link" href="#contenu">{t(pageLocale, 'skipLink')}</a>
 		{(pages.length > 1 || otherLocales.length > 0) && (
-			<nav class="site-nav" aria-label="Navigation principale">
-				{pages.map((p) => (
-					<a
-						href={pageHref(p.slug)}
-						class={p.slug === currentSlug ? 'active' : undefined}
-						aria-current={p.slug === currentSlug ? 'page' : undefined}
-					>{p.title}</a>
-				))}
-				{otherLocales.length > 0 && (
-					<span class="lang-switch">
-						<span class="lang-current" aria-current="true">{LOCALE_LABELS[pageLocale as keyof typeof LOCALE_LABELS] || pageLocale}</span>
-						{otherLocales.map((l) => (
-							<a href={withBase(localePath(l, 'home'))} hreflang={l} lang={l}>{LOCALE_LABELS[l as keyof typeof LOCALE_LABELS] || l}</a>
-						))}
-					</span>
-				)}
-			</nav>
+			<header>
+				<nav class="site-nav" aria-label={t(pageLocale, 'mainNav')}>
+					{pages.map((p) => (
+						<a
+							href={pageHref(p.slug)}
+							class={p.slug === currentSlug ? 'active' : undefined}
+							aria-current={p.slug === currentSlug ? 'page' : undefined}
+						>{p.title}</a>
+					))}
+					{otherLocales.length > 0 && (
+						<span class="lang-switch">
+							<span class="lang-current" aria-current="true">{LOCALE_LABELS[pageLocale as keyof typeof LOCALE_LABELS] || pageLocale}</span>
+							{otherLocales.map((l) => (
+								<a href={withBase(localePath(l, 'home'))} hreflang={l} lang={l}>{LOCALE_LABELS[l as keyof typeof LOCALE_LABELS] || l}</a>
+							))}
+						</span>
+					)}
+				</nav>
+			</header>
 		)}
 		<slot />
 		{analyticsEnabled && (
 			<>
-				<div id="consent-banner" class="consent-banner" role="dialog" aria-live="polite" aria-label="Gestion des cookies" hidden>
-					<p class="consent-text">
-						Ce site souhaite utiliser des cookies de mesure d'audience pour améliorer votre expérience.
-						Votre choix est conservé 6 mois et modifiable à tout moment.
-					</p>
+				<div id="consent-banner" class="consent-banner" role="dialog" aria-live="polite" aria-label={t(pageLocale, 'consentLabel')} hidden>
+					<p class="consent-text">{t(pageLocale, 'consentText')}</p>
 					<div class="consent-actions">
-						<button type="button" id="consent-accept" class="consent-btn consent-accept">Accepter</button>
-						<button type="button" id="consent-refuse" class="consent-btn consent-refuse">Continuer sans accepter</button>
+						<button type="button" id="consent-accept" class="consent-btn consent-accept">{t(pageLocale, 'consentAccept')}</button>
+						<button type="button" id="consent-refuse" class="consent-btn consent-refuse">{t(pageLocale, 'consentRefuse')}</button>
 					</div>
 				</div>
-				<button type="button" id="consent-reopen" class="consent-reopen" hidden aria-label="Gérer les cookies">🍪 Cookies</button>
+				<button type="button" id="consent-reopen" class="consent-reopen" hidden aria-label={t(pageLocale, 'consentReopen')}><span aria-hidden="true">🍪</span> {t(pageLocale, 'consentReopenButton')}</button>
 				<script define:vars={{ analyticsProvider, analyticsId, analyticsHost }}>
 					// Consentement RGPD : la mesure d'audience n'est chargée qu'après « Accepter ».
 					// Le refus est aussi simple que l'acceptation ; le choix (6 mois) est modifiable

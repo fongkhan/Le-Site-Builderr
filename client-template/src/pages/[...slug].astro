@@ -117,6 +117,23 @@ const info = layout.find((b) => b.blockType === 'info');
 const faqItems = layout.filter((b) => b.blockType === 'faq').flatMap((b) => (Array.isArray(b.items) ? b.items : []));
 const jsonLd = [localBusinessLd(siteName, siteUrl, info), faqPageLd(faqItems)].filter(Boolean);
 
+// Structure accessible : les blocs de contenu dans <main id="contenu"> (cible du lien
+// d'évitement), les pieds de page après. Un seul h1 par page : celui du premier Hero
+// (les suivants passent en h2), sinon un titre masqué visuellement portant le titre de
+// la page.
+const contentBlocks = layout.filter((b) => b.blockType !== 'footer');
+const footerBlocks = layout.filter((b) => b.blockType === 'footer');
+const firstHero = contentBlocks.find((b) => b.blockType === 'hero' && String(b.title || '').trim() !== '');
+
+// Rendu d'un bloc : props communes (données, ancre, cible des boutons, langue).
+const renderProps = (block: Block) => ({
+  data: block,
+  anchorId: anchorIds[layout.indexOf(block)],
+  ctaTarget,
+  locale,
+  ...(block.blockType === 'hero' ? { headingLevel: block === firstHero ? 1 : 2 } : {}),
+});
+
 // Image de partage (og:image) : fond du premier Hero qui en a un.
 const heroImage = layout
   .filter((b) => b.blockType === 'hero')
@@ -135,8 +152,9 @@ const heroImage = layout
   image={heroImage}
   jsonLd={jsonLd}
 >
-  <main>
-    {layout.map((block, i) => {
+  <main id="contenu" tabindex="-1">
+    {!firstHero && <h1 class="visually-hidden">{page.title || page.metaTitle || siteName}</h1>}
+    {contentBlocks.map((block) => {
       const Component = blockMap[block.blockType];
       if (!Component) {
         return isDraftBuild ? (
@@ -145,9 +163,10 @@ const heroImage = layout
           </div>
         ) : null;
       }
-      return <Component data={block} anchorId={anchorIds[i]} ctaTarget={ctaTarget} />;
+      return <Component {...renderProps(block)} />;
     })}
   </main>
+  {footerBlocks.map((block) => <Footer {...renderProps(block)} />)}
 </Layout>
 
 <style>

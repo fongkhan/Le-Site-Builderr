@@ -20,7 +20,18 @@ export function updateSite(slug: string, input: Partial<Site>): Promise<{ succes
   return apiFetch(sitePath(slug), { method: 'PUT', body: JSON.stringify(input) });
 }
 
-export function deleteSite(slug: string, deleteFiles: boolean): Promise<{ success: boolean; message: string }> {
+// Étape du retrait d'un site chez l'hébergeur (mode cPanel)
+export type RemoteRemovalStep = 'removed' | 'failed' | 'skipped';
+
+// Retrait chez l'hébergeur : null en simulation ou sans suppression des fichiers
+export interface RemoteRemoval {
+  removed: boolean;
+  customDomain?: RemoteRemovalStep;
+  subdomain?: RemoteRemovalStep;
+  files?: RemoteRemovalStep;
+}
+
+export function deleteSite(slug: string, deleteFiles: boolean): Promise<{ success: boolean; message: string; remote?: RemoteRemoval | null }> {
   return apiFetch(`${sitePath(slug)}?deleteFiles=${deleteFiles}`, { method: 'DELETE' });
 }
 

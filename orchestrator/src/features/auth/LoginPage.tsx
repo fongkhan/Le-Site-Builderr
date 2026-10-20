@@ -39,10 +39,9 @@ export function LoginPage() {
       const message = err instanceof Error ? err.message : '';
       if (err instanceof ApiError && err.status === 429) {
         setError(message || 'Trop de tentatives de connexion. Réessayez dans quelques minutes.');
-      } else if (/locked|verrouill/i.test(message)) {
-        setError('Compte temporairement verrouillé après trop de tentatives. Réessayez plus tard ou réinitialisez votre mot de passe.');
-      } else if ((err instanceof ApiError && err.status === 401) || /invalid|incorrect|email or password/i.test(message)) {
-        setError('Email ou mot de passe incorrect.');
+      } else if ((err instanceof ApiError && err.status === 401) || /invalid|incorrect|email or password|locked/i.test(message)) {
+        // Message unique : ne distingue pas un mauvais mot de passe d'un compte verrouillé
+        setError('Email ou mot de passe incorrect, ou compte temporairement verrouillé. Réessayez plus tard ou réinitialisez votre mot de passe.');
       } else {
         setError(message || 'Connexion impossible. Vérifiez que le serveur est démarré.');
       }

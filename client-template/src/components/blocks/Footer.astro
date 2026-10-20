@@ -1,14 +1,17 @@
 ---
 import { safeHttpUrl } from '../../lib/url';
+import { t } from '../../lib/ui-strings.mjs';
 
 interface Props {
   data: {
     text?: string;
     socials?: { facebook?: string; instagram?: string; linkedin?: string; x?: string };
   };
+  /** Langue de la page (libellés d'interface, lib/ui-strings.mjs). */
+  locale?: string;
 }
 
-const { data } = Astro.props;
+const { data, locale } = Astro.props;
 const LABELS: Record<string, string> = { facebook: 'Facebook', instagram: 'Instagram', linkedin: 'LinkedIn', x: 'X' };
 // URLs saisies par le client : http(s) uniquement (un « javascript: » serait une XSS
 // stockée). Une URL refusée est simplement ignorée.
@@ -22,7 +25,7 @@ const socials = Object.entries(data.socials || {})
   <div class="container">
     {data.text && <p class="footer-text">{data.text}</p>}
     {socials.length > 0 && (
-      <nav class="footer-socials" aria-label="Réseaux sociaux">
+      <nav class="footer-socials" aria-label={t(locale, 'socialLinks')}>
         {socials.map(([network, url]) => (
           <a href={url} target="_blank" rel="noopener noreferrer">{LABELS[network] || network}</a>
         ))}

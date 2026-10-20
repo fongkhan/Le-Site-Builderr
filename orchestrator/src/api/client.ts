@@ -17,29 +17,49 @@ export function setUnauthorizedHandler(handler: (() => void) | null) {
 
 // Un corps texte est du JSON ; FormData et Blob gardent leur propre Content-Type
 // (multipart, zip…) fixé par le navigateur ou par options.headers.
+export const NETWORK_ERROR_MESSAGE = "Serveur injoignable : vérifiez qu'il est démarré (npm start) puis réessayez.";
+
+// Messages des réponses sans corps JSON (proxy, limiteur, serveur en démarrage…).
+const STATUS_MESSAGES: Record<number, string> = {
+  413: 'Fichier ou contenu trop volumineux',
+  429: 'Trop de requêtes, réessayez dans un instant',
+  502: 'Serveur indisponible ou en cours de démarrage',
+  503: 'Serveur indisponible ou en cours de démarrage',
+  504: 'Serveur indisponible ou en cours de démarrage',
+};
+
 export async function apiFetch<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(path, {
-    credentials: 'include',
-    ...options,
-    headers: {
-      ...(typeof options.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
-      ...(options.headers || {}),
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      credentials: 'include',
+      ...options,
+      headers: {
+        ...(typeof options.body === 'string' ? { 'Content-Type': 'application/json' } : {}),
+        ...(options.headers || {}),
+      },
+    });
+  } catch (err) {
+    // Requête annulée volontairement : propagée telle quelle
+    if ((err as { name?: unknown } | null)?.name === 'AbortError') throw err;
+    // fetch lève un TypeError quand le serveur ne répond pas (arrêté, réseau coupé)
+    if (err instanceof TypeError) throw new ApiError(0, NETWORK_ERROR_MESSAGE);
+    throw err;
+  }
 
   if (res.status === 401) {
     onUnauthorized?.();
   }
 
   if (!res.ok) {
-    let message = `Erreur HTTP ${res.status}`;
+    let message = STATUS_MESSAGES[res.status] ?? `Erreur HTTP ${res.status}`;
     try {
       const data = await res.json();
       if (data && (data.error || data.message)) message = data.error || data.message;
       // Payload REST renvoie { errors: [{ message }] }
       if (data && Array.isArray(data.errors) && data.errors[0]?.message) message = data.errors[0].message;
     } catch {
-      // corps non-JSON : on garde le message générique
+      // corps non-JSON : message de la table, ou générique
     }
     throw new ApiError(res.status, message);
   }

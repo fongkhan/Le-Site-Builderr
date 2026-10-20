@@ -58,20 +58,22 @@ const articleLd = {
   ogType="article"
   jsonLd={[articleLd]}
 >
-  <article class="post">
-    <div class="container">
-      <a class="post-back" href={withBase('/blog/')}>← Toutes les actualités</a>
-      <h1>{post.title}</h1>
-      {published && <time class="post-date" datetime={isoDate(post.publishedAt)}>{published}</time>}
-      {tags.length > 0 && (
-        <div class="post-tags">
-          {tags.map((t) => <span class="post-tag">{t}</span>)}
-        </div>
-      )}
-      {cover && <img class="post-cover" src={cover} alt="" />}
-      <div class="post-body" set:html={bodyHtml} />
-    </div>
-  </article>
+  <main id="contenu" tabindex="-1">
+    <article class="post">
+      <div class="container">
+        <a class="post-back" href={withBase('/blog/')}>← Toutes les actualités</a>
+        <h1>{post.title}</h1>
+        {published && <time class="post-date" datetime={isoDate(post.publishedAt)}>{published}</time>}
+        {tags.length > 0 && (
+          <div class="post-tags">
+            {tags.map((t) => <span class="post-tag">{t}</span>)}
+          </div>
+        )}
+        {cover && <img class="post-cover" src={cover} alt="" />}
+        <div class="post-body" set:html={bodyHtml} />
+      </div>
+    </article>
+  </main>
 </Layout>
 
 <style>
