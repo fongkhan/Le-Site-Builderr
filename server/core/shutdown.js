@@ -40,6 +40,10 @@ function pendingBackground() {
   return background.size;
 }
 
+// Requêtes en cours de chaque connexion : un seul écouteur « close » par socket, même
+// pour des dizaines de requêtes pipelinées sur la même connexion.
+const pendingBySocket = new WeakMap();
+
 // Compte les requêtes HTTP en cours du serveur : terminées à la fermeture de la réponse
 // ou de la connexion (la réponse d'une requête pipelinée dont la connexion se ferme
 // n'émet jamais « close »).
@@ -53,10 +57,17 @@ function attachServer(server) {
       if (!open) return;
       open = false;
       active--;
-      if (socket) socket.removeListener('close', done);
+      if (socket) pendingBySocket.get(socket)?.delete(done);
     };
     res.once('close', done);
-    if (socket) socket.once('close', done);
+    if (!socket) return;
+    let pending = pendingBySocket.get(socket);
+    if (!pending) {
+      pending = new Set();
+      pendingBySocket.set(socket, pending);
+      socket.once('close', () => { for (const end of [...pending]) end(); });
+    }
+    pending.add(done);
   });
   return server;
 }

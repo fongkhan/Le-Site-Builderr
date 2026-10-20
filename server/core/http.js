@@ -108,6 +108,7 @@ const limiters = {
 // final ignorés), car Next et Payload servent aussi /api/users/LOGIN, /api/users/%6Cogin
 // ou /api/users/%2e/login. Express (req.path) reçoit le chemin brut.
 const { canonicalApiPath } = require('../lib/account-guards');
+const { trackBackground } = require('./shutdown');
 const AUTH_LIMITED_PATHS = [
   ['/api/users/login', 'login'],
   ['/api/users/forgot-password', 'passwordReset'],
@@ -209,12 +210,27 @@ async function runForgotPassword(req, res, run) {
     return;
   }
   return forgotPasswordGate(req, (release) => {
+    // Opération attendue par l'arrêt propre même si le client est parti : sa réponse ne
+    // compte alors plus parmi les requêtes en cours.
+    let finished;
+    trackBackground(new Promise((resolve) => { finished = resolve; }));
+    const done = () => {
+      release();
+      finished();
+    };
     const end = res.end;
     res.end = function endAndRelease(...args) {
-      release();
+      done();
       return end.apply(this, args);
     };
-    return run();
+    let result;
+    try {
+      result = run();
+    } catch (err) {
+      done();
+      throw err;
+    }
+    return Promise.resolve(result).finally(done);
   });
 }
 

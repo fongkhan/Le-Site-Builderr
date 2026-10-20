@@ -225,3 +225,31 @@ test('runForgotPassword — place libérée à la fin de la réponse (res.end), 
   assert.equal(await third, 'ok');
   assert.deepEqual(started, [0, 1, 2]);
 });
+
+test('runForgotPassword — opération attendue par l’arrêt propre jusqu’à sa fin, même client parti', async () => {
+  const { runForgotPassword } = require('../../core/http.js');
+  const shutdown = require('../../core/shutdown.js');
+  const before = shutdown.pendingBackground();
+  const req = () => ({ headers: {}, complete: true, socket: { destroyed: false } });
+  const res = { headersSent: false, end() { return this; } };
+  const op = deferred();
+  const running = runForgotPassword(req(), res, () => op.promise);
+  await tick();
+  assert.equal(shutdown.pendingBackground(), before + 1, 'inscrite pendant l’opération');
+  op.resolve();
+  await running;
+  await tick();
+  assert.equal(shutdown.pendingBackground(), before, 'retirée à la fin de l’opération');
+  // Exception synchrone du gestionnaire : jamais de tâche de fond orpheline
+  await assert.rejects(runForgotPassword(req(), { headersSent: false, end() {} }, () => { throw new Error('boom'); }), /boom/);
+  await tick();
+  assert.equal(shutdown.pendingBackground(), before);
+  // Réponse terminée mais jamais envoyée (promesse en suspens) : retirée à res.end
+  const orphan = { headersSent: false, end() { return this; } };
+  runForgotPassword(req(), orphan, () => new Promise(() => {}));
+  await tick();
+  assert.equal(shutdown.pendingBackground(), before + 1);
+  orphan.end();
+  await tick();
+  assert.equal(shutdown.pendingBackground(), before);
+});

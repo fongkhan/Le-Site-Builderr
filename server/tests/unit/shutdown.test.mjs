@@ -144,9 +144,24 @@ test('attachServer : connexion fermée sans « close » de la réponse (requête
   server.emit('request', { socket }, queued);
   assert.equal(shutdown.activeRequests(), before + 2);
   head.emit('close');
-  assert.equal(socket.listenerCount('close'), 1, 'écouteur retiré à la fin de la réponse');
   socket.emit('close');
   assert.equal(shutdown.activeRequests(), before, 'la réponse orpheline n’est plus comptée');
   queued.emit('close');
   assert.equal(shutdown.activeRequests(), before, 'jamais décomptée deux fois');
+});
+
+test('attachServer : un seul écouteur « close » par connexion, quel que soit le nombre de requêtes', () => {
+  const { EventEmitter } = require('node:events');
+  const server = new EventEmitter();
+  shutdown.attachServer(server);
+  const before = shutdown.activeRequests();
+  const socket = new EventEmitter();
+  const responses = Array.from({ length: 30 }, () => new EventEmitter());
+  for (const res of responses) server.emit('request', { socket }, res);
+  assert.equal(socket.listenerCount('close'), 1);
+  assert.equal(shutdown.activeRequests(), before + 30);
+  for (const res of responses.slice(0, 10)) res.emit('close');
+  assert.equal(shutdown.activeRequests(), before + 20);
+  socket.emit('close');
+  assert.equal(shutdown.activeRequests(), before);
 });
