@@ -205,6 +205,13 @@ Ce que fait le mode cPanel :
 * **Médiathèque** : images PNG, JPEG, WebP, GIF et AVIF (SVG refusé), `MEDIA_MAX_MB` (8 Mo par défaut), redimensionnées à 2400 px quand `sharp` est disponible.
 * Persistance dans Payload CMS (PostgreSQL) + fichiers JSON de fallback.
 
+### Médiathèque du site
+* **Parcourir et réutiliser** : le bouton 🖼️ de chaque champ image ouvre la médiathèque du site (vignettes, dimensions, poids, recherche au-delà de 8 images) ; « Choisir » place l'image dans le champ, sans nouveau téléversement.
+* **Texte alternatif** par image (200 caractères au plus), repris par le site publié pour chaque usage (galerie, produits, couvertures d'articles) ; vide, le bloc garde son texte de repli (nom du produit, « Photo N – titre »).
+* **Suppression contrôlée** : refusée tant que l'image est citée par une page (toutes langues) ou un article, **brouillons compris** — la médiathèque nomme les contenus concernés. La suppression par l'API REST Payload (`DELETE /api/media/:id`) est réservée aux admins.
+* Endpoints (admin ou propriétaire du site) : `GET /api/sites/:slug/media` (images et usages), `PATCH /api/sites/:slug/media/:id` (`{ alt }`), `DELETE /api/sites/:slug/media/:id` (409 si utilisée, journal d'audit `media.suppression`).
+* **Sites publiés** : le build lit le canal interne `/internal/site-media` (texte alternatif, dimensions, variantes) : chaque `<img>` de la médiathèque reçoit `width`/`height` (aucun décalage de mise en page) et un `srcset` de variantes 480, 960 et 1600 px (celles nettement plus petites que l'original) écrites au déploiement sous `/media/w<largeur>/` — seulement si `sharp` est disponible, sinon l'image d'origine seule (jamais de lien cassé). Couverture d'article prioritaire, fond du Hero en tête de page préchargé. Les noms des médias ignorés ou introuvables figurent dans le journal de build.
+
 ### Messages reçus
 * Chaque envoi du formulaire de contact ou de prise de rendez-vous d'un site publié est conservé (12 mois, 500 messages maximum par site) et consultable par son propriétaire dans l'onglet **Messages** : non lus, marquer comme lu, répondre par email, supprimer. Un email de notification en échec ne fait plus perdre le message.
 

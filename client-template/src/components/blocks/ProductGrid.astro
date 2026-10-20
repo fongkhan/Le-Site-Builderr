@@ -1,11 +1,16 @@
 ---
 import { safeHttpUrl } from '../../lib/url';
+import type { CtaLink } from '../../lib/url';
 import { t } from '../../lib/ui-strings.mjs';
+import { getSiteContent } from '../../lib/content';
+import { siteImage } from '../../lib/images';
 
 interface ProductItem {
   name?: string;
   price?: string;
   image?: string;
+  /** Lien du bouton « Commander » (vide : formulaire du site, mode Automatique). */
+  ctaLink?: string | null;
 }
 
 interface Props {
@@ -13,17 +18,25 @@ interface Props {
     title?: string;
     products?: ProductItem[];
   };
-  /** Cible du bouton selon son libellé (ancre du formulaire de la page) ; sans cible, pas de bouton. */
-  ctaTarget?: (label?: string) => string | null;
+  /** Lien d'un bouton : lien saisi s'il est valide, sinon formulaire selon le libellé ; null : pas de bouton. */
+  resolveCta?: (link: unknown, label?: string) => CtaLink | null;
   /** Langue de la page (libellés d'interface, lib/ui-strings.mjs). */
   locale?: string;
 }
 
-const { data, ctaTarget, locale } = Astro.props;
-// Pas de lien d'achat côté CMS : « Commander » mène au formulaire de la page. La cible
-// est choisie sur le libellé français (règle de ctaTarget) ; seul le texte affiché est traduit.
-const ctaHref = ctaTarget ? ctaTarget('Commander') : null;
-const products = (data.products || []).filter(Boolean).map((p) => ({ ...p, image: safeHttpUrl(p.image) }));
+const { data, resolveCta, locale } = Astro.props;
+const { media } = await getSiteContent();
+// Bouton « Commander » : lien du produit s'il est valide, sinon formulaire de la page
+// (mode Automatique, cible choisie sur le libellé français ; seul le texte affiché est
+// traduit). Image : texte alternatif de la médiathèque, sinon le nom du produit.
+const products = (data.products || []).filter(Boolean).map((p) => {
+  const src = safeHttpUrl(p.image);
+  return {
+    ...p,
+    image: src ? siteImage(src, media, { fallbackAlt: p.name || '', sizes: '(max-width: 640px) calc(100vw - 40px), 380px' }) : null,
+    cta: resolveCta ? resolveCta(p.ctaLink, 'Commander') : null,
+  };
+});
 ---
 
 <section class="products-section">
@@ -33,13 +46,23 @@ const products = (data.products || []).filter(Boolean).map((p) => ({ ...p, image
       {products.map((product) => (
         <div class="product-card">
           <div class="product-image-container">
-            {product.image && <img src={product.image} alt={product.name || ''} loading="lazy" decoding="async" />}
+            {product.image && (
+              <img src={product.image.src} alt={product.image.alt} width={product.image.width} height={product.image.height} srcset={product.image.srcset} sizes={product.image.sizes} loading="lazy" decoding="async" />
+            )}
           </div>
           <div class="product-info">
             {product.name && <h3>{product.name}</h3>}
             {product.price && <span class="price">{product.price}</span>}
-            {ctaHref && (
-              <a class="buy-button" href={ctaHref} aria-label={product.name ? t(locale, 'orderProduct', { name: product.name }) : undefined}>{t(locale, 'order')}</a>
+            {product.cta && (
+              <a
+                class="buy-button"
+                href={product.cta.href}
+                target={product.cta.newTab ? '_blank' : undefined}
+                rel={product.cta.newTab ? 'noopener noreferrer' : undefined}
+                aria-label={product.name ? `${t(locale, 'orderProduct', { name: product.name })}${product.cta.newTab ? ` ${t(locale, 'newTab')}` : ''}` : undefined}
+              >
+                {t(locale, 'order')}{!product.name && product.cta.newTab && <span class="visually-hidden"> {t(locale, 'newTab')}</span>}
+              </a>
             )}
           </div>
         </div>

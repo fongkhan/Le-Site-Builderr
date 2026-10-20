@@ -1,5 +1,7 @@
 ---
 import { safeHttpUrl } from '../../lib/url';
+import { getSiteContent } from '../../lib/content';
+import { siteImage } from '../../lib/images';
 
 interface TestimonialItem {
   quote: string;
@@ -24,7 +26,14 @@ const ratingOf = (t: TestimonialItem) => Math.max(0, Math.min(5, Math.round(Numb
 // Pas de données structurées ici : des avis saisis par le site lui-même
 // (AggregateRating / Review « auto-déclarés ») sont inéligibles aux étoiles Google et
 // exposent le site à une action manuelle. Les étoiles restent affichées sur la page.
-const testimonials = (data.testimonials || []).filter(Boolean).map((t) => ({ ...t, avatar: safeHttpUrl(t.avatar) }));
+
+// Avatar décoratif (le nom de l'auteur suit) : alt vide conservé ; dimensions et
+// variantes si l'image vient de la médiathèque.
+const { media } = await getSiteContent();
+const testimonials = (data.testimonials || []).filter(Boolean).map((t) => {
+  const src = safeHttpUrl(t.avatar);
+  return { ...t, avatar: src ? siteImage(src, media, { sizes: '50px' }) : null };
+});
 ---
 
 <section class="testimonials-section">
@@ -42,7 +51,7 @@ const testimonials = (data.testimonials || []).filter(Boolean).map((t) => ({ ...
           <p class="quote-text">{testi.quote}</p>
           <div class="author-info">
             {testi.avatar && (
-              <img class="avatar" src={testi.avatar} alt="" loading="lazy" decoding="async" />
+              <img class="avatar" src={testi.avatar.src} alt="" width={testi.avatar.width} height={testi.avatar.height} srcset={testi.avatar.srcset} sizes={testi.avatar.sizes} loading="lazy" decoding="async" />
             )}
             <div class="author-meta">
               <h3>{testi.author}</h3>

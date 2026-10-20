@@ -1,5 +1,7 @@
 {
   "_comment": "Contenu de test du template (TEMPLATE_FIXTURE). Même forme que le canal interne /internal/site-pages et /internal/site-posts. Couvre les 11 types de blocs, 2 langues, des articles (dont un brouillon, ignoré) et des saisies hostiles (javascript:, CSS) qui doivent être neutralisées.",
+  "_comment_medias_boutons": "Médiathèque (clé media, même forme que /internal/site-media : texte alternatif, dimensions, variantes) et liens des boutons d'action (ctaLink : page, ancre, adresse web, téléphone, email, et liens refusés ou introuvables qui retombent sur le mode Automatique). Vérifiés par scripts/checks/medias.mjs et boutons.mjs.",
+  "media": { "docs": [ { "filename": "four.jpg", "alt": "Four à céramique \"raku\"", "width": 1600, "height": 1067, "variants": [480, 960] }, { "filename": "tasse.jpg", "alt": "", "width": 1200, "height": 1200, "variants": [480, 960] }, { "filename": "atelier.jpg", "alt": "Atelier de poterie", "width": 2400, "height": 1600, "variants": [480, 960, 1600] } ] },
   "pages": {
     "docs": [
       {
@@ -13,7 +15,8 @@
             "blockType": "hero",
             "title": "Atelier Démo",
             "subtitle": "Céramiques tournées à la main, cuites sur place.",
-            "ctaText": "Nous écrire",
+            "ctaText": "Découvrir nos cours",
+            "ctaLink": "/cours/",
             "backgroundImage": "https://images.unsplash.com/photo-1565193566173-7a0ee3dbe261?auto=format&fit=crop&q=80&w=1200"
           },
           {
@@ -29,8 +32,8 @@
             "blockType": "product-grid",
             "title": "Pièces en vedette",
             "products": [
-              { "name": "Bol « Brume »", "price": "28 €", "image": "https://images.unsplash.com/photo-1578749556568-bc2c40e68b61?auto=format&fit=crop&q=80&w=400" },
-              { "name": "Tasse expresso", "price": "18 €", "image": "/api/media/file/tasse.jpg" },
+              { "name": "Bol « Brume »", "price": "28 €", "image": "https://images.unsplash.com/photo-1578749556568-bc2c40e68b61?auto=format&fit=crop&q=80&w=400", "ctaLink": "tel:+33 6 12 34 56 78" },
+              { "name": "Tasse expresso", "price": "18 €", "image": "/api/media/file/tasse.jpg", "ctaLink": "/page-supprimee/" },
               { "name": "Vase (image refusée)", "price": "45 €", "image": "javascript:alert('produit')" }
             ]
           },
@@ -64,8 +67,8 @@
             "blockType": "pricing",
             "title": "Cours de tournage",
             "plans": [
-              { "name": "Initiation", "price": "45 €", "description": "Une matinée pour découvrir le tour.", "features": [{ "feature": "3 h de cours" }, { "feature": "Terre et cuisson incluses" }], "ctaText": "Réserver une séance", "isPopular": false },
-              { "name": "Trimestre", "price": "390 €", "description": "Pour progresser à son rythme.", "features": [{ "feature": "10 séances" }, { "feature": "Accès libre à l'atelier" }, { "feature": "Émaux à volonté" }], "ctaText": "Nous contacter", "isPopular": true }
+              { "name": "Initiation", "price": "45 €", "description": "Une matinée pour découvrir le tour.", "features": [{ "feature": "3 h de cours" }, { "feature": "Terre et cuisson incluses" }], "ctaText": "Réserver une séance", "ctaLink": "https://reservation.example/atelier-demo", "isPopular": false },
+              { "name": "Trimestre", "price": "390 €", "description": "Pour progresser à son rythme.", "features": [{ "feature": "10 séances" }, { "feature": "Accès libre à l'atelier" }, { "feature": "Émaux à volonté" }], "ctaText": "Nous contacter", "ctaLink": "javascript:alert('formule')", "isPopular": true }
             ]
           },
           {
@@ -113,13 +116,14 @@
             "title": "Cours de tournage",
             "subtitle": "Image de fond hostile : doit rester confinée dans url(\"…\").",
             "ctaText": "Réserver un cours",
+            "ctaLink": "#rendez-vous",
             "backgroundImage": "https://images.example.com/fond.jpg?x=\");background:url(javascript:alert(1));color:red;--a:(\""
           },
           {
             "blockType": "pricing",
             "title": "Formules",
             "plans": [
-              { "name": "Séance", "price": "45 €", "description": "Sans engagement.", "features": [{ "feature": "3 h" }], "ctaText": "Réserver", "isPopular": false },
+              { "name": "Séance", "price": "45 €", "description": "Sans engagement.", "features": [{ "feature": "3 h" }], "ctaText": "Réserver", "ctaLink": "mailto:bonjour@atelier-demo.example", "isPopular": false },
               { "name": "Sans bouton", "price": "0 €", "description": "Pas de libellé : pas de bouton.", "features": [], "ctaText": "", "isPopular": false }
             ]
           },
@@ -164,7 +168,7 @@
         "slug": "about",
         "locale": "en",
         "layout": [
-          { "blockType": "hero", "title": "About the workshop", "ctaText": "Get in touch" },
+          { "blockType": "hero", "title": "About the workshop", "ctaText": "Get in touch", "ctaLink": "//evil.example/x" },
           { "blockType": "gallery", "title": "", "images": ["https://images.unsplash.com/photo-1493106641515-6b5631de4bb9?auto=format&fit=crop&q=80&w=600"] },
           { "blockType": "footer", "text": "© Atelier Démo" }
         ]
@@ -196,9 +200,9 @@
         "slug": "ateliers",
         "locale": "fr",
         "layout": [
-          { "blockType": "hero", "title": "Nos ateliers", "subtitle": "Initiation et perfectionnement." },
+          { "blockType": "hero", "title": "Nos ateliers", "subtitle": "Initiation et perfectionnement.", "backgroundImage": "/api/media/file/atelier.jpg" },
           { "blockType": "footer", "text": "© Atelier Démo" },
-          { "blockType": "hero", "title": "Atelier enfants", "subtitle": "Le mercredi après-midi.", "ctaText": "Prendre rendez-vous" },
+          { "blockType": "hero", "title": "Atelier enfants", "subtitle": "Le mercredi après-midi.", "ctaText": "Prendre rendez-vous", "ctaLink": "/mentions-legales/" },
           { "blockType": "appointment", "title": "Réserver un atelier", "services": [{ "name": "Initiation" }] }
         ]
       }

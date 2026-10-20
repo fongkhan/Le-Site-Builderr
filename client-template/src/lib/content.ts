@@ -2,13 +2,14 @@
 //
 // Sources, par ordre de priorité :
 // - TEMPLATE_FIXTURE=/chemin/fixture.json : contenu de test lu sur disque
-//   ({ pages: { docs }, posts: { docs } }), sans API (voir fixtures/site.json) ;
-// - canal interne de l'orchestrateur (/internal/site-pages et /internal/site-posts),
-//   authentifié par BUILD_TOKEN (jamais exposé au navigateur).
+//   ({ pages: { docs }, posts: { docs }, media: { docs } }), sans API (voir fixtures/site.json) ;
+// - canal interne de l'orchestrateur (/internal/site-pages, /internal/site-posts et
+//   /internal/site-media), authentifié par BUILD_TOKEN (jamais exposé au navigateur).
 //
 // Échecs :
 // - build lancé par l'orchestrateur (site + jeton fournis) : une API indisponible fait
-//   ÉCHOUER le build — mieux vaut garder la version en ligne que publier un site vide ;
+//   ÉCHOUER le build — mieux vaut garder la version en ligne que publier un site vide
+//   (la médiathèque fait exception : sans elle, images sans texte alternatif ni dimensions) ;
 // - build local du template seul (npm run build) : page de secours (mode hors-ligne).
 //
 // Le contenu est lu une seule fois par build : la promesse est mise en cache au niveau
@@ -17,6 +18,8 @@
 import fs from 'node:fs';
 import { normalizeLocale, localeRouteParam, localesInPages, DEFAULT_LOCALE, LOCALES } from './i18n.mjs';
 import { withBase } from './url';
+import { indexMedia } from './media-images.mjs';
+import type { MediaIndex } from './images';
 
 const orchestratorUrl = process.env.ORCHESTRATOR_URL || 'http://127.0.0.1:4000';
 const siteSlug = process.env.ACTIVE_SITE_SLUG || '';
@@ -66,6 +69,8 @@ export interface SiteContent {
   locales: string[];
   /** Menu de navigation par langue : une page n'apparaît que dans sa langue. */
   navByLocale: Record<string, NavPage[]>;
+  /** Médiathèque : texte alternatif, dimensions et variantes par nom de fichier ({} sans manifeste). */
+  media: MediaIndex;
   /** Build local sans API : seule la page de secours est générée. */
   offline: boolean;
 }
@@ -117,7 +122,7 @@ function rewriteMediaUrls(value: unknown, prefix: string): unknown {
   return value;
 }
 
-function readFixture(file: string): { pages: any[]; posts: any[] } {
+function readFixture(file: string): { pages: any[]; posts: any[]; media: any[] } {
   let data: any;
   try {
     data = JSON.parse(fs.readFileSync(file, 'utf-8'));
@@ -130,18 +135,20 @@ function readFixture(file: string): { pages: any[]; posts: any[] } {
     pages: (rewritten.pages && rewritten.pages.docs) || [],
     // Comme le canal interne : articles publiés uniquement
     posts: posts.filter((p) => !p.status || p.status === 'published'),
+    media: (rewritten.media && rewritten.media.docs) || [],
   };
 }
 
-// Contenu brut : pages (null = API injoignable en build local) et articles.
-async function loadRaw(): Promise<{ pages: any[] | null; posts: any[] }> {
+// Contenu brut : pages (null = API injoignable en build local), articles et médiathèque.
+async function loadRaw(): Promise<{ pages: any[] | null; posts: any[]; media: any[] }> {
   if (fixturePath) {
     console.log(`[contenu] Fixture : ${fixturePath}`);
     return readFixture(fixturePath);
   }
-  const [pagesRes, postsRes] = await Promise.allSettled([
+  const [pagesRes, postsRes, mediaRes] = await Promise.allSettled([
     internalFetch('/internal/site-pages'),
     internalFetch('/internal/site-posts'),
+    internalFetch('/internal/site-media'),
   ]);
   if (isOrchestratedBuild) {
     // Build de l'orchestrateur : on échoue plutôt que de publier une page de secours
@@ -152,10 +159,14 @@ async function loadRaw(): Promise<{ pages: any[] | null; posts: any[] }> {
   }
   if (pagesRes.status === 'rejected') {
     console.warn(`[contenu] API injoignable (${pagesRes.reason?.message || pagesRes.reason}) : page de secours hors-ligne.`);
+  } else if (mediaRes.status === 'rejected') {
+    // Jamais fatal, même en build orchestré : le site reste publiable sans métadonnées
+    console.warn(`[contenu] Médiathèque indisponible (${mediaRes.reason?.message || mediaRes.reason}) : images sans texte alternatif ni dimensions.`);
   }
   return {
     pages: pagesRes.status === 'fulfilled' ? pagesRes.value.docs || [] : null,
     posts: postsRes.status === 'fulfilled' ? postsRes.value.docs || [] : [],
+    media: mediaRes.status === 'fulfilled' && Array.isArray(mediaRes.value?.docs) ? mediaRes.value.docs : [],
   };
 }
 
@@ -214,6 +225,7 @@ async function loadSiteContent(): Promise<SiteContent> {
   const offline = raw.pages === null;
   const pages = offline ? [OFFLINE_PAGE] : routablePages(raw.pages as any[]);
   const posts = offline ? [] : validPosts(raw.posts);
+  const media: MediaIndex = offline ? {} : indexMedia(raw.media);
 
   // Menu PAR LANGUE ; le blog (non localisé) est rattaché à la langue par défaut et
   // n'apparaît que s'il contient au moins un article publié.
@@ -229,7 +241,7 @@ async function loadSiteContent(): Promise<SiteContent> {
   // Langues proposées (sélecteur, hreflang) : seulement celles qui ont une page d'accueil,
   // cible de ces liens — jamais de lien vers un /en/ inexistant.
   const locales = localesInPages(pages.filter((p) => p.slug === 'home'));
-  return { pages, posts, locales, navByLocale, offline };
+  return { pages, posts, locales, navByLocale, media, offline };
 }
 
 let contentPromise: Promise<SiteContent> | null = null;

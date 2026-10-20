@@ -1,5 +1,6 @@
 ---
 import { t } from '../../lib/ui-strings.mjs';
+import type { CtaLink } from '../../lib/url';
 
 interface FeatureItem {
   feature: string;
@@ -11,6 +12,8 @@ interface PlanItem {
   description: string;
   features: FeatureItem[];
   ctaText: string;
+  /** Lien du bouton (vide : formulaire du site, mode Automatique). */
+  ctaLink?: string | null;
   isPopular: boolean;
 }
 
@@ -19,21 +22,25 @@ interface Props {
     title: string;
     plans: PlanItem[];
   };
-  /** Cible d'un bouton selon son libellé (ancre du formulaire de la page) ; sans cible, pas de bouton. */
-  ctaTarget?: (label?: string) => string | null;
+  /** Lien d'un bouton : lien saisi s'il est valide, sinon formulaire selon le libellé ; null : pas de bouton. */
+  resolveCta?: (link: unknown, label?: string) => CtaLink | null;
   /** Langue de la page (libellés d'interface, lib/ui-strings.mjs). */
   locale?: string;
 }
 
-const { data, ctaTarget, locale } = Astro.props;
-const ctaHrefFor = (label?: string) => (label && ctaTarget ? ctaTarget(label) : null);
+const { data, resolveCta, locale } = Astro.props;
+// Lien de chaque bouton calculé une seule fois (sans libellé : pas de bouton)
+const plans = (data.plans || []).filter(Boolean).map((plan) => ({
+  ...plan,
+  cta: plan.ctaText && resolveCta ? resolveCta(plan.ctaLink, plan.ctaText) : null,
+}));
 ---
 
 <section class="pricing-section">
   <div class="container">
     {data.title && <h2 class="section-title">{data.title}</h2>}
     <div class="pricing-grid">
-      {data.plans && data.plans.map((plan) => (
+      {plans.map((plan) => (
         <div class={`pricing-card ${plan.isPopular ? 'popular' : ''}`}>
           {plan.isPopular && (
             <span class="popular-badge">{t(locale, 'popular')}</span>
@@ -53,10 +60,15 @@ const ctaHrefFor = (label?: string) => (label && ctaTarget ? ctaTarget(label) : 
               </li>
             ))}
           </ul>
-          {ctaHrefFor(plan.ctaText) && (
+          {plan.cta && (
             <div class="card-footer">
-              <a href={ctaHrefFor(plan.ctaText)} class={`cta-btn ${plan.isPopular ? 'btn-primary' : 'btn-secondary'}`}>
-                {plan.ctaText}
+              <a
+                href={plan.cta.href}
+                class={`cta-btn ${plan.isPopular ? 'btn-primary' : 'btn-secondary'}`}
+                target={plan.cta.newTab ? '_blank' : undefined}
+                rel={plan.cta.newTab ? 'noopener noreferrer' : undefined}
+              >
+                {plan.ctaText}{plan.cta.newTab && <span class="visually-hidden"> {t(locale, 'newTab')}</span>}
               </a>
             </div>
           )}

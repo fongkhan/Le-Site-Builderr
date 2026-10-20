@@ -30,6 +30,8 @@ interface Props {
 	jsonLd?: unknown[];
 	/** Page à ne pas indexer (page 404). */
 	noindex?: boolean;
+	/** Image préchargée en priorité (fond du Hero en tête de page). */
+	preloadImage?: string;
 }
 
 const {
@@ -44,6 +46,7 @@ const {
 	ogType = 'website',
 	jsonLd = [],
 	noindex = false,
+	preloadImage,
 } = Astro.props;
 const pageLocale = normalizeLocale(locale);
 // Lien interne vers une page de la langue courante (règle partagée avec le serveur),
@@ -101,6 +104,7 @@ const jsonLdScripts = (jsonLd || []).filter(Boolean).map((d) => jsonLdString(d))
 		<link rel="icon" href={withBase('/favicon.ico')} sizes="32x32" />
 		<meta name="generator" content={Astro.generator} />
 		<title>{title}</title>
+		{preloadImage && <link rel="preload" as="image" href={preloadImage} fetchpriority="high" />}
 		{description && <meta name="description" content={description} />}
 		{isDraft ? <meta name="robots" content="noindex, nofollow" /> : noindex && <meta name="robots" content="noindex" />}
 		{canonicalUrl && <link rel="canonical" href={canonicalUrl} />}

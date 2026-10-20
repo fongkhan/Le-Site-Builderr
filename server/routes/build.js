@@ -10,6 +10,7 @@ const { LOCK_FILE } = require('../core/config');
 const { readSitePages, readSitePosts } = require('../services/content');
 const build = require('../services/build');
 const { isShuttingDown } = require('../core/shutdown');
+const { siteMediaManifest } = require('../services/media');
 
 const router = createRouter();
 
@@ -143,6 +144,16 @@ router.get('/internal/site-posts', requireBuildToken, async (req, res) => {
     res.json(media.rewriteMediaUrls(await readSitePosts(siteSlug, { publishedOnly: true }), media.mediaPrefixFor(build.getActiveBasePath())));
   } catch (e) {
     sendError(res, "Impossible de lire les articles du site.", e);
+  }
+});
+
+// Médiathèque du site : texte alternatif, dimensions et variantes de chaque image (les
+// fichiers eux-mêmes sont écrits dans le site au déploiement, même règle de variantes).
+router.get('/internal/site-media', requireBuildToken, async (req, res) => {
+  try {
+    res.json(await siteMediaManifest(await resolveInternalSite(req)));
+  } catch (e) {
+    sendError(res, "Impossible de lire la médiathèque du site.", e);
   }
 });
 

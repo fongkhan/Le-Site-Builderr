@@ -934,10 +934,14 @@ export default buildConfig({
         read: isAdminOrSiteClient,
         create: canCreateForOwnSite,
         update: isAdminOrSiteClient,
-        delete: isAdminOrSiteClient,
+        // Suppression client via DELETE /api/sites/:slug/media/:id (contrôle d'usage)
+        delete: isAdmin,
       },
       fields: [
         siteRelationField({ index: true }),
+        // Texte alternatif repris par le site publié pour chaque usage de l'image ;
+        // vide = texte de repli du bloc (nom du produit, « Photo N – titre »…).
+        { name: 'alt', type: 'text', maxLength: 200 },
       ],
     },
     {

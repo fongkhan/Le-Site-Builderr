@@ -270,7 +270,7 @@ async function copySiteMedia(sourceSlug, targetSiteId, content) {
     try {
       const created = await payloadInstance.create({
         collection: 'media',
-        data: { site: targetSiteId },
+        data: { site: targetSiteId, ...(doc.alt ? { alt: doc.alt } : {}) },
         filePath,
         overrideAccess: true,
       });

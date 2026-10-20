@@ -21,6 +21,7 @@ const ROUTERS = [
   require('./routes/admin'),
   require('./routes/system'),
   require('./routes/content'),
+  require('./routes/media'),
   require('./routes/domains'),
   require('./routes/public'),
   require('./routes/ai'),

@@ -707,13 +707,13 @@ function writeSeoFiles(site, pagesData, postsData) {
   }
 }
 
-// Noms des fichiers de la médiathèque qui appartiennent au site : un contenu qui cite le
-// fichier d'un autre client (nom deviné) ne le publie jamais.
-async function ownedMediaFilenames(siteSlug, filenames) {
+// Fiches de la médiathèque qui appartiennent au site (Map nom → fiche) : un contenu qui
+// cite le fichier d'un autre client (nom deviné) ne le publie jamais.
+async function ownedMediaDocs(siteSlug, filenames) {
   const payloadInstance = getPayloadInstance();
-  if (!payloadInstance || filenames.length === 0) return new Set();
+  if (!payloadInstance || filenames.length === 0) return new Map();
   const siteId = await findPayloadSiteId(payloadInstance, siteSlug);
-  if (!siteId) return new Set();
+  if (!siteId) return new Map();
   const res = await payloadInstance.find({
     collection: 'media',
     where: { and: [{ site: { equals: siteId } }, { filename: { in: filenames } }] },
@@ -721,29 +721,27 @@ async function ownedMediaFilenames(siteSlug, filenames) {
     depth: 0,
     overrideAccess: true,
   });
-  return new Set(res.docs.map((d) => d.filename).filter(Boolean));
+  return new Map(res.docs.filter((d) => d.filename).map((d) => [d.filename, d]));
 }
 
 // Médiathèque : copie dans le dist les images du site référencées par les pages et les
 // articles publiés (couvertures, images du corps) — URLs /media/… réécrites par le canal
 // interne : le site publié est autonome. Seules les images matricielles sont publiées
-// (jamais un SVG hérité d'avant la restriction des formats). Renvoie { copied, ignored }.
+// (jamais un SVG hérité d'avant la restriction des formats), avec leurs variantes
+// redimensionnées (dist/media/w<largeur>/<nom>, annoncées par /internal/site-media).
+// Renvoie { copied, ignored: [noms], missing: [noms], resized, variantCopies } : noms
+// absents de la médiathèque du site, et fichiers introuvables sur le disque.
 async function copyReferencedMedia(siteSlug, pagesData, postsData) {
   const { isPublishableMediaName } = require('../lib/media-policy');
-  const filenames = media.collectMediaFilenames({ pages: pagesData, posts: postsData }).filter(isPublishableMediaName);
-  if (filenames.length === 0) return { copied: 0, ignored: 0 };
-  const owned = await ownedMediaFilenames(siteSlug, filenames);
-  const mediaOut = path.join(DIST_DIR, 'media');
-  let copied = 0;
-  for (const name of filenames) {
-    const src = path.join(UPLOADS_DIR, path.basename(name));
-    if (owned.has(name) && fs.existsSync(src)) {
-      fs.mkdirSync(mediaOut, { recursive: true });
-      fs.copyFileSync(src, path.join(mediaOut, path.basename(name)));
-      copied++;
-    }
-  }
-  return { copied, ignored: filenames.length - owned.size };
+  const { publishMediaFiles } = require('../lib/media-variants');
+  const names = media.collectMediaFilenames({ pages: pagesData, posts: postsData }).filter(isPublishableMediaName);
+  if (names.length === 0) return { copied: 0, ignored: [], missing: [], resized: 0, variantCopies: 0 };
+  return publishMediaFiles({
+    names,
+    ownedDocs: await ownedMediaDocs(siteSlug, names),
+    uploadsDir: UPLOADS_DIR,
+    outDir: path.join(DIST_DIR, 'media'),
+  });
 }
 
 // Build d'un site supprimé en cours de route : ni déploiement, ni publication, ni
@@ -800,9 +798,13 @@ async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
       appendBuildLog(`SEO non généré : ${seoErr.message}`);
     }
     try {
-      const { copied, ignored } = await copyReferencedMedia(siteSlug, pagesData, postsData);
-      if (copied > 0) appendBuildLog(`Médias copiés dans le site : ${copied} fichier(s).`);
-      if (ignored > 0) appendBuildLog(`Médias ignorés (absents de la médiathèque du site) : ${ignored} fichier(s).`);
+      const { copied, ignored, missing, resized, variantCopies } = await copyReferencedMedia(siteSlug, pagesData, postsData);
+      // Noms des médias écartés dans le journal (neutralisés, bornés) : diagnostic d'une image absente du site
+      const { summarizeNames } = require('../lib/media-library');
+      if (copied > 0) appendBuildLog(`Médias copiés dans le site : ${copied} fichier(s)${resized > 0 ? `, ${resized} variante(s) redimensionnée(s)` : ''}.`);
+      if (variantCopies > 0) appendBuildLog(`Variantes non redimensionnées (copie de l'original) : ${variantCopies}.`);
+      if (ignored.length > 0) appendBuildLog(`Médias ignorés (absents de la médiathèque du site) : ${summarizeNames(ignored)}.`);
+      if (missing.length > 0) appendBuildLog(`Médias introuvables sur le disque : ${summarizeNames(missing)}.`);
     } catch (mediaErr) {
       appendBuildLog(`Copie des médias échouée : ${mediaErr.message}`);
     }

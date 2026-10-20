@@ -5,6 +5,9 @@ import { getSiteContent, isDraftBuild } from '../lib/content';
 import type { Block, NavPage, PageDoc } from '../lib/content';
 import { localBusinessLd, faqPageLd } from '../lib/jsonld';
 import { safeHttpUrl, withBase } from '../lib/url';
+import type { CtaLink } from '../lib/url';
+import { resolveCtaLink } from '../lib/links.mjs';
+import { siteImageVariant } from '../lib/images';
 import Hero from '../components/blocks/Hero.astro';
 import Features from '../components/blocks/Features.astro';
 import ProductGrid from '../components/blocks/ProductGrid.astro';
@@ -60,6 +63,9 @@ interface Props {
 
 const { page, nav = [], locale = DEFAULT_LOCALE, locales = [], formPages = {} } = Astro.props;
 const layout: Block[] = page.layout || [];
+// Contenu partagé (lu une fois par build) : pages et articles générés (cibles des liens
+// de boutons), médiathèque (préchargement du fond du premier Hero).
+const { pages: allPages, posts: allPosts, media } = await getSiteContent();
 
 // Mapping des types de blocs vers les composants Astro correspondants
 const blockMap: Record<string, any> = {
@@ -95,11 +101,11 @@ const anchorIds = layout.map((block) => {
   return anchorCounts[base] === 1 ? base : `${base}-${anchorCounts[base]}`;
 });
 
-// Cible des boutons d'action (Hero, formules, produits) : aucun champ de lien côté CMS,
-// on vise donc un formulaire — celui de la page en priorité, sinon celui d'une autre
-// page de la même langue (lien préfixé par le chemin de base). La prise de RDV est
-// choisie si le libellé l'évoque (ou s'il n'y a qu'elle), sinon le contact. Sans
-// formulaire : pas de bouton (jamais de lien mort « # »).
+// Mode Automatique des boutons d'action (Hero, formules, produits), repli quand aucun lien
+// valide n'est saisi dans le CMS : on vise un formulaire — celui de la page en priorité,
+// sinon celui d'une autre page de la même langue (lien préfixé par le chemin de base). La
+// prise de RDV est choisie si le libellé l'évoque (ou s'il n'y a qu'elle), sinon le
+// contact. Sans formulaire : pas de bouton (jamais de lien mort « # »).
 const APPOINTMENT_WORDS = /rendez|rdv|r[ée]serv|book|appointment/i;
 const hasBlock = (type: string) => layout.some((b) => b.blockType === type);
 const otherPage = (slug: string | undefined, anchor: string) => (slug ? `${withBase(localePath(locale, slug))}${anchor}` : null);
@@ -108,6 +114,30 @@ const pickForm = (contact: string | null, appointment: string | null, label?: st
 const ctaTarget = (label?: string): string | null =>
   pickForm(hasBlock('contact') ? '#contact' : null, hasBlock('appointment') ? '#rendez-vous' : null, label) ||
   pickForm(otherPage(formPages.contact, '#contact'), otherPage(formPages.appointment, '#rendez-vous'), label);
+
+// Lien saisi pour un bouton (champ ctaLink, règles de lib/links.mjs) : page générée du site
+// (le blog et ses articles compris), ancre d'un formulaire de CETTE page, adresse web
+// (nouvel onglet), téléphone ou email. Lien refusé ou cible absente : mode Automatique,
+// signalé une fois par valeur dans le journal de build.
+const routeSet = new Set([
+  ...allPages.map((p) => localePath(p.locale || DEFAULT_LOCALE, p.slug)),
+  '/blog/',
+  ...allPosts.map((p) => `/blog/${p.slug}/`),
+]);
+const anchorSet = new Set(anchorIds.filter((id): id is string => Boolean(id)));
+const warnedLinks = new Set<string>();
+const resolveCta = (link: unknown, label?: string): CtaLink | null => {
+  const explicit = resolveCtaLink(link, { routes: routeSet, anchors: anchorSet, withBase });
+  if (explicit) return explicit;
+  const fallback = ctaTarget(label);
+  if (typeof link === 'string' && link.trim() !== '' && !warnedLinks.has(link)) {
+    warnedLinks.add(link);
+    console.warn(
+      `[contenu] Lien de bouton ignoré sur « ${page.title} » (${localePath(locale, page.slug)}) : ${JSON.stringify(link.slice(0, 120))} (page introuvable ou lien refusé) — ${fallback ? 'bouton dirigé vers le formulaire du site' : 'bouton masqué'}`,
+    );
+  }
+  return fallback ? { href: fallback, newTab: false } : null;
+};
 
 // Données structurées de la page : un seul LocalBusiness (premier bloc Infos, @id
 // stable) et une seule FAQPage (toutes les FAQ de la page regroupées).
@@ -125,20 +155,26 @@ const contentBlocks = layout.filter((b) => b.blockType !== 'footer');
 const footerBlocks = layout.filter((b) => b.blockType === 'footer');
 const firstHero = contentBlocks.find((b) => b.blockType === 'hero' && String(b.title || '').trim() !== '');
 
-// Rendu d'un bloc : props communes (données, ancre, cible des boutons, langue).
+// Rendu d'un bloc : props communes (données, ancre, liens des boutons, langue).
 const renderProps = (block: Block) => ({
   data: block,
   anchorId: anchorIds[layout.indexOf(block)],
-  ctaTarget,
+  resolveCta,
   locale,
   ...(block.blockType === 'hero' ? { headingLevel: block === firstHero ? 1 : 2 } : {}),
 });
 
-// Image de partage (og:image) : fond du premier Hero qui en a un.
+// Image de partage (og:image) : fond du premier Hero qui en a un (image d'origine).
 const heroImage = layout
   .filter((b) => b.blockType === 'hero')
   .map((b) => safeHttpUrl(b.backgroundImage))
   .find(Boolean);
+
+// Fond du Hero en tête de page : préchargé en priorité (image la plus visible au premier
+// affichage), à la même URL que son style (variante de 1600 px si elle existe).
+const leadBlock = contentBlocks[0];
+const leadBackground = leadBlock && leadBlock.blockType === 'hero' ? safeHttpUrl(leadBlock.backgroundImage) : '';
+const preloadImage = leadBackground ? siteImageVariant(leadBackground, media, 1600) : undefined;
 ---
 
 <Layout
@@ -151,6 +187,7 @@ const heroImage = layout
   isHome={page.slug === 'home'}
   image={heroImage}
   jsonLd={jsonLd}
+  preloadImage={preloadImage}
 >
   <main id="contenu" tabindex="-1">
     {!firstHero && <h1 class="visually-hidden">{page.title || page.metaTitle || siteName}</h1>}

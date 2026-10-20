@@ -1,5 +1,7 @@
 ---
 import { safeHttpUrl } from '../../lib/url';
+import { getSiteContent } from '../../lib/content';
+import { siteImage } from '../../lib/images';
 
 interface Props {
   data: {
@@ -10,22 +12,25 @@ interface Props {
 }
 
 const { data } = Astro.props;
+const { media } = await getSiteContent();
 
-// URLs filtrées (http(s) ou médias du site). Pas de texte alternatif côté CMS : repli
-// descriptif « Photo N – <titre de la galerie> ».
+// URLs filtrées (http(s) ou médias du site). Texte alternatif : celui de la médiathèque,
+// sinon repli descriptif « Photo N – <titre de la galerie> ». Dimensions et variantes
+// (srcset) pour les images de la médiathèque.
+const altFor = (index: number) => (data.title ? `Photo ${index + 1} – ${data.title}` : `Photo ${index + 1}`);
 const images = (data.images || [])
   .map((img) => safeHttpUrl(typeof img === 'string' ? img : img?.url))
-  .filter(Boolean);
-const altFor = (index: number) => (data.title ? `Photo ${index + 1} – ${data.title}` : `Photo ${index + 1}`);
+  .filter(Boolean)
+  .map((src, index) => siteImage(src, media, { fallbackAlt: altFor(index), sizes: '(max-width: 640px) calc(100vw - 40px), 400px' }));
 ---
 
 <section class="gallery-section">
   <div class="container">
     {data.title && <h2 class="section-title">{data.title}</h2>}
     <div class="gallery-grid">
-      {images.map((src, index) => (
+      {images.map((img) => (
         <div class="gallery-item">
-          <img src={src} alt={altFor(index)} loading="lazy" decoding="async" />
+          <img src={img.src} alt={img.alt} width={img.width} height={img.height} srcset={img.srcset} sizes={img.sizes} loading="lazy" decoding="async" />
         </div>
       ))}
     </div>

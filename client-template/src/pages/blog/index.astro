@@ -4,12 +4,22 @@ import { DEFAULT_LOCALE } from '../../lib/i18n.mjs';
 import { getSiteContent, parseTags } from '../../lib/content';
 import { formatDate, isoDate } from '../../lib/format';
 import { safeHttpUrl, withBase } from '../../lib/url';
+import { siteImage } from '../../lib/images';
 
 // Le blog n'est pas localisé : il est rattaché à la langue par défaut (menu de cette
 // langue, sélecteur vers les accueils des autres langues).
-const { posts, navByLocale, locales } = await getSiteContent();
+const { posts, navByLocale, locales, media } = await getSiteContent();
 const nav = navByLocale[DEFAULT_LOCALE] || [];
-const cards = posts.map((post) => ({ ...post, cover: safeHttpUrl(post.coverImage), tagList: parseTags(post.tags) }));
+// Couverture dans un lien qui porte déjà le titre de l'article : alt vide conservé ;
+// dimensions et variantes (srcset) pour les images de la médiathèque.
+const cards = posts.map((post) => {
+  const src = safeHttpUrl(post.coverImage);
+  return {
+    ...post,
+    cover: src ? siteImage(src, media, { sizes: '(max-width: 700px) calc(100vw - 40px), 380px' }) : null,
+    tagList: parseTags(post.tags),
+  };
+});
 ---
 
 <Layout
@@ -42,7 +52,9 @@ const cards = posts.map((post) => ({ ...post, cover: safeHttpUrl(post.coverImage
                   href={withBase(`/blog/${post.slug}/`)}
                   data-search={`${post.title} ${post.excerpt || ''} ${post.tagList.join(' ')}`.toLowerCase()}
                 >
-                  {post.cover && <img class="blog-cover" src={post.cover} alt="" loading="lazy" decoding="async" />}
+                  {post.cover && (
+                    <img class="blog-cover" src={post.cover.src} alt="" width={post.cover.width} height={post.cover.height} srcset={post.cover.srcset} sizes={post.cover.sizes} loading="lazy" decoding="async" />
+                  )}
                   <div class="blog-card-body">
                     {formatDate(post.publishedAt) && <time class="blog-date" datetime={isoDate(post.publishedAt)}>{formatDate(post.publishedAt)}</time>}
                     <h2>{post.title}</h2>

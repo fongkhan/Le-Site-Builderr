@@ -27,3 +27,14 @@ test('payload.config — médiathèque : AVIF accepté, jamais de SVG', () => {
   assert.match(mime, /'image\/avif'/);
   assert.doesNotMatch(mime, /svg|image\/\*/);
 });
+
+test('payload.config — médiathèque : texte alternatif borné, suppression REST réservée aux admins', () => {
+  // Bloc de la collection « media » : de son slug à la collection suivante
+  const start = configSource.indexOf("slug: 'media'");
+  assert.ok(start > 0, 'collection media trouvée');
+  const next = configSource.indexOf('slug:', start + 1);
+  const mediaBlock = configSource.slice(start, next > 0 ? next : undefined);
+  assert.match(mediaBlock, /\{\s*name:\s*'alt',\s*type:\s*'text',\s*maxLength:\s*200\s*\}/);
+  assert.match(mediaBlock, /\bdelete:\s*isAdmin\b/);
+  assert.doesNotMatch(mediaBlock, /\bdelete:\s*isAdminOrSiteClient\b/);
+});

@@ -103,16 +103,13 @@ export function absoluteUrl(pathOrUrl: string, siteUrl: string): string {
   return siteUrl.replace(/\/+$/, '') + stripBase(safe);
 }
 
-/** Adresse email plausible (sinon affichée sans lien). */
-export function safeMailto(email: unknown): string {
-  if (typeof email !== 'string') return '';
-  const e = email.trim();
-  return /^[^\s@<>"'()\\,;:]+@[^\s@<>"'()\\,;:]+\.[^\s@<>"'()\\,;:]+$/.test(e) ? `mailto:${e}` : '';
-}
+// Liens email et téléphone : définis dans links.mjs (module pur partagé avec les liens des
+// boutons d'action, testé depuis le serveur).
+export { safeMailto, safeTel } from './links.mjs';
 
-/** Lien « tel: » limité aux chiffres et au « + » initial (sinon affiché sans lien). */
-export function safeTel(phone: unknown): string {
-  if (typeof phone !== 'string') return '';
-  const digits = phone.replace(/[^\d+]/g, '').replace(/(?!^)\+/g, '');
-  return /\d{3,}/.test(digits) ? `tel:${digits}` : '';
+/** Lien d'un bouton d'action prêt pour le rendu (lib/links.mjs resolveCtaLink). */
+export interface CtaLink {
+  href: string;
+  /** Adresse web externe : ouverte dans un nouvel onglet (mention masquée pour les lecteurs d'écran). */
+  newTab: boolean;
 }
