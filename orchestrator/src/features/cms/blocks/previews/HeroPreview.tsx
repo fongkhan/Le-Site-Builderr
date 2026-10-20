@@ -1,4 +1,5 @@
 import { derivedColors } from '../../../../lib/color';
+import { fontStack } from '../../../../lib/themeFonts';
 import type { BlockPreviewProps } from '../types';
 import { cssUrl } from './previewStyles';
 
@@ -26,7 +27,7 @@ export function HeroPreview({ block, theme }: BlockPreviewProps) {
         minHeight: 280,
       }}
     >
-      <h1 style={{ color: textColor, fontFamily: `'${theme.fonts.heading}', serif`, fontSize: '2.5rem', marginBottom: 12 }}>{block.title}</h1>
+      <h1 style={{ color: textColor, fontFamily: fontStack(theme.fonts.heading, 'serif'), fontSize: '2.5rem', marginBottom: 12 }}>{block.title}</h1>
       <p style={{ color: textColor, fontSize: '1.1rem', maxWidth: 600, marginBottom: 20 }}>{block.subtitle}</p>
       {block.ctaText && (
         <button type="button" tabIndex={-1} style={{ backgroundColor: theme.colors.secondary, color: onSecondary, border: 'none', borderRadius: theme.radius, padding: '10px 20px', fontWeight: 600 }}>

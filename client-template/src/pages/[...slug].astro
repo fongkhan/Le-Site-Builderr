@@ -174,7 +174,7 @@ const heroImage = layout
   .find(Boolean);
 
 // Fond du Hero en tête de page : préchargé en priorité (image la plus visible au premier
-// affichage), à la même URL que son style (variante de 1600 px si elle existe).
+// affichage), à la même URL que son image (img.hero-bg, variante de 1600 px si elle existe).
 const leadBlock = contentBlocks[0];
 const leadBackground = leadBlock && leadBlock.blockType === 'hero' ? safeHttpUrl(leadBlock.backgroundImage) : '';
 const preloadImage = leadBackground ? siteImageVariant(leadBackground, media, 1600) : undefined;

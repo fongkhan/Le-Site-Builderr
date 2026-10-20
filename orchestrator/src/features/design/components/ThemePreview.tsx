@@ -1,16 +1,19 @@
 import { derivedColors, withAlpha } from '../../../lib/color';
 import { initials } from '../../../lib/monogram';
+import { fontStack, useThemeFonts } from '../../../lib/themeFonts';
 import type { Theme } from '../../../types';
 import { isValidLogo } from '../themeOptions';
 
 // Aperçu des tokens du thème : en-tête de marque, icône d'onglet, titres, texte et
-// boutons (texte des boutons calculé comme sur le site publié : clair ou foncé).
+// boutons (texte des boutons calculé comme sur le site publié : clair ou foncé). Polices
+// du thème auto-hébergées, chargées à la demande.
 export function ThemePreview({ theme, siteName }: { theme: Theme; siteName: string }) {
+  useThemeFonts(theme.fonts.heading, theme.fonts.body);
   const { onPrimary, onSecondary } = derivedColors(theme.colors);
   // Logo affiché seulement s'il désigne une image de la médiathèque (jamais une URL saisie)
   const logo = (theme.logo ?? '').trim();
   const logoSrc = logo && isValidLogo(logo) ? logo : '';
-  const headingFont = `'${theme.fonts.heading}', serif`;
+  const headingFont = fontStack(theme.fonts.heading, 'serif');
 
   return (
     <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
@@ -45,7 +48,7 @@ export function ThemePreview({ theme, siteName }: { theme: Theme; siteName: stri
           backgroundColor: theme.colors.background,
           color: theme.colors.text,
           borderRadius: theme.radius,
-          fontFamily: `'${theme.fonts.body}', sans-serif`,
+          fontFamily: fontStack(theme.fonts.body, 'sans-serif'),
           flex: 1,
           display: 'flex',
           flexDirection: 'column',

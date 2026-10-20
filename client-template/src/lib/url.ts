@@ -77,18 +77,6 @@ export function safeHttpUrl(value: unknown, options: SafeUrlOptions = {}): strin
 }
 
 /**
- * Valeur CSS « url("…") » pour une image saisie par le client (fond du Hero…), ou ''
- * si l'URL est refusée. L'URL est filtrée (safeHttpUrl) puis placée dans une chaîne
- * CSS échappée : impossible d'en sortir pour injecter d'autres déclarations.
- */
-export function cssUrl(value: unknown): string {
-  const url = safeHttpUrl(value);
-  if (!url) return '';
-  const escaped = url.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\a ');
-  return `url("${escaped}")`;
-}
-
-/**
  * URL absolue publique (Open Graph, JSON-LD, hreflang) à partir d'un chemin du site
  * (avec ou sans chemin de base) ou d'une URL déjà absolue. '' si impossible (pas d'URL
  * publique connue, cas d'un brouillon ou d'un build local).

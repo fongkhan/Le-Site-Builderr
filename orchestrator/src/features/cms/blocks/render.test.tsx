@@ -51,6 +51,12 @@ describe('rendu des blocs', () => {
     expect(html).not.toContain('Médiathèque du site');
   });
 
+  it('aperçu Hero : police du thème auto-hébergée (version variable en tête de pile)', () => {
+    const hero = BLOCK_DEFINITIONS.find((d) => d.type === 'hero')!;
+    const html = renderToString(<hero.Preview block={hero.defaults} theme={DEFAULT_THEME} />);
+    expect(html).toContain('Playfair Display Variable');
+  });
+
   it('couleurs translucides valides même pour #RGB', () => {
     const faq = BLOCK_DEFINITIONS.find((d) => d.type === 'faq')!;
     const theme = { ...DEFAULT_THEME, colors: { ...DEFAULT_THEME.colors, secondary: '#abc' } };

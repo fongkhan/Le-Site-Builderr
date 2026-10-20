@@ -1,4 +1,5 @@
 import { memo } from 'react';
+import { fontStack, useThemeFonts } from '../../lib/themeFonts';
 import type { Block, Theme } from '../../types';
 import { getBlockDefinition } from './blocks/registry';
 
@@ -6,14 +7,16 @@ type PreviewBlock = Block & { id?: string };
 
 // Aperçu WYSIWYG de la page telle qu'elle sera rendue par le template Astro. Chaque bloc
 // est rendu par l'aperçu de son type (registre) ; un bloc inchangé n'est pas recalculé.
+// Polices du thème auto-hébergées, chargées à la demande.
 export function PagePreview({ page, theme }: { page: { layout: readonly PreviewBlock[] }; theme: Theme }) {
+  useThemeFonts(theme.fonts.heading, theme.fonts.body);
   return (
     <div
       style={{
         backgroundColor: theme.colors.background,
         color: theme.colors.text,
         borderRadius: 12,
-        fontFamily: `'${theme.fonts.body}', sans-serif`,
+        fontFamily: fontStack(theme.fonts.body, 'sans-serif'),
         border: '1px solid rgba(0,0,0,0.15)',
         overflow: 'hidden',
         boxShadow: '0 4px 20px rgba(0,0,0,0.2)',

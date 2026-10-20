@@ -1,6 +1,8 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom'
+// Police de l'interface auto-hébergée (avant la feuille globale qui l'utilise)
+import '@fontsource-variable/outfit/wght.css'
 import './index.css'
 import { AuthProvider } from './auth/AuthContext'
 import { RequireAuth } from './auth/RequireAuth'

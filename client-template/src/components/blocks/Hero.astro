@@ -1,5 +1,5 @@
 ---
-import { cssUrl, safeHttpUrl } from '../../lib/url';
+import { safeHttpUrl } from '../../lib/url';
 import type { CtaLink } from '../../lib/url';
 import { t } from '../../lib/ui-strings.mjs';
 import { getSiteContent } from '../../lib/content';
@@ -27,16 +27,16 @@ const { media } = await getSiteContent();
 const Heading = headingLevel === 1 ? 'h1' : 'h2';
 const cta = data.ctaText && resolveCta ? resolveCta(data.ctaLink, data.ctaText) : null;
 
-// Image de fond saisie par le client : filtrée (http(s) ou média du site) et placée
-// dans une chaîne CSS échappée. Sans image valide, AUCUN attribut style n'est émis :
-// le dégradé du thème (règle .hero-section:not(.has-bg)) s'applique. Image de la
-// médiathèque : variante de 1600 px si elle existe (même URL que le préchargement de la
-// page, voir [...slug].astro).
-const bg = cssUrl(siteImageVariant(safeHttpUrl(data.backgroundImage), media, 1600));
-const style = bg ? `background-image: linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.7)), ${bg};` : undefined;
+// Image de fond saisie par le client : filtrée (http(s) ou média du site) et posée en
+// <img> décorative sous un voile sombre (jamais d'attribut style : la CSP du site les
+// bloque). Sans image valide, le dégradé du thème (.hero-section:not(.has-bg))
+// s'applique. Image de la médiathèque : variante de 1600 px si elle existe (même URL que
+// le préchargement de la page, voir [...slug].astro).
+const bg = siteImageVariant(safeHttpUrl(data.backgroundImage), media, 1600);
 ---
 
-<section class:list={['hero-section', { 'has-bg': Boolean(bg) }]} style={style}>
+<section class:list={['hero-section', { 'has-bg': Boolean(bg) }]}>
+  {bg && <img class="hero-bg" src={bg} alt="" decoding="async" />}
   <div class="hero-content">
     <Heading class="hero-title">{data.title}</Heading>
     {data.subtitle && <p>{data.subtitle}</p>}
@@ -55,8 +55,6 @@ const style = bg ? `background-image: linear-gradient(rgba(0, 0, 0, 0.5), rgba(0
     justify-content: center;
     text-align: center;
     padding: 120px 20px;
-    background-size: cover;
-    background-position: center;
     background-color: var(--color-primary);
     color: var(--color-on-primary);
     min-height: 500px;
@@ -64,13 +62,33 @@ const style = bg ? `background-image: linear-gradient(rgba(0, 0, 0, 0.5), rgba(0
   }
 
   /* Sans image de fond : dégradé de la couleur primaire vers sa variante plus contrastée
-     avec le texte (l'image, si présente, est posée en style inline et l'emporte) */
+     avec le texte */
   .hero-section:not(.has-bg) {
     background-image: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-deep) 100%);
   }
 
+  /* Image de fond : couvre la section, sous le voile sombre puis le contenu */
+  .hero-bg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
+    z-index: 0;
+  }
+
+  .hero-section.has-bg::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.7));
+    z-index: 1;
+  }
+
   .hero-content {
     max-width: 800px;
+    position: relative;
     z-index: 2;
   }
 

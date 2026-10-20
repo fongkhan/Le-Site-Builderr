@@ -1,6 +1,7 @@
 // Images de la médiathèque sur le site généré (clé « media » de la fixture) : texte
 // alternatif, dimensions, variantes (srcset) préfixées par le chemin de base, couverture
-// d'article prioritaire et préchargement du fond du Hero en tête de page.
+// d'article prioritaire et préchargement du fond du Hero en tête de page (même URL que
+// son image img.hero-bg).
 
 // Balises ouvrantes <name …> d'une page.
 const tagsOf = (html, name) => [...html.matchAll(new RegExp(`<${name}\\b[^>]*>`, 'gi'))].map((m) => m[0]);
@@ -23,7 +24,8 @@ export default async function ({ dist, base, htmlFiles, readDist, check }) {
     const rel = path.relative(dist, file);
     for (const img of tagsOf(html, 'img')) {
       const src = attr(img, 'src') || '';
-      if (src.startsWith(mediaPrefix)) {
+      // Fond du Hero (img.hero-bg) : positionné en absolu, taille imposée par le CSS
+      if (src.startsWith(mediaPrefix) && !/\bhero-bg\b/.test(attr(img, 'class') || '')) {
         check(attr(img, 'width') !== null && attr(img, 'height') !== null, `${rel} : image de la médiathèque sans dimensions (${src})`);
       }
       for (const candidate of (attr(img, 'srcset') || '').split(',').map((c) => c.trim().split(/\s+/)[0]).filter(Boolean)) {
@@ -63,8 +65,8 @@ export default async function ({ dist, base, htmlFiles, readDist, check }) {
   const variant = `${mediaPrefix}w1600/atelier.jpg`;
   const ateliersPreload = preloads(ateliers)[0];
   check(Boolean(ateliersPreload) && attr(ateliersPreload, 'href') === variant, `ateliers/index.html : préchargement de ${variant} absent (${ateliersPreload || 'aucun'})`);
-  const heroStyle = tagsOf(ateliers, 'section').map((t) => attr(t, 'style') || '').find((s) => s.includes('background-image')) || '';
-  check(heroStyle.includes(`url("${variant}")`), `ateliers/index.html : le fond du Hero n'utilise pas la variante préchargée (${heroStyle})`);
+  const heroBg = tagsOf(ateliers, 'img').find((t) => /\bhero-bg\b/.test(attr(t, 'class') || ''));
+  check(Boolean(heroBg) && attr(heroBg, 'src') === variant, `ateliers/index.html : le fond du Hero (img.hero-bg) n'utilise pas la variante préchargée (${heroBg || 'aucun'})`);
   check(preloads(readDist('mentions-legales/index.html')).length === 0, 'mentions-legales/index.html : préchargement sans Hero en tête de page');
 
   // Couverture d'article : prioritaire, texte et dimensions de la médiathèque

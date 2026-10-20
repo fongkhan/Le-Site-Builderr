@@ -1,0 +1,32 @@
+---
+// Bannière de consentement RGPD à la mesure d'audience (GA4 ou Matomo) et bouton
+// flottant « Cookies » pour revenir sur son choix. Configuration lue par le script dans
+// les attributs data-* (jamais de define:vars : la CSP du site n'accepte que des
+// scripts traités par Astro, hachés ou servis par le site). Styles : Layout.astro.
+import { t } from '../../lib/ui-strings.mjs';
+import { lt } from '../../lib/legal-texts.mjs';
+
+interface Props {
+	locale: string;
+	provider: string;
+	id: string;
+	host: string;
+	/** Page « Politique de confidentialité » (lien dans le texte de la bannière), '' si aucune. */
+	privacyHref?: string;
+}
+
+const { locale, provider, id, host, privacyHref = '' } = Astro.props;
+---
+
+<div id="consent-banner" class="consent-banner" role="dialog" aria-live="polite" aria-label={t(locale, 'consentLabel')} hidden data-provider={provider} data-id={id} data-host={host}>
+	<p class="consent-text">{t(locale, 'consentText')}{privacyHref && <> <a href={privacyHref}>{lt(locale, 'privacyPolicy')}</a></>}</p>
+	<div class="consent-actions">
+		<button type="button" id="consent-accept" class="consent-btn consent-accept">{t(locale, 'consentAccept')}</button>
+		<button type="button" id="consent-refuse" class="consent-btn consent-refuse">{t(locale, 'consentRefuse')}</button>
+	</div>
+</div>
+<button type="button" id="consent-reopen" class="consent-reopen" hidden aria-label={t(locale, 'consentReopen')}><span aria-hidden="true">🍪</span> {t(locale, 'consentReopenButton')}</button>
+<script>
+	import { initConsent } from './consent-banner';
+	initConsent();
+</script>

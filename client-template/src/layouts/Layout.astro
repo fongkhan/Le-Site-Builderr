@@ -16,6 +16,8 @@ import { t } from '../lib/ui-strings.mjs';
 import { getLegalContent } from '../lib/legal-content';
 import { legalHref } from '../lib/legal.mjs';
 import { lt } from '../lib/legal-texts.mjs';
+import ConsentBanner from '../components/site/ConsentBanner.astro';
+import StatsBeacon from '../components/site/StatsBeacon.astro';
 
 interface NavPage {
 	title: string;
@@ -70,7 +72,7 @@ const otherLocales = (locales || []).filter((l) => l !== pageLocale);
 // du site ne doivent refléter que de vrais visiteurs.
 const isDraft = process.env.PUBLIC_IS_DRAFT === '1';
 const statsSlug = isDraft ? '' : (process.env.ACTIVE_SITE_SLUG || '');
-const statsApiBase = process.env.PUBLIC_API_BASE || '';
+const statsApiBase = (process.env.PUBLIC_API_BASE || '').replace(/\/+$/, '');
 const beaconUrl = statsSlug ? `${statsApiBase}/api/stats/hit/${statsSlug}` : '';
 
 // Métadonnées de partage (Open Graph / Twitter) + URL canonique. PUBLIC_SITE_NAME/URL
@@ -210,111 +212,10 @@ const jsonLdScripts = (jsonLd || []).filter(Boolean).map((d) => jsonLdString(d))
 				{analyticsEnabled && <button type="button" class="legal-cookies" data-consent-open>{lt(pageLocale, 'manageCookies')}</button>}
 			</nav>
 		)}
-		{analyticsEnabled && (
-			<>
-				<div id="consent-banner" class="consent-banner" role="dialog" aria-live="polite" aria-label={t(pageLocale, 'consentLabel')} hidden>
-					<p class="consent-text">{t(pageLocale, 'consentText')}{privacyHref && <> <a href={privacyHref}>{lt(pageLocale, 'privacyPolicy')}</a></>}</p>
-					<div class="consent-actions">
-						<button type="button" id="consent-accept" class="consent-btn consent-accept">{t(pageLocale, 'consentAccept')}</button>
-						<button type="button" id="consent-refuse" class="consent-btn consent-refuse">{t(pageLocale, 'consentRefuse')}</button>
-					</div>
-				</div>
-				<button type="button" id="consent-reopen" class="consent-reopen" hidden aria-label={t(pageLocale, 'consentReopen')}><span aria-hidden="true">🍪</span> {t(pageLocale, 'consentReopenButton')}</button>
-				<script define:vars={{ analyticsProvider, analyticsId, analyticsHost }}>
-					// Consentement RGPD : la mesure d'audience n'est chargée qu'après « Accepter ».
-					// Le refus est aussi simple que l'acceptation ; le choix (6 mois) est modifiable
-					// via le bouton « Cookies ». Tout échoue en silence : ne casse jamais la page.
-					(function () {
-						const KEY = 'lesite-consent';
-						const SIX_MONTHS = 1000 * 60 * 60 * 24 * 182;
-						const banner = document.getElementById('consent-banner');
-						const reopen = document.getElementById('consent-reopen');
-						if (!banner || !reopen) return;
-
-						function readChoice() {
-							try {
-								const raw = localStorage.getItem(KEY);
-								if (!raw) return null;
-								const parsed = JSON.parse(raw);
-								if (!parsed || (Date.now() - (parsed.at || 0)) > SIX_MONTHS) return null;
-								return parsed.value === 'accepted' || parsed.value === 'refused' ? parsed.value : null;
-							} catch { return null; }
-						}
-						function saveChoice(value) {
-							try { localStorage.setItem(KEY, JSON.stringify({ value, at: Date.now() })); } catch {}
-						}
-
-						let loaded = false;
-						function loadAnalytics() {
-							if (loaded) return;
-							loaded = true;
-							try {
-								if (analyticsProvider === 'ga4') {
-									const s = document.createElement('script');
-									s.async = true;
-									s.src = 'https://www.googletagmanager.com/gtag/js?id=' + encodeURIComponent(analyticsId);
-									document.head.appendChild(s);
-									window.dataLayer = window.dataLayer || [];
-									function gtag() { window.dataLayer.push(arguments); }
-									window.gtag = gtag;
-									gtag('js', new Date());
-									gtag('config', analyticsId, { anonymize_ip: true });
-								} else if (analyticsProvider === 'matomo') {
-									window._paq = window._paq || [];
-									window._paq.push(['trackPageView']);
-									window._paq.push(['enableLinkTracking']);
-									const base = 'https://' + analyticsHost + '/';
-									window._paq.push(['setTrackerUrl', base + 'matomo.php']);
-									window._paq.push(['setSiteId', analyticsId]);
-									const s = document.createElement('script');
-									s.async = true;
-									s.src = base + 'matomo.js';
-									document.head.appendChild(s);
-								}
-							} catch { /* la mesure d'audience ne doit jamais casser la page */ }
-						}
-
-						function applyChoice(value) {
-							banner.hidden = true;
-							reopen.hidden = false;
-							if (value === 'accepted') loadAnalytics();
-						}
-
-						// Rouvre la bannière (bouton « Cookies » ou lien « Gérer les cookies » du bas
-						// de page) et place le focus sur son premier bouton.
-						function openBanner() {
-							banner.hidden = false;
-							reopen.hidden = true;
-							const first = banner.querySelector('button');
-							if (first) first.focus();
-						}
-
-						document.getElementById('consent-accept').addEventListener('click', () => { saveChoice('accepted'); applyChoice('accepted'); });
-						document.getElementById('consent-refuse').addEventListener('click', () => { saveChoice('refused'); applyChoice('refused'); });
-						reopen.addEventListener('click', openBanner);
-						document.querySelectorAll('[data-consent-open]').forEach((el) => el.addEventListener('click', openBanner));
-
-						const existing = readChoice();
-						if (existing) applyChoice(existing);
-						else banner.hidden = false;
-					})();
-				</script>
-			</>
-		)}
-		{beaconUrl && (
-			<script define:vars={{ beaconUrl }}>
-				// Statistique de visite anonyme : une page vue = un envoi, sans cookie ni
-				// donnée personnelle. Chargé après le rendu, échoue en silence : ne casse
-				// jamais la page publiée.
-				try {
-					if (navigator.sendBeacon) {
-						navigator.sendBeacon(beaconUrl);
-					} else {
-						fetch(beaconUrl, { method: 'POST', keepalive: true }).catch(() => {});
-					}
-				} catch (e) { /* ignoré volontairement */ }
-			</script>
-		)}
+		{/* Bannière de consentement et statistique de visite : scripts traités par Astro
+		    (hachés dans la CSP du site), configuration passée en attributs data-* */}
+		{analyticsEnabled && <ConsentBanner locale={pageLocale} provider={analyticsProvider} id={analyticsId} host={analyticsHost} privacyHref={privacyHref} />}
+		{beaconUrl && <StatsBeacon url={beaconUrl} />}
 	</body>
 </html>
 
