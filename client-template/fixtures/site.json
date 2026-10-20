@@ -207,6 +207,18 @@
           { "blockType": "hero", "title": "Atelier enfants", "subtitle": "Le mercredi après-midi.", "ctaText": "Prendre rendez-vous", "ctaLink": "/mentions-legales/" },
           { "blockType": "appointment", "title": "Réserver un atelier", "services": [{ "name": "Initiation" }] }
         ]
+      },
+      {
+        "title": "Cours en double",
+        "slug": "cours",
+        "locale": "fr",
+        "layout": [{ "blockType": "hero", "title": "Ne doit jamais être générée (adresse /cours/ en double)" }]
+      },
+      {
+        "title": "Adresse invalide",
+        "slug": "avec espace",
+        "locale": "fr",
+        "layout": [{ "blockType": "hero", "title": "Ne doit jamais être générée (adresse invalide)" }]
       }
     ]
   },
@@ -227,6 +239,7 @@
     "visitStats": true,
     "analyticsProvider": ""
   },
+  "_comment_sitemap": "Contenu que le build et le sitemap doivent écarter de la même façon : page fr « cours » en double (la première est générée), page d'adresse invalide, article publié sans titre et article publié d'adresse invalide. Vérifié par scripts/checks/sitemap-parity.mjs (sitemap du serveur = pages générées).",
   "posts": {
     "docs": [
       {
@@ -247,6 +260,20 @@
         "publishedAt": "2026-08-01T08:00:00.000Z",
         "status": "published",
         "body": "Lavez à l'eau tiède et évitez les chocs thermiques."
+      },
+      {
+        "title": "",
+        "slug": "sans-titre",
+        "publishedAt": "2026-07-01T08:00:00.000Z",
+        "status": "published",
+        "body": "Article publié sans titre : ni page, ni entrée du sitemap."
+      },
+      {
+        "title": "Article à l'adresse invalide",
+        "slug": "Mauvaise adresse",
+        "publishedAt": "2026-06-01T08:00:00.000Z",
+        "status": "published",
+        "body": "Adresse invalide : ni page, ni entrée du sitemap."
       },
       {
         "title": "Brouillon de Noël",
