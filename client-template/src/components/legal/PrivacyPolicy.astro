@@ -1,0 +1,115 @@
+---
+// Politique de confidentialité générée, selon ce que fait réellement le site
+// (lib/legal.mjs privacySections) : formulaires, statistiques anonymes, mesure
+// d'audience après consentement (sinon : aucun cookie), droits, hébergement. Saisie du
+// client rendue en texte (expressions Astro échappées, jamais de set:html).
+import { getLegalContent } from '../../lib/legal-content';
+import { privacySections } from '../../lib/legal.mjs';
+import { lt } from '../../lib/legal-texts.mjs';
+
+interface Props {
+  locale: string;
+}
+
+const { locale } = Astro.props;
+const { legal, formKinds } = await getLegalContent();
+const sections: string[] = privacySections(legal, { formKinds });
+// Responsable du traitement : éditeur du site, sinon nom du site
+const controller = legal.companyName || process.env.PUBLIC_SITE_NAME || '';
+const has = (id: string) => sections.includes(id);
+---
+
+<div class="legal-body">
+  <p class="legal-intro">{lt(locale, 'privacyIntro')}</p>
+
+  {has('controller') && controller && (
+    <section>
+      <h2>{lt(locale, 'privacyController')}</h2>
+      <p>{lt(locale, 'privacyControllerText', { name: controller })}</p>
+      {legal.address && <p class="legal-address">{legal.address}</p>}
+    </section>
+  )}
+
+  {has('forms') && (
+    <section>
+      <h2>{lt(locale, 'privacyForms')}</h2>
+      <p>{lt(locale, 'privacyFormsData')}</p>
+      {formKinds.appointment && <p>{lt(locale, 'privacyFormsAppointment')}</p>}
+      <p>{lt(locale, 'privacyFormsPurpose')}</p>
+      <p>{lt(locale, 'privacyFormsRetention', { name: controller, months: legal.retentionMonths })}</p>
+    </section>
+  )}
+
+  {has('stats') && (
+    <section>
+      <h2>{lt(locale, 'privacyStats')}</h2>
+      <p>{lt(locale, 'privacyStatsText')}</p>
+    </section>
+  )}
+
+  {has('analytics') && (
+    <section>
+      <h2>{lt(locale, 'privacyAnalytics')}</h2>
+      <p>
+        {legal.analyticsProvider === 'matomo'
+          ? lt(locale, 'privacyAnalyticsMatomo', { host: legal.analyticsHost })
+          : lt(locale, 'privacyAnalyticsGa4')}
+      </p>
+      <p>{lt(locale, 'privacyConsent')}</p>
+    </section>
+  )}
+
+  {has('cookies') && (
+    <section>
+      <h2>{lt(locale, 'privacyCookies')}</h2>
+      <p>{lt(locale, 'privacyNoCookies')}</p>
+    </section>
+  )}
+
+  {has('rights') && (
+    <section>
+      <h2>{lt(locale, 'privacyRights')}</h2>
+      <p>{lt(locale, 'privacyRightsText')}</p>
+      {legal.email
+        ? <p>{lt(locale, 'privacyRightsEmail', { email: legal.email })}</p>
+        : has('forms') && <p>{lt(locale, 'privacyRightsForm')}</p>}
+      <p>{lt(locale, 'privacyComplaint')} <a href="https://www.cnil.fr/" rel="noopener noreferrer" target="_blank">www.cnil.fr</a>.</p>
+    </section>
+  )}
+
+  {has('hosting') && (
+    <section>
+      <h2>{lt(locale, 'privacyHosting')}</h2>
+      <p>{lt(locale, 'privacyHostingText', { host: legal.hostName })}</p>
+    </section>
+  )}
+</div>
+
+<style>
+  .legal-body section {
+    margin-bottom: 28px;
+  }
+
+  .legal-body h2 {
+    font-size: 1.3rem;
+    margin-bottom: 10px;
+  }
+
+  .legal-body p {
+    margin-bottom: 10px;
+    overflow-wrap: anywhere;
+  }
+
+  .legal-intro {
+    opacity: 0.85;
+    margin-bottom: 28px !important;
+  }
+
+  .legal-address {
+    white-space: pre-line;
+  }
+
+  .legal-body a {
+    color: var(--color-primary);
+  }
+</style>

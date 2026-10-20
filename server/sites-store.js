@@ -6,6 +6,7 @@ const { readJsonStrict, writeJsonAtomic } = require('./lib/json-file');
 const fs = require('fs');
 const { collectMediaFilenames } = require('./lib/media');
 const { getSitePagesFile, getSitePostsFile, getSiteThemeFile } = require('./core/config');
+const { normalizeLegal } = require('./lib/legal');
 
 let getPayloadInstance = () => null;
 let SITES_FILE = null;
@@ -34,7 +35,9 @@ function toApiSite(doc) {
     // Mesure d'audience (chargée après consentement RGPD sur le site publié)
     analyticsProvider: doc.analyticsProvider || '',
     analyticsId: doc.analyticsId || '',
-    analyticsHost: doc.analyticsHost || ''
+    analyticsHost: doc.analyticsHost || '',
+    // Informations légales (mentions légales, confidentialité) : toujours les 11 clés
+    legal: normalizeLegal(doc.legal)
   };
 }
 
@@ -59,6 +62,23 @@ async function listSites() {
       collection: 'payload_sites',
       limit: 500,
       sort: 'createdAt',
+      overrideAccess: true
+    });
+    return res.docs.map(toApiSite);
+  }
+  return readJson().map(toApiSite);
+}
+
+// TOUS les sites, sans limite (pagination: false) : inventaire du nettoyage des données
+// orphelines, où un site manquant serait pris pour un site supprimé. listSites reste
+// borné pour l'interface.
+async function listAllSites() {
+  const payload = getPayloadInstance();
+  if (payload) {
+    const res = await payload.find({
+      collection: 'payload_sites',
+      pagination: false,
+      depth: 0,
       overrideAccess: true
     });
     return res.docs.map(toApiSite);
@@ -99,11 +119,13 @@ async function createSite(data) {
 }
 
 async function updateSite(slug, partial) {
-  // Update partiel : seules les clés fournies (non-undefined) sont modifiées
+  // Update partiel : seules les clés fournies (non-undefined) sont modifiées. `legal` :
+  // objet complet, déjà validé par l'appelant (lib/legal.js validateLegal).
   const changes = {};
-  for (const key of ['name', 'domain', 'documentRoot', 'repositoryPath', 'stack', 'sslStatus', 'status', 'createdWithTool', 'customDomain', 'domainStatus', 'domainVerifyToken', 'analyticsProvider', 'analyticsId', 'analyticsHost']) {
+  for (const key of ['name', 'domain', 'documentRoot', 'repositoryPath', 'stack', 'sslStatus', 'status', 'createdWithTool', 'customDomain', 'domainStatus', 'domainVerifyToken', 'analyticsProvider', 'analyticsId', 'analyticsHost', 'legal']) {
     if (partial[key] !== undefined) changes[key] = partial[key];
   }
+  if (changes.legal !== undefined) changes.legal = normalizeLegal(changes.legal);
 
   const payload = getPayloadInstance();
   if (payload) {
@@ -328,6 +350,7 @@ async function migrateFromJson() {
 module.exports = {
   init,
   listSites,
+  listAllSites,
   getSiteBySlug,
   createSite,
   updateSite,

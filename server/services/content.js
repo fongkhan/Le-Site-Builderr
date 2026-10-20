@@ -2,7 +2,7 @@
 // fichiers JSON de data/ servent de repli (mode sans base) et de miroir.
 const fs = require('fs');
 const path = require('path');
-const { validateTheme } = require('../lib/theme');
+const { validateTheme, themeCss } = require('../lib/theme');
 const { readJsonStrict, writeJsonAtomic } = require('../lib/json-file');
 const sitesStore = require('../sites-store');
 const { getPayloadInstance } = require('../core/payload');
@@ -16,6 +16,7 @@ const {
 } = require('../core/config');
 const { DEFAULT_PAGES, DEFAULT_THEME, starterPages } = require('./defaults');
 const { sortPages } = require('../lib/page-order');
+const { canonicalMediaUrls } = require('../lib/media');
 
 const SEED_SITE_SLUG = 'boulangerie-artisanale';
 
@@ -37,7 +38,7 @@ function isUsableJsonFile(filePath, validate) {
   if (!fs.existsSync(filePath)) return false;
   try {
     return validate(JSON.parse(fs.readFileSync(filePath, 'utf-8')));
-  } catch (e) {
+  } catch {
     return false;
   }
 }
@@ -70,39 +71,35 @@ function seedDefaultData() {
   writeThemeCss(DEFAULT_THEME);
 }
 
-// Synchronise un thème JSON vers le fichier CSS global du template Astro.
+// Synchronise un thème JSON vers le fichier CSS global du template Astro (couleurs du
+// thème et couleurs dérivées : texte lisible sur primaire et secondaire, surfaces…).
+// Fichier généré, ignoré par git (thème par défaut commité : theme.default.css) : une
+// mise à jour par « git pull » ne bute jamais sur lui.
+// Renvoie le thème appliqué (logo compris), ou le thème par défaut.
 function writeThemeCss(themeData) {
   // Défense en profondeur : un siteThemeFile corrompu ou légué (antérieur à la
-  // validation d'entrée) ne doit jamais injecter de CSS ni casser le build.
+  // validation d'entrée) ne doit jamais injecter de CSS ni casser le build. Le logo est
+  // vérifié à part (au build) : un logo invalide ne fait jamais tomber les couleurs.
   const candidate = themeData && themeData.theme;
-  const t = validateTheme(candidate).ok ? candidate : DEFAULT_THEME.theme;
-  const cssContent = `/* Généré automatiquement par l'Orchestrateur */
-:root {
-  --color-primary: ${t.colors.primary};
-  --color-secondary: ${t.colors.secondary};
-  --color-bg: ${t.colors.background};
-  --color-text: ${t.colors.text};
-  --font-heading: '${t.fonts.heading}', serif;
-  --font-body: '${t.fonts.body}', sans-serif;
-  --border-radius: ${t.radius};
-}
-`;
+  const t = validateTheme({ ...candidate, logo: '' }).ok ? candidate : DEFAULT_THEME.theme;
   const cssDir = path.join(ASTRO_PROJECT_DIR, 'src/styles');
   if (!fs.existsSync(cssDir)) {
     fs.mkdirSync(cssDir, { recursive: true });
   }
-  fs.writeFileSync(path.join(cssDir, 'theme.css'), cssContent, 'utf-8');
+  fs.writeFileSync(path.join(cssDir, 'theme.css'), themeCss(t), 'utf-8');
+  return t;
 }
 
 // Applique au template le thème d'un site avant une compilation. Même source que
 // l'éditeur de design (readSiteTheme) ; sans thème enregistré, le thème par défaut est
 // écrit — jamais celui du site compilé précédemment (theme.css est global au template).
+// Renvoie le thème appliqué (avertissements de lisibilité et logo du build).
 async function applySiteThemeCss(siteSlug) {
   try {
-    writeThemeCss(await readSiteTheme(siteSlug));
+    return writeThemeCss(await readSiteTheme(siteSlug));
   } catch (e) {
     console.error("Erreur lors de l'application du thème pour le build", e);
-    writeThemeCss(DEFAULT_THEME);
+    return writeThemeCss(DEFAULT_THEME);
   }
 }
 
@@ -200,22 +197,21 @@ async function readSitePages(siteSlug) {
 // démonstration pour le site seedé, sinon des pages de départ à son nom.
 async function fallbackPages(siteSlug) {
   if (siteSlug === SEED_SITE_SLUG) return DEFAULT_PAGES;
-  let site = null;
+  let site;
   try { site = await sitesStore.getSiteBySlug(siteSlug); } catch { site = null; }
   return starterPages(site ? site.name : siteSlug);
 }
 
-// Schémas d'URL exécutables : jamais acceptés dans un champ d'URL de bloc (image, avatar,
-// lien Google, réseaux sociaux), qui finit en href/src sur le site publié. Les champs de
-// texte ne sont pas concernés : « JavaScript & TypeScript » est un intitulé légitime.
-const DANGEROUS_URL = /^(?:javascript|vbscript)\s*:|^data\s*:\s*text\/html/i;
+// Schémas d'URL exécutables (javascript:, vbscript:, data:text/html) : jamais acceptés dans
+// un champ d'URL de bloc (image, avatar, lien Google, réseaux sociaux, lien des boutons),
+// qui finit en href/src sur le site publié. Les champs de texte ne sont pas concernés :
+// « JavaScript & TypeScript » est un intitulé légitime. Règle partagée avec Payload
+// (lib/url-safety.js), qui l'applique aussi au lien des boutons (ctaLink).
+const { isDangerousUrl } = require('../lib/url-safety');
 const URL_FIELDS = new Set([
   'backgroundImage', 'image', 'images', 'url', 'avatar', 'googleBusinessUrl',
-  'socials', 'facebook', 'instagram', 'linkedin', 'x',
+  'socials', 'facebook', 'instagram', 'linkedin', 'x', 'ctaLink',
 ]);
-
-// Les navigateurs ignorent blancs et caractères de contrôle dans un schéma (« java\tscript: »).
-const isDangerousUrl = (value) => DANGEROUS_URL.test(value.replace(/[\u0000-\u0020]/g, ''));
 
 function findDangerousUrl(value, inUrlField = false) {
   if (typeof value === 'string') return inUrlField && isDangerousUrl(value) ? value : null;
@@ -385,7 +381,7 @@ function planPageWrites(existingDocs, inputDocs, deletedKeys) {
   });
   const sent = new Set(inputDocs.map((p) => pageKey(p.slug, p.locale)));
   const removed = [...existingByKey].filter(([key]) => deleted.has(key) && !sent.has(key)).map(([, page]) => page);
-  return { creates, updates, deletes: [...duplicates, ...removed] };
+  return { creates, updates, removed, duplicates, deletes: [...duplicates, ...removed] };
 }
 
 // Enregistre les pages d'un site. Payload : upsert par (site, slug, langue) des seules
@@ -394,8 +390,11 @@ function planPageWrites(existingDocs, inputDocs, deletedKeys) {
 // sa place dans le menu) : elle a pu être créée depuis un autre onglet ou par un autre
 // utilisateur. Une erreur de base est propagée (l'appelant répond 500, rien n'est perdu
 // en silence). Miroir JSON des pages reçues ensuite, s'il y a eu une écriture.
+// Renvoie les clés (langue:slug) des pages créées et supprimées (journal d'audit ;
+// doublons purgés non comptés) ; listes vides en mode sans base. URL des médias enregistrées
+// sous leur forme canonique (canonicalMediaUrls).
 async function saveSitePages(siteSlug, body) {
-  const docs = body.docs;
+  const docs = canonicalMediaUrls(body.docs);
   const sentKeys = new Set(docs.map((p) => pageKey(p.slug, p.locale)));
   const deletedKeys = new Set((body.deleted || []).map((ref) => pageKey(ref.slug, ref.locale)).filter((k) => !sentKeys.has(k)));
 
@@ -423,11 +422,14 @@ async function saveSitePages(siteSlug, body) {
     }
     const wrote = plan.creates.length + plan.updates.length + plan.deletes.length > 0;
     if (wrote || !fs.existsSync(getSitePagesFile(siteSlug))) writeJsonFile(getSitePagesFile(siteSlug), { docs });
-    return;
+    return {
+      created: plan.creates.map((p) => pageKey(p.slug, p.locale)),
+      deleted: plan.removed.map((p) => pageKey(p.slug, p.locale)),
+    };
   }
 
   // Mode sans base : même règle sur le fichier JSON (pages absentes conservées)
-  let previous = [];
+  let previous;
   try {
     const data = readJsonStrict(getSitePagesFile(siteSlug), null);
     previous = data && Array.isArray(data.docs) ? data.docs : [];
@@ -437,6 +439,7 @@ async function saveSitePages(siteSlug, body) {
     return !sentKeys.has(key) && !deletedKeys.has(key);
   });
   writeJsonFile(getSitePagesFile(siteSlug), { docs: [...docs, ...keptPrevious] });
+  return { created: [], deleted: [] };
 }
 
 // --- Blog / actualités : articles par site ---
@@ -554,8 +557,10 @@ async function adoptJsonPosts(payloadInstance, siteDoc, siteSlug) {
   }
 }
 
-// Crée ou met à jour un article (identifié par son slug au sein du site).
-async function upsertPost(siteSlug, post) {
+// Crée ou met à jour un article (identifié par son slug au sein du site). URL des médias
+// enregistrées sous leur forme canonique (canonicalMediaUrls).
+async function upsertPost(siteSlug, input) {
+  const post = canonicalMediaUrls(input);
   const payloadInstance = getPayloadInstance();
   if (payloadInstance) {
     const siteDoc = await sitesStore.getOrCreatePayloadDoc(siteSlug);
@@ -626,7 +631,8 @@ async function readSiteTheme(siteSlug) {
             theme: {
               colors: t.colors,
               fonts: t.fonts,
-              radius: t.radius
+              radius: t.radius,
+              ...(t.logo ? { logo: t.logo } : {})
             }
           };
         }
@@ -669,7 +675,8 @@ async function saveSiteTheme(siteSlug, themeData) {
         site: siteDoc.id,
         colors: tInput.colors,
         fonts: tInput.fonts,
-        radius: tInput.radius
+        radius: tInput.radius,
+        logo: tInput.logo || ''
       };
 
       if (themeRes.docs.length > 0) {
@@ -690,6 +697,23 @@ async function saveSiteTheme(siteSlug, themeData) {
   }
 
   writeJsonFile(getSiteThemeFile(siteSlug), themeData);
+}
+
+// Vrai si le fichier (nom exact) appartient à la médiathèque du site : un logo qui cite
+// le fichier d'un autre client n'est jamais accepté ni publié. Sans base : faux.
+async function siteOwnsMedia(siteSlug, filename) {
+  const payloadInstance = getPayloadInstance();
+  if (!payloadInstance || typeof filename !== 'string' || !filename) return false;
+  const siteId = await findPayloadSiteId(payloadInstance, siteSlug);
+  if (!siteId) return false;
+  const res = await payloadInstance.find({
+    collection: 'media',
+    where: { and: [{ site: { equals: siteId } }, { filename: { equals: filename } }] },
+    limit: 1,
+    depth: 0,
+    overrideAccess: true,
+  });
+  return res.docs.length > 0;
 }
 
 module.exports = {
@@ -719,4 +743,5 @@ module.exports = {
   deletePost,
   readSiteTheme,
   saveSiteTheme,
+  siteOwnsMedia,
 };

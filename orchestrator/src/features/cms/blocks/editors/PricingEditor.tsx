@@ -1,14 +1,16 @@
 import type { BlockEditorProps } from '../types';
-import { blockList, setField } from '../blockFields';
+import { blockList, setField, type ItemOf } from '../blockFields';
 import { NEW_ITEMS, NEW_PLAN_FEATURE } from '../definitions';
 import { ItemListEditor } from '../ItemListEditor';
+import { LinkField } from '../fields/LinkField';
 import { TextField } from '../fields/TextField';
 
-export function PricingEditor({ block, update }: BlockEditorProps) {
+export function PricingEditor({ block, update, linkTargets }: BlockEditorProps) {
   return (
     <>
       <TextField label="Titre du bloc" value={block.title} onChange={(v) => setField(update, 'title', v)} />
-      <ItemListEditor
+      {/* Type explicite : le gabarit (NEW_ITEMS) n'a pas de lien, une formule peut en avoir un */}
+      <ItemListEditor<ItemOf<'plans'>>
         items={block.plans}
         onUpdate={blockList(update, 'plans')}
         newItem={NEW_ITEMS.pricing}
@@ -36,6 +38,13 @@ export function PricingEditor({ block, update }: BlockEditorProps) {
               )}
             />
             <TextField compact label="Texte du bouton" value={plan.ctaText} onChange={(v) => updatePlan((d) => { d.ctaText = v; })} />
+            <LinkField
+              compact
+              label="Lien du bouton"
+              value={plan.ctaLink}
+              targets={linkTargets}
+              onChange={(v, o) => updatePlan((d) => { if (v === undefined) delete d.ctaLink; else d.ctaLink = v; }, o)}
+            />
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: '0.75rem', color: 'white', cursor: 'pointer' }}>
               <input type="checkbox" checked={plan.isPopular || false} onChange={(e) => updatePlan((d) => { d.isPopular = e.target.checked; })} />
               Formule mise en avant (« Populaire »)

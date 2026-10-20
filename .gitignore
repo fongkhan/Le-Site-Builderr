@@ -8,7 +8,13 @@ server/node_modules/
 orchestrator/dist/
 client-template/dist/
 client-template/.astro/
+# Thème du site compilé, écrit par le serveur à chaque build (défaut : theme.default.css)
+client-template/src/styles/theme.css
 server/.next/
+# Généré par Next à chaque build ou démarrage (références vers .next/types)
+server/next-env.d.ts
+# Caches de compilation TypeScript (tsc incrémental)
+*.tsbuildinfo
 simulated_public_html/
 
 # Lockfiles
@@ -26,6 +32,7 @@ server/data/posts_*
 server/data/submissions_*
 server/data/sites.json
 server/data/ai-usage.json
+server/data/build-queue.json
 server/uploads/
 repositories/
 backups/

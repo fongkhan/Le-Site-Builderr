@@ -1,0 +1,27 @@
+# Contexte de l'image (Dockerfile) : sources seulement. Dépendances et builds sont
+# refaits dans l'image ; données d'exécution, secrets et historiques jamais copiés.
+**/node_modules
+**/.git
+.github
+.claude
+.claude-wf
+documentation
+orchestrator/dist
+client-template/dist
+client-template/.astro
+client-template/build.lock
+server/.next
+server/next-env.d.ts
+server/data
+server/uploads
+simulated_public_html
+drafts
+releases
+backups
+repositories
+**/.env
+**/.env.*
+!server/.env.example
+**/*.log
+.DS_Store
+Thumbs.db

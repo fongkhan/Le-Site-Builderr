@@ -5,6 +5,11 @@
 // contact du site ; l'envoi en fetch est géré par lead-form.ts (messages d'état traduits
 // transmis par les attributs data-msg-*).
 import { t } from '../../lib/ui-strings.mjs';
+import { normalizeLocale } from '../../lib/i18n.mjs';
+import { withBase } from '../../lib/url';
+import { getLegalContent } from '../../lib/legal-content';
+import { legalHref } from '../../lib/legal.mjs';
+import { lt } from '../../lib/legal-texts.mjs';
 
 interface Props {
   kind: 'contact' | 'appointment';
@@ -27,10 +32,17 @@ const fid = (name: string) => `${anchorId}-${name}`;
 // Slug injecté au build ; l'API de contact est servie par l'orchestrateur.
 // PUBLIC_API_BASE pointe vers l'origine de l'API en production (vide = même origine,
 // cas de l'aperçu /preview servi par l'orchestrateur). Jamais préfixé par le chemin de
-// base du site : l'API est à la racine de son origine.
+// base du site : l'API est à la racine de son origine. ?lang= : langue de la page de
+// réponse affichée après un envoi sans JavaScript.
 const slug = process.env.ACTIVE_SITE_SLUG || '';
 const apiBase = (process.env.PUBLIC_API_BASE || '').replace(/\/+$/, '');
-const action = `${apiBase}/api/contact/${encodeURIComponent(slug)}`;
+const loc = normalizeLocale(locale);
+const action = `${apiBase}/api/contact/${encodeURIComponent(slug)}?lang=${loc}`;
+
+// Mention RGPD sous le formulaire : finalité, durée de conservation (rétention de la
+// boîte de réception) et lien vers la politique de confidentialité.
+const { legal, legalRoutes } = await getLegalContent();
+const privacyPath = legalHref(legalRoutes, loc, 'privacy');
 ---
 
 <section class="lead-section" id={anchorId} aria-labelledby={fid('title')}>
@@ -48,6 +60,7 @@ const action = `${apiBase}/api/contact/${encodeURIComponent(slug)}`;
       data-msg-error={tr(isAppointment ? 'appointmentError' : 'contactError')}
       data-msg-invalid={tr('formInvalid')}
       data-msg-rate-limit={tr('formRateLimited')}
+      data-msg-too-long={tr('formTooLong')}
     >
       <label class="visually-hidden" for={fid('name')}>{tr('formName')}</label>
       <input id={fid('name')} type="text" name="name" placeholder={tr('formName')} required maxlength="120" autocomplete="name" />
@@ -89,6 +102,7 @@ const action = `${apiBase}/api/contact/${encodeURIComponent(slug)}`;
 
       <button type="submit">{ctaText}</button>
       <p class="lead-status" role="status" aria-live="polite"></p>
+      <p class="lead-privacy">{lt(loc, 'formNotice', { months: legal.retentionMonths })} {privacyPath && <a href={withBase(privacyPath)}>{lt(loc, 'privacyPolicy')}</a>}</p>
     </form>
   </div>
 </section>
@@ -150,7 +164,7 @@ const action = `${apiBase}/api/contact/${encodeURIComponent(slug)}`;
 
   .lead-form button {
     background-color: var(--color-primary);
-    color: #fff;
+    color: var(--color-on-primary);
     border: none;
     border-radius: var(--border-radius);
     padding: 12px 20px;
@@ -169,5 +183,21 @@ const action = `${apiBase}/api/contact/${encodeURIComponent(slug)}`;
     min-height: 1.2em;
     font-size: 0.9rem;
     margin: 0;
+  }
+
+  /* Champ refusé par le serveur (lead-form.ts pose aria-invalid) */
+  .lead-form [aria-invalid="true"] {
+    border-color: #b91c1c;
+  }
+
+  /* Mention RGPD sous le formulaire */
+  .lead-privacy {
+    margin: 0;
+    font-size: 0.8rem;
+    opacity: 0.85;
+  }
+
+  .lead-privacy a {
+    color: inherit;
   }
 </style>

@@ -1,7 +1,9 @@
+import { derivedColors } from '../../../../lib/color';
 import type { BlockPreviewProps } from '../types';
 import { headingStyle, SECTION_STYLE } from './previewStyles';
 
 export function PricingPreview({ block, theme }: BlockPreviewProps) {
+  const { onPrimary, onSecondary } = derivedColors(theme.colors);
   return (
     <div style={{ ...SECTION_STYLE, backgroundColor: theme.colors.background }}>
       <h2 style={headingStyle(theme)}>{block.title}</h2>
@@ -23,7 +25,7 @@ export function PricingPreview({ block, theme }: BlockPreviewProps) {
             }}
           >
             {plan.isPopular && (
-              <span style={{ position: 'absolute', top: -12, left: '50%', transform: 'translateX(-50%)', backgroundColor: theme.colors.primary, color: '#ffffff', padding: '2px 10px', borderRadius: 12, fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase' }}>
+              <span style={{ position: 'absolute', top: -12, left: '50%', transform: 'translateX(-50%)', backgroundColor: theme.colors.primary, color: onPrimary, padding: '2px 10px', borderRadius: 12, fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase' }}>
                 Populaire
               </span>
             )}
@@ -47,7 +49,7 @@ export function PricingPreview({ block, theme }: BlockPreviewProps) {
                 width: '100%',
                 border: 'none',
                 backgroundColor: plan.isPopular ? theme.colors.primary : theme.colors.secondary,
-                color: plan.isPopular ? '#ffffff' : theme.colors.text,
+                color: plan.isPopular ? onPrimary : onSecondary,
                 borderRadius: theme.radius,
                 padding: '10px 14px',
                 fontWeight: 600,

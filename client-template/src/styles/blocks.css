@@ -41,7 +41,7 @@
   z-index: 10000;
   padding: 10px 16px;
   background-color: var(--color-primary);
-  color: #ffffff;
+  color: var(--color-on-primary);
   font-weight: 600;
   text-decoration: none;
   border-radius: var(--border-radius);

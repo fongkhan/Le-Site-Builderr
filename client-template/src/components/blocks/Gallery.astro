@@ -1,5 +1,8 @@
 ---
 import { safeHttpUrl } from '../../lib/url';
+import { getSiteContent } from '../../lib/content';
+import { siteImage } from '../../lib/images';
+import { autoFitSizes } from '../../lib/grid-sizes.mjs';
 
 interface Props {
   data: {
@@ -10,22 +13,27 @@ interface Props {
 }
 
 const { data } = Astro.props;
+const { media } = await getSiteContent();
 
-// URLs filtrées (http(s) ou médias du site). Pas de texte alternatif côté CMS : repli
-// descriptif « Photo N – <titre de la galerie> ».
-const images = (data.images || [])
+// URLs filtrées (http(s) ou médias du site). Texte alternatif : celui de la médiathèque,
+// sinon repli descriptif « Photo N – <titre de la galerie> ». Dimensions et variantes
+// (srcset) pour les images de la médiathèque ; sizes selon le nombre d'images rendues
+// (grille auto-fit : une image seule occupe toute la largeur).
+const altFor = (index: number) => (data.title ? `Photo ${index + 1} – ${data.title}` : `Photo ${index + 1}`);
+const sources = (data.images || [])
   .map((img) => safeHttpUrl(typeof img === 'string' ? img : img?.url))
   .filter(Boolean);
-const altFor = (index: number) => (data.title ? `Photo ${index + 1} – ${data.title}` : `Photo ${index + 1}`);
+const sizes = autoFitSizes(sources.length, { minWidth: 250, gap: 20 });
+const images = sources.map((src, index) => siteImage(src, media, { fallbackAlt: altFor(index), sizes }));
 ---
 
 <section class="gallery-section">
   <div class="container">
     {data.title && <h2 class="section-title">{data.title}</h2>}
     <div class="gallery-grid">
-      {images.map((src, index) => (
+      {images.map((img) => (
         <div class="gallery-item">
-          <img src={src} alt={altFor(index)} loading="lazy" decoding="async" />
+          <img src={img.src} alt={img.alt} width={img.width} height={img.height} srcset={img.srcset} sizes={img.sizes} loading="lazy" decoding="async" />
         </div>
       ))}
     </div>

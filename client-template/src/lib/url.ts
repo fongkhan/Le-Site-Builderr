@@ -77,18 +77,6 @@ export function safeHttpUrl(value: unknown, options: SafeUrlOptions = {}): strin
 }
 
 /**
- * Valeur CSS « url("…") » pour une image saisie par le client (fond du Hero…), ou ''
- * si l'URL est refusée. L'URL est filtrée (safeHttpUrl) puis placée dans une chaîne
- * CSS échappée : impossible d'en sortir pour injecter d'autres déclarations.
- */
-export function cssUrl(value: unknown): string {
-  const url = safeHttpUrl(value);
-  if (!url) return '';
-  const escaped = url.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\a ');
-  return `url("${escaped}")`;
-}
-
-/**
  * URL absolue publique (Open Graph, JSON-LD, hreflang) à partir d'un chemin du site
  * (avec ou sans chemin de base) ou d'une URL déjà absolue. '' si impossible (pas d'URL
  * publique connue, cas d'un brouillon ou d'un build local).
@@ -103,16 +91,13 @@ export function absoluteUrl(pathOrUrl: string, siteUrl: string): string {
   return siteUrl.replace(/\/+$/, '') + stripBase(safe);
 }
 
-/** Adresse email plausible (sinon affichée sans lien). */
-export function safeMailto(email: unknown): string {
-  if (typeof email !== 'string') return '';
-  const e = email.trim();
-  return /^[^\s@<>"'()\\,;:]+@[^\s@<>"'()\\,;:]+\.[^\s@<>"'()\\,;:]+$/.test(e) ? `mailto:${e}` : '';
-}
+// Liens email et téléphone : définis dans links.mjs (module pur partagé avec les liens des
+// boutons d'action, testé depuis le serveur).
+export { safeMailto, safeTel } from './links.mjs';
 
-/** Lien « tel: » limité aux chiffres et au « + » initial (sinon affiché sans lien). */
-export function safeTel(phone: unknown): string {
-  if (typeof phone !== 'string') return '';
-  const digits = phone.replace(/[^\d+]/g, '').replace(/(?!^)\+/g, '');
-  return /\d{3,}/.test(digits) ? `tel:${digits}` : '';
+/** Lien d'un bouton d'action prêt pour le rendu (lib/links.mjs resolveCtaLink). */
+export interface CtaLink {
+  href: string;
+  /** Adresse web externe : ouverte dans un nouvel onglet (mention masquée pour les lecteurs d'écran). */
+  newTab: boolean;
 }

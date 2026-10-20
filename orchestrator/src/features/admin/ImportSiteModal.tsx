@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { importSite } from '../../api/sites';
 import { errorMessage } from '../../api/client';
 import { Modal } from '../../components/ui/Modal';
@@ -9,12 +9,15 @@ import type { ScannedSite } from '../../types';
 // Remplace l'ancien enchaînement de prompt() : un vrai formulaire de confirmation d'import
 export function ImportSiteModal({ scanned, onClose, onImported }: { scanned: ScannedSite; onClose: () => void; onImported: (slug: string) => void }) {
   const toast = useToast();
+  const uid = useId();
+  const ids = { stack: `${uid}-stack`, documentRoot: `${uid}-racine`, repository: `${uid}-depot` };
   const [stack, setStack] = useState(scanned.stack || 'Static HTML');
   const [documentRoot, setDocumentRoot] = useState(scanned.documentRoot);
   const [repositoryPath, setRepositoryPath] = useState(scanned.repositoryPath || '');
   const [importing, setImporting] = useState(false);
 
   const handleImport = async () => {
+    if (importing) return;
     setImporting(true);
     try {
       await importSite({ ...scanned, stack, documentRoot, repositoryPath });
@@ -33,26 +36,27 @@ export function ImportSiteModal({ scanned, onClose, onImported }: { scanned: Sca
       title="📥 Importer un site détecté"
       subtitle={<>Dossier : <strong>{scanned.name}</strong> (slug : {scanned.slug})</>}
       onClose={onClose}
+      onSubmit={handleImport}
       footer={
         <>
-          <button className="btn btn-secondary" onClick={onClose}>Annuler</button>
-          <button className="btn btn-primary" onClick={handleImport} disabled={importing}>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Annuler</button>
+          <button type="submit" className="btn btn-primary" disabled={importing}>
             {importing ? 'Import…' : 'Importer dans le cPanel'}
           </button>
         </>
       }
     >
       <div>
-        <label className="field-label">Stack technique</label>
-        <StackSelect value={stack} onChange={setStack} />
+        <label className="field-label" htmlFor={ids.stack}>Stack technique</label>
+        <StackSelect id={ids.stack} value={stack} onChange={setStack} />
       </div>
       <div>
-        <label className="field-label">Document Root (dossier web public — vide : dossier par défaut)</label>
-        <input type="text" className="input-text" value={documentRoot} onChange={(e) => setDocumentRoot(e.target.value)} />
+        <label className="field-label" htmlFor={ids.documentRoot}>Document Root (dossier web public — vide : dossier par défaut)</label>
+        <input id={ids.documentRoot} type="text" className="input-text" value={documentRoot} onChange={(e) => setDocumentRoot(e.target.value)} />
       </div>
       <div>
-        <label className="field-label">Repository (code source CMS/backend — optionnel)</label>
-        <input type="text" className="input-text" value={repositoryPath} onChange={(e) => setRepositoryPath(e.target.value)} />
+        <label className="field-label" htmlFor={ids.repository}>Repository (code source CMS/backend — optionnel)</label>
+        <input id={ids.repository} type="text" className="input-text" value={repositoryPath} onChange={(e) => setRepositoryPath(e.target.value)} />
       </div>
     </Modal>
   );

@@ -1,0 +1,98 @@
+---
+// Mentions légales générées : éditeur, directeur de la publication, hébergeur
+// (lib/legal.mjs noticeSections). Saisie du client rendue en texte (expressions Astro
+// échappées, jamais de set:html) ; email et téléphone en texte brut. En brouillon, un
+// champ obligatoire vide est signalé « À compléter » ; sur le site publié, il est omis.
+import { getLegalContent } from '../../lib/legal-content';
+import { isDraftBuild } from '../../lib/content';
+import { legalHref, noticeSections } from '../../lib/legal.mjs';
+import { lt } from '../../lib/legal-texts.mjs';
+import { withBase } from '../../lib/url';
+
+interface Props {
+  locale: string;
+}
+
+const { locale } = Astro.props;
+const { legal, legalRoutes } = await getLegalContent();
+const sections = noticeSections(legal, { draft: isDraftBuild, siteName: process.env.PUBLIC_SITE_NAME || '' });
+const privacyPath = legalHref(legalRoutes, locale, 'privacy');
+const TITLES: Record<string, string> = { publisher: 'noticePublisher', director: 'noticeDirector', host: 'noticeHost' };
+const fieldLabel = (key: string) => lt(locale, `field_${key}`);
+
+interface Row {
+  key: string;
+  value: string;
+  missing: boolean;
+}
+// Repère « À compléter » d'un champ obligatoire vide (brouillon uniquement)
+const missingText = (row: Row) => lt(locale, 'missing', { field: fieldLabel(row.key) });
+---
+
+<div class="legal-body">
+  {sections.map((s: { section: string; rows: Row[] }) => (
+    <section>
+      <h2>{lt(locale, TITLES[s.section])}</h2>
+      {s.section === 'director'
+        ? s.rows.map((row) => <p class="legal-value">{row.missing ? <mark class="legal-missing">{missingText(row)}</mark> : row.value}</p>)
+        : (
+          <dl>
+            {s.rows.map((row) => (
+              <div class="legal-row"><dt>{fieldLabel(row.key)}</dt><dd class="legal-value">{row.missing ? <mark class="legal-missing">{missingText(row)}</mark> : row.value}</dd></div>
+            ))}
+          </dl>
+        )}
+    </section>
+  ))}
+  {privacyPath && (
+    <section>
+      <h2>{lt(locale, 'noticePrivacy')}</h2>
+      <p>{lt(locale, 'noticePrivacyText')} <a href={withBase(privacyPath)}>{lt(locale, 'privacyPolicy').toLowerCase()}</a>.</p>
+    </section>
+  )}
+</div>
+
+<style>
+  .legal-body section {
+    margin-bottom: 32px;
+  }
+
+  .legal-body h2 {
+    font-size: 1.3rem;
+    margin-bottom: 12px;
+  }
+
+  .legal-row {
+    display: grid;
+    grid-template-columns: minmax(140px, 1fr) 2fr;
+    gap: 4px 16px;
+    padding: 8px 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--color-text) 10%, transparent);
+  }
+
+  .legal-row dt {
+    font-weight: 600;
+  }
+
+  .legal-value {
+    white-space: pre-line;
+    overflow-wrap: anywhere;
+  }
+
+  .legal-body a {
+    color: var(--color-primary);
+  }
+
+  .legal-missing {
+    background-color: #fef3c7;
+    color: #92400e;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  @media (max-width: 560px) {
+    .legal-row {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

@@ -6,6 +6,9 @@
 // - pas de listing de dossier ;
 // - cache : ressources Astro (/_astro/, noms hachés) et polices immuables un an, HTML
 //   revalidé rapidement pour qu'une publication soit visible tout de suite ;
+// - en-têtes de sécurité : pas de détection de type (nosniff), référent réduit à
+//   l'origine hors du site, affichage dans un cadre limité au site lui-même
+//   (X-Frame-Options et CSP frame-ancestors) ;
 // - compression et expiration par défaut.
 // Chaque directive de module est sous <IfModule> : un module absent chez l'hébergeur ne
 // provoque jamais d'erreur 500. Aucune réécriture d'URL (pas de RewriteEngine).
@@ -21,6 +24,10 @@ function generateHtaccess() {
     'Options -Indexes',
     '',
     '<IfModule mod_headers.c>',
+    '  Header always set X-Content-Type-Options "nosniff"',
+    '  Header always set Referrer-Policy "strict-origin-when-cross-origin"',
+    '  Header always set X-Frame-Options "SAMEORIGIN"',
+    '  Header always set Content-Security-Policy "frame-ancestors \'self\'"',
     '  <If "%{REQUEST_URI} =~ m#^/_astro/#">',
     '    Header set Cache-Control "public, max-age=31536000, immutable"',
     '  </If>',

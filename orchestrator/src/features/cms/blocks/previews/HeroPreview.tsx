@@ -1,13 +1,21 @@
+import { derivedColors } from '../../../../lib/color';
+import { fontStack } from '../../../../lib/themeFonts';
 import type { BlockPreviewProps } from '../types';
 import { cssUrl } from './previewStyles';
 
+// Reproduit Hero.astro : sans image, dégradé primaire et texte lisible sur primaire ;
+// avec image (assombrie), texte blanc.
 export function HeroPreview({ block, theme }: BlockPreviewProps) {
+  const { onPrimary, onSecondary, primaryDeep } = derivedColors(theme.colors);
+  const textColor = block.backgroundImage ? '#ffffff' : onPrimary;
   return (
     <div
       style={{
         backgroundColor: theme.colors.primary,
-        color: '#ffffff',
-        backgroundImage: block.backgroundImage ? `linear-gradient(rgba(0,0,0,0.4), rgba(0,0,0,0.6)), ${cssUrl(block.backgroundImage)}` : 'none',
+        color: textColor,
+        backgroundImage: block.backgroundImage
+          ? `linear-gradient(rgba(0,0,0,0.4), rgba(0,0,0,0.6)), ${cssUrl(block.backgroundImage)}`
+          : `linear-gradient(135deg, ${theme.colors.primary} 0%, ${primaryDeep} 100%)`,
         backgroundSize: 'cover',
         backgroundPosition: 'center',
         padding: '60px 20px',
@@ -19,10 +27,10 @@ export function HeroPreview({ block, theme }: BlockPreviewProps) {
         minHeight: 280,
       }}
     >
-      <h1 style={{ color: '#ffffff', fontFamily: `'${theme.fonts.heading}', serif`, fontSize: '2.5rem', marginBottom: 12 }}>{block.title}</h1>
-      <p style={{ color: theme.colors.secondary, fontSize: '1.1rem', maxWidth: 600, marginBottom: 20 }}>{block.subtitle}</p>
+      <h1 style={{ color: textColor, fontFamily: fontStack(theme.fonts.heading, 'serif'), fontSize: '2.5rem', marginBottom: 12 }}>{block.title}</h1>
+      <p style={{ color: textColor, fontSize: '1.1rem', maxWidth: 600, marginBottom: 20 }}>{block.subtitle}</p>
       {block.ctaText && (
-        <button type="button" tabIndex={-1} style={{ backgroundColor: theme.colors.secondary, color: theme.colors.text, border: 'none', borderRadius: theme.radius, padding: '10px 20px', fontWeight: 600 }}>
+        <button type="button" tabIndex={-1} style={{ backgroundColor: theme.colors.secondary, color: onSecondary, border: 'none', borderRadius: theme.radius, padding: '10px 20px', fontWeight: 600 }}>
           {block.ctaText}
         </button>
       )}

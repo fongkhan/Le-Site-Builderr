@@ -1,10 +1,11 @@
 import type { CSSProperties } from 'react';
+import { fontStack } from '../../../../lib/themeFonts';
 import type { Theme } from '../../../../types';
 
 // Styles communs des aperçus (reproduisent le rendu du template Astro).
 
 export function headingStyle(theme: Theme): CSSProperties {
-  return { textAlign: 'center', marginBottom: 30, fontFamily: `'${theme.fonts.heading}', serif`, color: theme.colors.text };
+  return { textAlign: 'center', marginBottom: 30, fontFamily: fontStack(theme.fonts.heading, 'serif'), color: theme.colors.text };
 }
 
 export const SECTION_STYLE: CSSProperties = { padding: '40px 20px' };

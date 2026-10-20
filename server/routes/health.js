@@ -8,6 +8,7 @@ const { getPayloadInstance } = require('../core/payload');
 const { DATA_DIR, PUBLIC_HTML_DIR, UPLOADS_DIR } = require('../core/config');
 const { summarizeChecks, createCachedProbe } = require('../lib/health');
 const build = require('../services/build');
+const { isShuttingDown } = require('../core/shutdown');
 
 const DB_TIMEOUT_MS = 2000;
 const READY_CACHE_MS = 2000;
@@ -73,6 +74,11 @@ const readyProbe = createCachedProbe(async () => {
 }, READY_CACHE_MS);
 
 router.get('/api/health/ready', async (req, res) => {
+  // Arrêt en cours : la sonde retire le serveur du trafic (répartiteur, superviseur)
+  if (isShuttingDown()) {
+    res.set('Cache-Control', 'no-store');
+    return res.status(503).json({ status: 'stopping', checks: {} });
+  }
   const { status, httpStatus, checks } = await readyProbe();
   res.set('Cache-Control', 'no-store');
   res.status(httpStatus).json({ status, checks });

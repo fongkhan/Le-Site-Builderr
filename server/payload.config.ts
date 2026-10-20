@@ -5,7 +5,9 @@ import { nodemailerAdapter } from '@payloadcms/email-nodemailer'
 import path from 'path'
 import { createRequire } from 'module'
 import { fileURLToPath } from 'url'
-import { Access } from 'payload'
+import { Access, Plugin } from 'payload'
+// Thème : logo validé comme par POST /api/theme (module CommonJS, import par défaut)
+import themeLib from './lib/theme.js'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
@@ -86,9 +88,46 @@ const siteRelationField = (extra: Record<string, unknown> = {}): any => ({
   ...extra,
 })
 
+// Lien d'un bouton d'action (bannière, formule, produit). Les schémas exécutables
+// (javascript:, vbscript:, data:text/html) sont refusés ici aussi : l'API REST de Payload
+// n'accepte pas ce que le CMS refuse. Le reste (saisie en cours, page supprimée…) est
+// toléré : le template ignore un lien invalide et revient au formulaire du site.
+// Un validate personnalisé remplace celui du type text : ce dernier (longueur maximale…)
+// est donc appelé ensuite. Module CommonJS du serveur : import par défaut (interop tsx et Next).
+import urlSafety from './lib/url-safety.js'
+import { validations } from 'payload'
+const ctaLinkField = (): any => ({
+  name: 'ctaLink',
+  type: 'text',
+  validate: (value: unknown, options: any) => {
+    const safe = urlSafety.validateSafeUrl(value)
+    return safe === true ? validations.text(value as any, options) : safe
+  },
+  admin: { description: 'Lien du bouton : vide = formulaire du site ; /page/, #contact, https://…, tel:… ou mailto:…' },
+})
+
 const frontendOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:5173')
   .split(',')
   .map((o) => o.trim())
+
+// Verrous de documents (posés par /admin à l'ouverture d'un document) : toute écriture
+// passe outre, comme l'API locale des endpoints Express. Sans cela (défaut de l'API REST),
+// Payload vérifie le verrou HORS de la transaction de l'écriture : une seconde connexion
+// du pool réclamée pendant que la première est tenue. Dès une dizaine d'écritures REST
+// simultanées, plus aucune ne se libère : tout le serveur se fige (un client connecté y
+// suffit, PATCH /api/users/<son id>). Le verrou est levé dans la transaction. Appliqué à
+// toutes les collections par un plugin.
+const overrideDocumentLocks = ({ args, operation }: any) => {
+  if (operation === 'update' || operation === 'delete') args.overrideLock = true
+  return args
+}
+const documentLocksOverridden: Plugin = (config) => ({
+  ...config,
+  collections: (config.collections || []).map((c) => ({
+    ...c,
+    hooks: { ...c.hooks, beforeOperation: [overrideDocumentLocks, ...(c.hooks?.beforeOperation || [])] },
+  })),
+})
 
 // Lien de réinitialisation pointant vers le front (première origine configurée)
 const resetPasswordUrl = (token: string) => `${frontendOrigins[0]}/reset-password?token=${token}`
@@ -100,6 +139,7 @@ import { ValidationError, Forbidden } from 'payload'
 import passwordPolicy from './lib/password-policy.js'
 import sessionOptions from './lib/session.js'
 import accountGuards from './lib/account-guards.js'
+import auditEvents from './lib/audit-events.js'
 
 // Message unique pour tout échec de login (mauvais identifiants OU compte verrouillé) :
 // ne révèle ni l'existence d'un compte ni son verrouillage.
@@ -127,6 +167,13 @@ export default buildConfig({
   secret: process.env.PAYLOAD_SECRET,
   cors: frontendOrigins,
   csrf: frontendOrigins,
+  // GraphQL inutilisé (orchestrateur et panel passent par l'API REST) : désactivé pour
+  // qu'aucune seconde porte d'entrée (login, création de compte…) n'échappe aux
+  // limiteurs Express. La dépendance graphql reste installée (requise par @payloadcms/next).
+  graphQL: { disable: true },
+  // Avatar générique dans /admin : par défaut, Payload charge celui de gravatar.com (requête
+  // vers un tiers qui expose le hachage MD5 de l'email du compte connecté).
+  admin: { avatar: 'default' },
   // Sans SMTP_HOST, Payload écrit les emails dans la console (mode développement)
   ...(process.env.SMTP_HOST
     ? {
@@ -161,8 +208,16 @@ export default buildConfig({
   db: postgresAdapter({
     pool: {
       connectionString: dbUri,
+      // Filet de sécurité : sans connexion libre au bout de 30 s, la requête échoue (et sa
+      // transaction est annulée) au lieu d'attendre indéfiniment ; un pool saturé ne fige
+      // plus le serveur jusqu'au redémarrage.
+      connectionTimeoutMillis: 30_000,
     },
-    // push actif en dev : le schéma est synchronisé automatiquement (aucune migration versionnée dans ce repo)
+    // Développement : schéma poussé automatiquement (push). Production : migrations
+    // versionnées de ce dossier, appliquées au démarrage par core/payload.js (pas de
+    // prodMigrations : sur une base de développement, Payload poserait une question
+    // interactive et bloquerait le serveur).
+    migrationDir: path.resolve(dirname, 'migrations'),
   }),
   collections: [
     {
@@ -210,6 +265,14 @@ export default buildConfig({
       },
       hooks: {
         beforeOperation: [
+          // Tentative de login : email saisi mémorisé pour le journal d'audit (afterError),
+          // quelle que soit la forme du chemin. Jamais le mot de passe.
+          ({ args, operation, req }: any) => {
+            if (operation === 'login' && req?.context) {
+              req.context.loginAttempt = { email: typeof args?.data?.email === 'string' ? args.data.email : '' }
+            }
+            return args
+          },
           // Aucune création de compte par HTTP sans être connecté, y compris
           // /api/users/first-register (premier compte admin sur une base vide) : les
           // comptes viennent d'un admin ou du seed (API locale, SEED_ADMIN_EMAIL).
@@ -256,10 +319,11 @@ export default buildConfig({
           },
         ],
         beforeChange: [
-          // Changement de mot de passe : les autres sessions seront révoquées après écriture
-          ({ data, operation, context }: any) => {
+          // Changement de mot de passe : les autres sessions seront révoquées après écriture.
+          // Marque par compte (mise à jour groupée : comptes traités en parallèle).
+          ({ data, operation, context, originalDoc }: any) => {
             if (operation === 'update' && typeof data?.password === 'string' && data.password) {
-              context.passwordChanged = true
+              accountGuards.markPasswordChange(context, originalDoc?.id)
             }
             return data
           },
@@ -277,30 +341,44 @@ export default buildConfig({
           },
         ],
         afterChange: [
-          // Journal d'audit : trace la création de comptes (la création passe par
-          // l'API REST Payload, hors des endpoints Express — d'où le hook ici).
-          ({ req, doc, operation }) => {
-            if (operation === 'create') {
-              req.payload
-                .create({
-                  collection: 'audit_logs',
-                  data: {
-                    action: 'utilisateur.creation',
-                    actor: (req?.user as any)?.email || 'système',
-                    target: doc.email,
-                    details: `roles=${(doc.roles || []).join(',')}`,
-                  },
-                  overrideAccess: true,
-                })
-                .catch(() => {}) // l'audit n'est jamais bloquant
-            }
+          // Journal d'audit des comptes (création ; modification d'email, rôles, offre,
+          // quota IA, sites, mot de passe — jamais sa valeur). Les comptes passent par l'API
+          // REST Payload, hors des endpoints Express, d'où le hook. DOIT rester EN PREMIER :
+          // le hook suivant (révocation) retire la marque de mot de passe de ce compte (lue
+          // ici de façon synchrone). L'update interne de forgot-password (jeton) ne produit
+          // aucune entrée (diff vide). Écriture en arrière-plan : hook exécuté dans la
+          // transaction.
+          ({ req, doc, previousDoc, operation, context }: any) => {
+            if (operation !== 'create' && operation !== 'update') return doc
+            const payload = req?.payload
+            const actor = auditEvents.auditActor(req)
+            const passwordChanged = accountGuards.hasPasswordChange(context, doc?.id)
+            // Champs audités copiés maintenant (jamais password, hash, jeton, sessions)
+            const pick = (d: any) => ({ email: d?.email, roles: d?.roles, plan: d?.plan, aiDailyQuota: d?.aiDailyQuota, sites: d?.sites })
+            const before = pick(previousDoc)
+            const after = pick(doc)
+            // Relations en ids (previousDoc) ou peuplées (doc) : libellés résolus seulement
+            // si les sites changent
+            const sitesTouched = operation === 'create'
+              ? (after.sites || []).length > 0
+              : auditEvents.userChangeSummary({ sites: before.sites }, { sites: after.sites }) !== ''
+            if (operation === 'update' && !sitesTouched && !auditEvents.userChangeSummary(before, after, { passwordChanged })) return doc
+            auditEvents.auditInBackground(async () => {
+              const labels = sitesTouched ? await auditEvents.siteLabelsFor(payload, before.sites, after.sites) : {}
+              if (operation === 'create') {
+                await auditEvents.writeAudit(payload, { action: 'utilisateur.creation', actor, target: after.email, details: auditEvents.userCreationSummary(after, labels) })
+                return
+              }
+              const details = auditEvents.userChangeSummary(before, after, { passwordChanged, siteLabels: labels })
+              if (details) await auditEvents.writeAudit(payload, { action: 'utilisateur.modification', actor, target: after.email, details })
+            })
             return doc
           },
           // Mot de passe modifié : révoque les sessions ouvertes. Seule la session courante
           // est conservée quand l'utilisateur modifie son propre compte.
           async ({ req, doc, operation, context }: any) => {
-            if (operation !== 'update' || !context?.passwordChanged) return doc
-            context.passwordChanged = false
+            if (operation !== 'update' || !accountGuards.hasPasswordChange(context, doc?.id)) return doc
+            accountGuards.clearPasswordChange(context, doc?.id)
             try {
               const self = req?.user && String(req.user.id) === String(doc.id)
               const current = self && req.user._sid
@@ -317,14 +395,64 @@ export default buildConfig({
             return doc
           },
         ],
-        // Login : même réponse pour identifiants invalides et compte verrouillé
+        // Journal d'audit : suppression d'un compte (arrière-plan : dans la transaction)
+        afterDelete: [
+          ({ req, doc }: any) => {
+            const roles = (Array.isArray(doc?.roles) ? doc.roles.map(String).sort() : []).join(',') || '∅'
+            const entry = { action: 'utilisateur.suppression', actor: auditEvents.auditActor(req), target: doc?.email, details: `roles=${roles}` }
+            auditEvents.auditInBackground(() => auditEvents.writeAudit(req?.payload, entry))
+            return doc
+          },
+        ],
+        // Journal d'audit des opérations d'authentification réussies. Renvoie TOUJOURS
+        // result. forgotPassword : result est le jeton de réinitialisation, jamais écrit ;
+        // il n'est non nul que pour un compte existant (et ce hook s'exécute avant le
+        // commit : écriture en arrière-plan). resetPassword écrit par db.updateOne (sans
+        // afterChange) : tracé ici.
+        afterOperation: [
+          ({ args, operation, req, result }: any) => {
+            const email = typeof args?.data?.email === 'string' ? args.data.email.trim().toLowerCase() : ''
+            let entry: any = null
+            if (operation === 'unlock' && result && email) {
+              entry = { action: 'utilisateur.deverrouillage', actor: auditEvents.auditActor(req), target: email }
+            } else if (operation === 'forgotPassword' && result && email) {
+              entry = { action: 'motdepasse.demande-reinit', actor: auditEvents.auditActor(req), target: email, details: '' }
+            } else if (operation === 'resetPassword' && result?.user?.email) {
+              entry = { action: 'motdepasse.reinitialisation', actor: result.user.email, target: result.user.email }
+            }
+            if (entry) auditEvents.auditInBackground(() => auditEvents.writeAudit(req?.payload, entry))
+            return result
+          },
+        ],
+        // Journal d'audit : connexions réussies des admins (de tous les comptes si
+        // AUDIT_LOGINS=true). Arrière-plan : hook exécuté dans la transaction du login.
+        afterLogin: [
+          ({ req, user }: any) => {
+            if (auditEvents.shouldAuditLogin(user, process.env)) {
+              const entry = { action: 'connexion.succes', actor: user.email, target: user.email }
+              auditEvents.auditInBackground(() => auditEvents.writeAudit(req?.payload, entry))
+            }
+            return user
+          },
+        ],
+        // Login : même réponse pour identifiants invalides et compte verrouillé, quelle que
+        // soit la forme du chemin (/api/users/LOGIN, /api/users/%6Cogin…) ; échec tracé
+        // avec l'email masqué.
         afterError: [
-          ({ error, req }: any) => {
-            const where = String(req?.pathname || req?.url || '').split('?')[0]
-            if (!where.endsWith('/users/login')) return
+          async ({ error, req, context }: any) => {
+            const attempt = context?.loginAttempt || req?.context?.loginAttempt
+            if (!attempt && !accountGuards.isLoginPath(req?.pathname)) return
             // Statut 401 (LockedAuth, AuthenticationError) : error.name n'est pas fiable
             // une fois le bundle Next minifié en production
             if (!accountGuards.isLoginFailure(error)) return
+            // Écriture attendue : la transaction du login est déjà annulée (aucune
+            // connexion tenue) et l'entrée existe avant la réponse
+            await auditEvents.writeAudit(req?.payload, {
+              action: 'connexion.echec',
+              actor: 'anonyme',
+              target: auditEvents.maskEmail(attempt?.email),
+              details: `motif=${accountGuards.loginFailureReason(error, req?.t?.('error:userLocked'))}`,
+            })
             return { status: 401, response: { errors: [{ message: LOGIN_FAILED_MESSAGE }] } }
           },
         ],
@@ -485,6 +613,28 @@ export default buildConfig({
           type: 'text',
           admin: { description: 'Matomo uniquement : hôte du serveur (ex. stats.mondomaine.fr).' },
         },
+        // --- Informations légales (mentions légales et politique de confidentialité du
+        // site publié) : mêmes clés et longueurs que server/lib/legal.js. Saisie par le
+        // propriétaire via PUT /api/sites/:slug/legal (validée), accès REST inchangés.
+        {
+          name: 'legal',
+          type: 'group',
+          label: 'Informations légales',
+          admin: { description: "Publiées dans les mentions légales et la politique de confidentialité du site. Hébergeur vide : valeur par défaut du serveur (LEGAL_HOST_*)." },
+          fields: [
+            { name: 'companyName', type: 'text', maxLength: 200, label: "Raison sociale ou nom de l'éditeur" },
+            { name: 'legalForm', type: 'text', maxLength: 200, label: 'Forme juridique et capital' },
+            { name: 'address', type: 'textarea', maxLength: 400, label: 'Adresse du siège' },
+            { name: 'registration', type: 'text', maxLength: 200, label: 'Immatriculation (SIREN, RCS ou RM)' },
+            { name: 'vatNumber', type: 'text', maxLength: 40, label: 'N° de TVA intracommunautaire' },
+            { name: 'phone', type: 'text', maxLength: 40, label: 'Téléphone' },
+            { name: 'email', type: 'text', maxLength: 200, label: 'Email de contact' },
+            { name: 'publisherName', type: 'text', maxLength: 200, label: 'Directeur ou directrice de la publication' },
+            { name: 'hostName', type: 'text', maxLength: 200, label: 'Hébergeur' },
+            { name: 'hostAddress', type: 'textarea', maxLength: 400, label: "Adresse de l'hébergeur" },
+            { name: 'hostPhone', type: 'text', maxLength: 40, label: "Téléphone de l'hébergeur" },
+          ],
+        },
       ],
     },
     {
@@ -553,6 +703,7 @@ export default buildConfig({
                 { name: 'title', type: 'text' },
                 { name: 'subtitle', type: 'text' },
                 { name: 'ctaText', type: 'text' },
+                ctaLinkField(),
                 { name: 'backgroundImage', type: 'text' },
               ],
             },
@@ -581,6 +732,7 @@ export default buildConfig({
                     { name: 'name', type: 'text' },
                     { name: 'price', type: 'text' },
                     { name: 'image', type: 'text' },
+                    ctaLinkField(),
                   ],
                 },
               ],
@@ -649,6 +801,7 @@ export default buildConfig({
                       ],
                     },
                     { name: 'ctaText', type: 'text' },
+                    ctaLinkField(),
                     { name: 'isPopular', type: 'checkbox' },
                   ],
                 },
@@ -775,12 +928,33 @@ export default buildConfig({
           name: 'radius',
           type: 'text',
         },
+        {
+          // Même règle que l'API du thème : bloque aussi PATCH /api/themes/:id (REST Payload)
+          name: 'logo',
+          type: 'text',
+          validate: (value: unknown) =>
+            value == null || value === '' || themeLib.normalizeLogo(value) !== null ? true : themeLib.LOGO_ERROR,
+          // Enregistré sous sa forme canonique (comme POST /api/theme), même saisi dans le
+          // panel ou par PATCH REST sous la forme de doc.url (« logo%20(1).png »)
+          hooks: {
+            beforeValidate: [
+              ({ value }: any) => {
+                const logo = themeLib.normalizeLogo(value)
+                return typeof logo === 'string' && logo !== '' ? logo : value
+              },
+            ],
+          },
+          admin: {
+            description: 'Logo du site : image de la médiathèque (/api/media/file/<nom>). Vide : nom du site affiché.',
+          },
+        },
       ],
     },
     {
-      // Journal d'audit des actions sensibles (création/suppression de site, comptes,
-      // rollback, builds…). Écrit uniquement par le serveur (overrideAccess) ;
-      // lecture réservée aux admins, aucune modification possible.
+      // Journal d'audit des actions sensibles (sites, comptes, connexions, contenus,
+      // builds…). Écrit uniquement par le serveur (overrideAccess) ; ni modification ni
+      // suppression par l'API ou le panel ; purge de rétention côté serveur
+      // (services/retention.js). Lecture réservée aux admins.
       slug: 'audit_logs',
       admin: {
         useAsTitle: 'action',
@@ -790,7 +964,7 @@ export default buildConfig({
         read: isAdmin,
         create: () => false,
         update: () => false,
-        delete: isAdmin,
+        delete: () => false,
       },
       fields: [
         { name: 'action', type: 'text', required: true, index: true },
@@ -820,14 +994,53 @@ export default buildConfig({
       admin: {
         useAsTitle: 'filename',
       },
+      // Journal d'audit des ajouts et suppressions faits par l'API REST ou le panel. Les
+      // copies et purges internes (API locale) sont déjà tracées par site.duplication et
+      // site.suppression. Écriture en arrière-plan : hooks exécutés dans la transaction.
+      hooks: {
+        afterChange: [
+          ({ req, doc, operation }: any) => {
+            if (operation !== 'create' || req?.payloadAPI === 'local') return doc
+            const payload = req?.payload
+            const actor = auditEvents.auditActor(req)
+            auditEvents.auditInBackground(async () => auditEvents.writeAudit(payload, {
+              action: 'media.ajout',
+              actor,
+              target: await auditEvents.siteTargetFor(payload, doc?.site),
+              details: `fichier=${doc?.filename} ; type=${doc?.mimeType} ; taille=${doc?.filesize}`,
+            }))
+            return doc
+          },
+        ],
+        afterDelete: [
+          ({ req, doc }: any) => {
+            if (req?.payloadAPI === 'local') return doc
+            const payload = req?.payload
+            const actor = auditEvents.auditActor(req)
+            auditEvents.auditInBackground(async () => auditEvents.writeAudit(payload, {
+              action: 'media.suppression',
+              actor,
+              target: await auditEvents.siteTargetFor(payload, doc?.site),
+              details: `fichier=${doc?.filename}`,
+            }))
+            return doc
+          },
+        ],
+      },
       access: {
         read: isAdminOrSiteClient,
         create: canCreateForOwnSite,
-        update: isAdminOrSiteClient,
-        delete: isAdminOrSiteClient,
+        // Client : texte alternatif via PATCH /api/sites/:slug/media/:id. Un PATCH REST avec
+        // un nouveau fichier effacerait l'ancien, encore cité, sans contrôle d'usage.
+        update: isAdmin,
+        // Suppression client via DELETE /api/sites/:slug/media/:id (contrôle d'usage)
+        delete: isAdmin,
       },
       fields: [
         siteRelationField({ index: true }),
+        // Texte alternatif repris par le site publié pour chaque usage de l'image ;
+        // vide = texte de repli du bloc (nom du produit, « Photo N – titre »…).
+        { name: 'alt', type: 'text', maxLength: 200 },
       ],
     },
     {
@@ -902,6 +1115,7 @@ export default buildConfig({
       ],
     },
   ],
+  plugins: [documentLocksOverridden],
   typescript: {
     outputFile: path.resolve(dirname, 'payload-types.ts'),
   },

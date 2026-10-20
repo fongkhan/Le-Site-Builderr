@@ -3,9 +3,10 @@
 // (admin ou propriétaire du site).
 const auth = require('../auth');
 const { generateSlug } = require('../lib/paths');
-const { validateTheme } = require('../lib/theme');
+const { validateTheme, canonicalTheme, logoFilename, themeContrastWarnings } = require('../lib/theme');
 const { sendError, createRouter } = require('../core/http');
 const { logAudit } = require('../core/audit');
+const { themeChangeSummary } = require('../lib/audit-events');
 const content = require('../services/content');
 const submissions = require('../services/submissions');
 const sitesStore = require('../sites-store');
@@ -27,7 +28,12 @@ router.post('/api/site-pages', ...siteAccess, async (req, res) => {
   const invalid = content.validatePagesBody(req.body);
   if (invalid) return res.status(400).json({ error: invalid });
   try {
-    await content.saveSitePages(req.query.site, req.body);
+    const site = req.query.site;
+    const r = (await content.saveSitePages(site, req.body)) || {};
+    // Journal : créations et suppressions de pages seulement. Les mises à jour de texte
+    // (enregistrement automatique de l'éditeur) et les doublons purgés ne sont pas tracés.
+    if (r.created && r.created.length) logAudit(req, 'page.creation', site, `pages=${r.created.join(',')}`);
+    if (r.deleted && r.deleted.length) logAudit(req, 'page.suppression', site, `pages=${r.deleted.join(',')}`);
     res.json({ success: true, message: "Pages enregistrées avec succès !" });
   } catch (e) {
     sendError(res, "Impossible d'enregistrer les pages.", e);
@@ -97,6 +103,7 @@ router.get('/api/theme', ...siteAccess, async (req, res) => {
 });
 
 router.post('/api/theme', ...siteAccess, async (req, res) => {
+  const site = req.query.site;
   const themeData = req.body;
 
   // Valider avant toute écriture : les valeurs finissent interpolées dans theme.css
@@ -105,11 +112,22 @@ router.post('/api/theme', ...siteAccess, async (req, res) => {
   if (!validation.ok) {
     return res.status(400).json({ error: validation.error });
   }
+  // Seul le thème validé est persisté (pas d'autres clés arbitraires du corps) ; logo
+  // absent du corps = pas de logo.
+  const theme = canonicalTheme(themeData.theme);
 
   try {
-    // Seul le thème validé est persisté (pas d'autres clés arbitraires du corps)
-    await content.saveSiteTheme(req.query.site, { theme: themeData.theme });
-    res.json({ success: true, message: "Thème mis à jour avec succès !" });
+    // Logo : fichier de la médiathèque DE CE SITE uniquement (jamais celui d'un autre client)
+    if (theme.logo && !(await content.siteOwnsMedia(site, logoFilename(theme.logo)))) {
+      return res.status(400).json({ error: 'Logo introuvable dans la médiathèque du site : téléversez-le depuis la page Design.' });
+    }
+    // Thème précédent : base du résumé des changements pour le journal d'audit
+    const prev = await content.readSiteTheme(site).catch(() => null);
+    await content.saveSiteTheme(site, { theme });
+    const summary = themeChangeSummary(prev && prev.theme, theme);
+    if (summary) logAudit(req, 'theme.modification', site, summary);
+    // Avertissements de lisibilité : jamais bloquants (le thème est enregistré)
+    res.json({ success: true, message: "Thème mis à jour avec succès !", warnings: themeContrastWarnings(theme).map((w) => w.message) });
   } catch (e) {
     sendError(res, "Impossible d'enregistrer le thème.", e);
   }

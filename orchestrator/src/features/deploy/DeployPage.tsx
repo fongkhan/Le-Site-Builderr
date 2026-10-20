@@ -54,7 +54,9 @@ export function DeployPage() {
     setDeployLoading(true);
     try {
       const result = await triggerRebuild(site.slug);
-      if (result.alreadyBuilding) {
+      if (result.restarting) {
+        toast.info('Le serveur redémarre : votre publication démarrera automatiquement à sa reprise.');
+      } else if (result.alreadyBuilding) {
         toast.info('Un build est déjà en cours pour ce site : vos dernières modifications seront publiées juste après.');
       } else if (result.queued) {
         toast.info(`Un autre build est en cours : votre site est en file d'attente (position ${result.position}).`);

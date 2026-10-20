@@ -3,6 +3,7 @@ import type { Block } from '../../../types';
 import { blockLabel } from '../blocks/definitions';
 import { getBlockDefinition } from '../blocks/registry';
 import type { UpdateOptions } from '../blocks/types';
+import type { LinkTargets } from '../lib/ctaLink';
 import { moveAnnouncement, type EditorBlock } from '../lib/editorModel';
 import '../cms-editor.css';
 
@@ -19,12 +20,14 @@ interface BlockListProps {
   onRemove: (blockId: string) => void;
   onDuplicate: (blockId: string) => void;
   updateBlock: (blockId: string, recipe: (draft: Block) => void, options?: UpdateOptions) => void;
+  /** Cibles du lien des boutons de la page (transmises aux éditeurs de blocs) */
+  linkTargets?: LinkTargets;
 }
 
 // Sections de la page : ordre (flèches, glisser-déposer), duplication, suppression,
 // éditeur du bloc. Chaque déplacement est annoncé aux lecteurs d'écran (jamais au
 // chargement) et le focus reste sur une flèche utilisable.
-export function BlockList({ blocks, siteSlug, editingId, onEdit, onMove, onReorder, onRemove, onDuplicate, updateBlock }: BlockListProps) {
+export function BlockList({ blocks, siteSlug, editingId, onEdit, onMove, onReorder, onRemove, onDuplicate, updateBlock, linkTargets }: BlockListProps) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState('');
@@ -132,6 +135,7 @@ export function BlockList({ blocks, siteSlug, editingId, onEdit, onMove, onReord
                     block={block}
                     siteSlug={siteSlug}
                     update={(recipe, options) => updateBlock(block.id, recipe, options)}
+                    linkTargets={linkTargets}
                   />
                 ) : (
                   <span className="field-label">Ce type de section (« {block.blockType} ») n'est pas modifiable ici : il est conservé tel quel.</span>

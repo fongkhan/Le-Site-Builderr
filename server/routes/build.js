@@ -9,6 +9,8 @@ const { readBuildLog } = require('../core/build-log');
 const { LOCK_FILE } = require('../core/config');
 const { readSitePages, readSitePosts } = require('../services/content');
 const build = require('../services/build');
+const { isShuttingDown } = require('../core/shutdown');
+const { siteMediaManifest } = require('../services/media');
 
 const router = createRouter();
 
@@ -53,9 +55,15 @@ router.get('/api/build-status', auth.authenticate, auth.requireAuth, (req, res) 
 router.post('/webhook/rebuild', auth.authenticate, auth.requireAuth, auth.requireSiteAccess(req => req.query.site), async (req, res) => {
   const siteSlug = req.query.site;
 
+  // Site en cours de suppression : une publication remettrait ses fichiers en ligne
+  if (build.isSiteDeleting(siteSlug)) {
+    return res.status(409).json({ error: 'Ce site est en cours de suppression.' });
+  }
+
   // Décision d'occupation SYNCHRONE (aucun await intercalé) : réserve le créneau
-  // immédiatement si le build est libre, fermant la fenêtre TOCTOU.
-  const reserved = build.tryReserve();
+  // immédiatement si le build est libre, fermant la fenêtre TOCTOU. Jamais de réservation
+  // pendant l'arrêt du serveur (la demande est alors mise en file pour le redémarrage).
+  const reserved = build.tryReserve(siteSlug);
 
   let site;
   try {
@@ -72,16 +80,22 @@ router.post('/webhook/rebuild', auth.authenticate, auth.requireAuth, auth.requir
   const triggeredBy = (req.user && req.user.email) || 'système';
   logAudit(req, 'build.declenchement', siteSlug);
 
+  const restarting = (position) => res.status(202).json({ message: 'Le serveur redémarre : la publication démarrera automatiquement à sa reprise.', queued: true, position, restarting: true });
+
   // Créneau réservé : démarrage immédiat (le build consomme le verrou déjà posé)
   if (reserved) {
-    res.status(202).json({ message: 'Build démarré avec succès.', queued: false });
+    // Arrêt commencé pendant la lecture du site : launch remet le site en tête de file
+    const stopping = isShuttingDown();
     build.launch(siteSlug, triggeredBy);
+    if (stopping) return restarting(build.getQueue().indexOf(siteSlug) + 1);
+    res.status(202).json({ message: 'Build démarré avec succès.', queued: false });
     return;
   }
 
   // Build déjà en cours pour CE site : un nouveau build est programmé juste après, pour
   // publier les modifications enregistrées depuis son démarrage (dédupliqué).
   const position = build.enqueue(siteSlug, triggeredBy);
+  if (isShuttingDown()) return restarting(position);
   if (build.getBuildStatus().buildingSite === siteSlug) {
     return res.status(202).json({ message: 'Build déjà en cours pour ce site : une nouvelle publication suivra.', queued: true, position, alreadyBuilding: true });
   }
@@ -108,7 +122,7 @@ async function resolveInternalSite(req) {
   try {
     const sites = await sitesStore.listSites();
     if (sites.length > 0) return sites[0].slug;
-  } catch (e) { /* repli ci-dessous */ }
+  } catch { /* repli ci-dessous */ }
   return 'boulangerie-artisanale';
 }
 
@@ -130,6 +144,16 @@ router.get('/internal/site-posts', requireBuildToken, async (req, res) => {
     res.json(media.rewriteMediaUrls(await readSitePosts(siteSlug, { publishedOnly: true }), media.mediaPrefixFor(build.getActiveBasePath())));
   } catch (e) {
     sendError(res, "Impossible de lire les articles du site.", e);
+  }
+});
+
+// Médiathèque du site : texte alternatif, dimensions et variantes de chaque image (les
+// fichiers eux-mêmes sont écrits dans le site au déploiement, même règle de variantes).
+router.get('/internal/site-media', requireBuildToken, async (req, res) => {
+  try {
+    res.json(await siteMediaManifest(await resolveInternalSite(req)));
+  } catch (e) {
+    sendError(res, "Impossible de lire la médiathèque du site.", e);
   }
 });
 

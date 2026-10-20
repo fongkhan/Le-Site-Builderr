@@ -1,0 +1,25 @@
+---
+// Statistique de visite anonyme : une page vue = un envoi, sans cookie ni donnée
+// personnelle. Adresse lue dans data-url (jamais de define:vars : la CSP du site
+// n'accepte que des scripts traités par Astro).
+interface Props {
+	url: string;
+}
+
+const { url } = Astro.props;
+---
+
+<span id="stats-beacon" data-url={url} hidden></span>
+<script>
+	// Chargé après le rendu, échoue en silence : ne casse jamais la page publiée.
+	try {
+		const url = document.getElementById('stats-beacon')?.dataset.url;
+		if (url) {
+			if (navigator.sendBeacon) {
+				navigator.sendBeacon(url);
+			} else {
+				fetch(url, { method: 'POST', keepalive: true }).catch(() => {});
+			}
+		}
+	} catch { /* ignoré volontairement */ }
+</script>

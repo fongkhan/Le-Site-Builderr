@@ -1,24 +1,68 @@
-// Sauvegardes automatiques du contenu (pages/thème/articles de tous les sites).
+// Sauvegardes automatiques du contenu (fiches, pages, thèmes, articles et images de tous
+// les sites) et restauration d'un site depuis une sauvegarde.
+// Modules chargés à l'usage (build, site-import, adm-zip) : index.js charge ce module
+// avant sitesStore.init.
 const fs = require('fs');
 const path = require('path');
 const sitesStore = require('../sites-store');
 const backup = require('../lib/backup');
-const { BACKUPS_DIR, BACKUP_KEEP, BACKUP_INTERVAL_HOURS, BACKUP_ENABLED, getSiteThemeFile } = require('../core/config');
-const { readSitePages, readSitePosts } = require('./content');
+const { isPublishableMediaName } = require('../lib/media-policy');
+const { getPayloadInstance } = require('../core/payload');
+const {
+  BACKUPS_DIR,
+  UPLOADS_DIR,
+  BACKUP_KEEP,
+  BACKUP_INTERVAL_HOURS,
+  BACKUP_ENABLED,
+  BACKUP_MEDIA,
+} = require('../core/config');
+const { readSitePages, readSitePosts, readSiteTheme, findPayloadSiteId } = require('./content');
+const { isShuttingDown, trackBackground } = require('../core/shutdown');
+
+// Sauvegardes de sécurité (avant un remplacement ou une suppression) : rétention propre,
+// BACKUP_KEEP par défaut ; elles n'évincent jamais les sauvegardes planifiées et manuelles.
+const BACKUP_KEEP_SAFETY = Number.parseInt(process.env.BACKUP_KEEP_SAFETY ?? '', 10) || BACKUP_KEEP;
 
 let backupInProgress = false;
 
-// Crée une archive zip de tout le contenu et applique la rétention. Renvoie le nom de
-// fichier, ou null si une sauvegarde est déjà en cours.
-async function createBackupArchive() {
+// Images téléversées d'un site (noms de fichiers publiables présents sur le disque, sans
+// doublon) et leur texte alternatif : [{ name, alt }]. Sans base ou site inconnu de
+// Payload : aucune.
+async function siteMediaFiles(slug) {
+  const payloadInstance = getPayloadInstance();
+  if (!payloadInstance) return [];
+  const siteId = await findPayloadSiteId(payloadInstance, slug);
+  if (!siteId) return [];
+  const res = await payloadInstance.find({
+    collection: 'media',
+    where: { site: { equals: siteId } },
+    pagination: false,
+    depth: 0,
+    overrideAccess: true,
+  });
+  const files = new Map();
+  for (const doc of res.docs || []) {
+    const name = typeof doc.filename === 'string' ? path.basename(doc.filename) : '';
+    if (!name || files.has(name) || !isPublishableMediaName(name) || !fs.existsSync(path.join(UPLOADS_DIR, name))) continue;
+    files.set(name, { name, alt: typeof doc.alt === 'string' ? doc.alt : '' });
+  }
+  return [...files.values()];
+}
+
+// Crée une archive zip de tout le contenu et applique la rétention. `safety` : sauvegarde
+// de sécurité (backup-<date>-securite.zip), comptée à part. Renvoie le nom de fichier, ou
+// null si une sauvegarde est déjà en cours.
+async function createBackupArchive({ safety = false } = {}) {
   if (backupInProgress) return null;
   backupInProgress = true;
   try {
     if (!fs.existsSync(BACKUPS_DIR)) fs.mkdirSync(BACKUPS_DIR, { recursive: true });
     const archiver = require('archiver');
-    const filename = backup.backupFilename(new Date());
+    // Jamais le nom d'une archive existante (deux sauvegardes dans la même seconde)
+    const filename = backup.nextFreeBackupName(new Date(), (n) => fs.existsSync(path.join(BACKUPS_DIR, n)), { safety });
     const dest = path.join(BACKUPS_DIR, filename);
-    const sites = await sitesStore.listSites();
+    // Tous les sites, sans la limite de la liste de l'interface
+    const sites = await sitesStore.listAllSites();
 
     // Écriture dans un fichier temporaire renommé à la fin : jamais d'archive tronquée
     // listée comme sauvegarde valide.
@@ -29,19 +73,32 @@ async function createBackupArchive() {
       output.on('close', resolve);
       output.on('error', reject);
       archive.on('error', reject);
+      // Fichier disparu entre la liste et la lecture (image supprimée…) : ignoré
+      archive.on('warning', (w) => console.error('💾 [Sauvegardes] Fichier ignoré :', w.message));
       archive.pipe(output);
-      archive.append(JSON.stringify({ createdAt: new Date().toISOString(), sites: sites.map((s) => s.slug) }, null, 2), { name: 'manifest.json' });
-      // Un dossier par site : pages, thème, articles.
+      const manifest = { format: 2, createdAt: new Date().toISOString(), sites: sites.map((s) => s.slug), media: BACKUP_MEDIA };
+      archive.append(JSON.stringify(manifest, null, 2), { name: 'manifest.json' });
+      // Un dossier par site : pages, articles, thème (Payload d'abord), fiche, images et
+      // leurs textes alternatifs (media.json : { nom: alt }).
       (async () => {
         for (const s of sites) {
           const base = `sites/${s.slug}`;
           try { archive.append(JSON.stringify(await readSitePages(s.slug), null, 2), { name: `${base}/pages.json` }); } catch { /* ignore */ }
           try { archive.append(JSON.stringify(await readSitePosts(s.slug), null, 2), { name: `${base}/posts.json` }); } catch { /* ignore */ }
-          try {
-            const themeFile = getSiteThemeFile(s.slug);
-            if (fs.existsSync(themeFile)) archive.file(themeFile, { name: `${base}/theme.json` });
-          } catch { /* slug hérité invalide : thème ignoré */ }
+          try { archive.append(JSON.stringify(await readSiteTheme(s.slug), null, 2), { name: `${base}/theme.json` }); } catch { /* slug hérité invalide : thème ignoré */ }
           archive.append(JSON.stringify(s, null, 2), { name: `${base}/site.json` });
+          if (BACKUP_MEDIA) {
+            try {
+              const alts = {};
+              for (const { name, alt } of await siteMediaFiles(s.slug)) {
+                archive.file(path.join(UPLOADS_DIR, name), { name: backup.backupMediaEntryName(s.slug, name) });
+                if (alt) alts[name] = alt;
+              }
+              if (Object.keys(alts).length > 0) archive.append(JSON.stringify(alts, null, 2), { name: `${base}/media.json` });
+            } catch (e) {
+              console.error(`💾 [Sauvegardes] Images de ${s.slug} non sauvegardées :`, e.message);
+            }
+          }
         }
         archive.finalize();
       })().catch(reject);
@@ -51,10 +108,11 @@ async function createBackupArchive() {
     });
     fs.renameSync(partial, dest);
 
-    // Rétention : ne garder que les BACKUP_KEEP plus récentes.
+    // Rétention par famille : les BACKUP_KEEP plus récentes (planifiées et manuelles) et
+    // les BACKUP_KEEP_SAFETY plus récentes (sécurité).
     let names = [];
     try { names = fs.readdirSync(BACKUPS_DIR); } catch { names = []; }
-    for (const old of backup.selectBackupsToDelete(names, BACKUP_KEEP)) {
+    for (const old of backup.selectBackupsToDelete(names, BACKUP_KEEP, BACKUP_KEEP_SAFETY)) {
       try { fs.rmSync(path.join(BACKUPS_DIR, old), { force: true }); } catch { /* ignore */ }
     }
     return filename;
@@ -76,7 +134,7 @@ function listBackups() {
 }
 
 function backupConfig() {
-  return { enabled: BACKUP_ENABLED, intervalHours: BACKUP_INTERVAL_HOURS, keep: BACKUP_KEEP };
+  return { enabled: BACKUP_ENABLED, intervalHours: BACKUP_INTERVAL_HOURS, keep: BACKUP_KEEP, keepSafety: BACKUP_KEEP_SAFETY, media: BACKUP_MEDIA };
 }
 
 // Chemin d'une sauvegarde à télécharger (nom strictement validé — anti-traversée),
@@ -85,25 +143,241 @@ function backupFilePath(name) {
   return backup.isValidBackupName(name) ? path.join(BACKUPS_DIR, name) : null;
 }
 
+// Marge de la vérification périodique : une archive est datée de la fin de son écriture.
+const BACKUP_DUE_TOLERANCE_MS = 10 * 60 * 1000;
+
 // Sauvegardes planifiées (désactivées par défaut : BACKUP_ENABLED=true).
-// Best-effort : un échec est loggé mais ne perturbe jamais le service. Au démarrage,
-// une sauvegarde est faite tout de suite si la dernière date de plus d'un intervalle :
-// un serveur redémarré plus souvent que l'intervalle sauvegarde quand même.
+// Best-effort : un échec est loggé mais ne perturbe jamais le service. Une vérification
+// périodique (au plus horaire) lance une sauvegarde quand la dernière date d'au moins un
+// intervalle, y compris au démarrage : un serveur redémarré plus souvent que
+// l'intervalle sauvegarde quand même, et une sauvegarde manuelle repousse la suivante (une
+// sauvegarde de sécurité, comptée à part, ne la repousse pas).
+// Arrêt propre : aucune sauvegarde lancée pendant l'arrêt, celle en cours est attendue
+// (trackBackground) au lieu de laisser une archive .part.
 function scheduleBackups() {
   if (!BACKUP_ENABLED) return;
-  const intervalMs = Math.max(1, BACKUP_INTERVAL_HOURS) * 60 * 60 * 1000;
-  console.log(`💾 [Sauvegardes] Planifiées toutes les ${BACKUP_INTERVAL_HOURS} h (rétention ${BACKUP_KEEP}).`);
-  const run = () => createBackupArchive()
-    .then((name) => name && console.log(`💾 [Sauvegardes] Créée : ${name}`))
-    .catch((e) => console.error('💾 [Sauvegardes] Échec :', e.message));
-
-  let latest = null;
-  try { latest = listBackups()[0] || null; } catch { latest = null; }
-  if (!latest || Date.now() - Date.parse(latest.createdAt) >= intervalMs) {
-    setTimeout(run, 30 * 1000).unref?.(); // laisse le boot se terminer
-  }
-  const timer = setInterval(run, intervalMs);
+  const intervalMs = backup.backupIntervalMs(BACKUP_INTERVAL_HOURS);
+  console.log(`💾 [Sauvegardes] Planifiées toutes les ${intervalMs / 3600000} h (rétention ${BACKUP_KEEP}, sécurité ${BACKUP_KEEP_SAFETY}).`);
+  const runIfDue = () => {
+    if (isShuttingDown()) return;
+    let latest;
+    try { latest = listBackups().find((b) => !backup.isSafetyBackupName(b.name)) || null; } catch { latest = null; }
+    if (!backup.isBackupDue(latest && latest.createdAt, Date.now(), intervalMs, BACKUP_DUE_TOLERANCE_MS)) return;
+    trackBackground(createBackupArchive()
+      .then((name) => name && console.log(`💾 [Sauvegardes] Créée : ${name}`))
+      .catch((e) => console.error('💾 [Sauvegardes] Échec :', e.message)));
+  };
+  setTimeout(runIfDue, 30 * 1000).unref?.(); // laisse le boot se terminer
+  // Jamais l'intervalle lui-même : au-delà de ~24,8 jours, Node le ramènerait à 1 ms
+  const timer = setInterval(runIfDue, backup.backupCheckDelayMs(intervalMs));
   if (timer.unref) timer.unref(); // ne bloque pas l'arrêt du process
 }
 
-module.exports = { createBackupArchive, listBackups, backupConfig, backupFilePath, scheduleBackups };
+// --- Restauration ---
+
+// Erreur de restauration au statut HTTP explicite (message destiné à l'interface).
+class RestoreError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.name = 'RestoreError';
+    this.status = status;
+  }
+}
+
+// adm-zip charge l'archive entière en mémoire : bornes de taille.
+const RESTORE_MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024;
+const RESTORE_MAX_JSON_BYTES = 20 * 1024 * 1024;
+
+// Sauvegarde de sécurité trop volumineuse pour être restaurée depuis l'interface : elle ne
+// protège rien. Vrai si c'est le cas ; l'archive est alors retirée et l'appelant refuse
+// l'opération qu'elle devait protéger (rien n'a encore été modifié).
+function discardIfUnrestorable(name) {
+  const file = backupFilePath(name);
+  if (!file) return false;
+  try {
+    if (fs.statSync(file).size <= RESTORE_MAX_ARCHIVE_BYTES) return false;
+  } catch {
+    return false;
+  }
+  try { fs.rmSync(file, { force: true }); } catch { /* ignore */ }
+  return true;
+}
+
+// Ouvre (et charge en mémoire) une sauvegarde par son nom strictement validé.
+function openBackupArchive(name) {
+  const file = backupFilePath(name);
+  if (!file) throw new RestoreError(400, 'Nom de sauvegarde invalide.');
+  let st;
+  try {
+    st = fs.statSync(file);
+  } catch {
+    throw new RestoreError(404, 'Sauvegarde introuvable.');
+  }
+  if (!st.isFile()) throw new RestoreError(404, 'Sauvegarde introuvable.');
+  if (st.size > RESTORE_MAX_ARCHIVE_BYTES) {
+    throw new RestoreError(413, "Sauvegarde trop volumineuse pour être restaurée depuis l'interface (plus de 1 Go).");
+  }
+  const AdmZip = require('adm-zip');
+  try {
+    return new AdmZip(fs.readFileSync(file));
+  } catch {
+    throw new RestoreError(400, 'Sauvegarde illisible : archive zip invalide.');
+  }
+}
+
+// Texte d'une entrée JSON de l'archive ; null si absente, dossier ou trop volumineuse.
+function readEntryText(zip, entryName) {
+  const entry = zip.getEntry(entryName);
+  if (!entry || entry.isDirectory) return null;
+  if (Number(entry.header && entry.header.size) > RESTORE_MAX_JSON_BYTES) return null;
+  try {
+    return zip.readAsText(entry);
+  } catch {
+    return null;
+  }
+}
+
+const entryNamesOf = (zip) => zip.getEntries().map((e) => e.entryName);
+
+// Contenu d'une sauvegarde : un résumé par site (pages, articles et images restaurables,
+// thème valide, site encore existant). slugFree : un site supprimé depuis serait recréé
+// sous son slug d'origine (aucun reste de l'ancien site, dossier publié compris) ; sinon
+// sous un slug suffixé (« <slug>-2 »).
+async function describeBackup(name) {
+  const zip = openBackupArchive(name);
+  const entryNames = entryNamesOf(zip);
+  const manifest = backup.parseBackupManifest(readEntryText(zip, 'manifest.json'));
+  const { parseSiteContent } = require('./site-import');
+  const { slugHasLeftovers } = require('./sites');
+  const existing = new Set((await sitesStore.listAllSites()).map((s) => s.slug));
+  const sites = backup.listBackupSites(entryNames).map((slug) => {
+    const read = (file) => readEntryText(zip, `sites/${slug}/${file}`);
+    const content = parseSiteContent(read);
+    const meta = backup.parseBackupSiteMeta(read('site.json'));
+    const exists = existing.has(slug);
+    return {
+      slug,
+      name: meta.name || slug,
+      pages: content.pages ? content.pages.docs.length : 0,
+      posts: content.posts ? content.posts.length : 0,
+      media: backup.backupMediaEntries(entryNames, slug).length,
+      theme: Boolean(content.theme),
+      exists,
+      slugFree: !exists && !slugHasLeftovers(slug),
+    };
+  });
+  return { name, createdAt: manifest.createdAt, format: manifest.format, sites };
+}
+
+let restoreInProgress = false;
+
+// Restaure un site depuis une sauvegarde (jamais pendant l'arrêt du serveur).
+// - copy : nouveau site en brouillon (« <slug>-restauration », ou le slug d'origine si le
+//   site a été supprimé depuis et que l'adresse est libre), informations légales
+//   comprises ; rien d'existant n'est modifié.
+// - replace : contenu du site existant remplacé, sous le créneau de build réservé pour ce
+//   site (une suppression attend la fin) et après une sauvegarde de sécurité de tous les
+//   sites (refusé si elle n'est pas restaurable, plus de 1 Go) ; refusé pendant la
+//   suppression du site.
+async function restoreSiteFromBackup({ name, slug, mode }) {
+  if (isShuttingDown()) throw new RestoreError(503, 'Le serveur redémarre : réessayez dans un instant.');
+  if (restoreInProgress) throw new RestoreError(409, 'Une restauration est déjà en cours : réessayez dans un instant.');
+  restoreInProgress = true;
+  try {
+    // Archive lue et chargée en mémoire AVANT toute sauvegarde de sécurité : la rétention
+    // peut supprimer l'archive restaurée si c'est la plus ancienne.
+    const zip = openBackupArchive(name);
+    const entryNames = entryNamesOf(zip);
+    if (!backup.listBackupSites(entryNames).includes(slug)) {
+      throw new RestoreError(404, "Ce site n'est pas dans cette sauvegarde.");
+    }
+    const { parseSiteContent, createSiteFromContent, replaceSiteContent } = require('./site-import');
+    const content = parseSiteContent((file) => readEntryText(zip, `sites/${slug}/${file}`));
+    const siteJson = readEntryText(zip, `sites/${slug}/site.json`);
+    const meta = backup.parseBackupSiteMeta(siteJson);
+    // Texte alternatif de chaque image (archive antérieure sans media.json : aucun)
+    const alts = backup.parseBackupMediaAlts(readEntryText(zip, `sites/${slug}/media.json`));
+    const mediaFiles = backup.backupMediaEntries(entryNames, slug).map(({ entryName, filename }) => {
+      const entry = zip.getEntry(entryName);
+      return { filename, alt: alts.get(filename) || '', size: Number(entry.header.size) || 0, read: () => entry.getData() };
+    });
+    const existing = await sitesStore.getSiteBySlug(slug);
+
+    if (mode === 'copy') {
+      // Site supprimé depuis : recréé sous son slug d'origine s'il est libre. Sauvegarde
+      // sans images (format 1) : celles citées sont reprises du site d'origine s'il existe.
+      const baseSlug = existing ? `${slug.slice(0, 180).replace(/-+$/, '')}-restauration` : slug;
+      const siteName = existing ? `${(meta.name || slug).slice(0, 185)} (restauration)` : (meta.name || slug);
+      const result = await createSiteFromContent({
+        baseSlug,
+        name: siteName,
+        stack: meta.stack,
+        legal: backup.parseBackupSiteLegal(siteJson),
+        content,
+        mediaFiles,
+        mediaSourceSlug: existing ? slug : null,
+      });
+      return {
+        mode,
+        site: result.site,
+        pages: content.pages ? content.pages.docs.length : 0,
+        posts: content.posts ? content.posts.length : 0,
+        theme: Boolean(content.theme),
+        media: result.media,
+        skipped: content.skipped,
+      };
+    }
+
+    if (!existing) throw new RestoreError(404, "Ce site n'existe plus : restaurez-le en copie.");
+    const build = require('./build');
+    // Contrôle et réservation synchrones (aucun await entre les deux, comme la suppression
+    // entre isSiteBusy et markDeleting) : une suppression en cours refuse la restauration,
+    // une restauration en cours (isSiteBusy) refuse la suppression. Aucun build ni brouillon
+    // pendant le remplacement (il lirait un contenu à moitié écrit).
+    if (build.isSiteDeleting(slug)) throw new RestoreError(409, 'Ce site est en cours de suppression.');
+    if (!build.tryReserve(slug)) {
+      if (isShuttingDown()) throw new RestoreError(503, 'Le serveur redémarre : réessayez dans un instant.');
+      throw new RestoreError(409, 'Un build est en cours : réessayez quand il sera terminé.');
+    }
+    let safetyBackup = null;
+    try {
+      // Site supprimé entre sa lecture et la réservation : rien n'est écrit
+      if (!(await sitesStore.getSiteBySlug(slug))) throw new RestoreError(404, "Ce site n'existe plus : restaurez-le en copie.");
+      const created = await createBackupArchive({ safety: true });
+      if (!created) throw new RestoreError(409, 'Une sauvegarde est déjà en cours : réessayez dans un instant.');
+      if (discardIfUnrestorable(created)) {
+        throw new RestoreError(409, "Sauvegarde de sécurité trop volumineuse pour être restaurée depuis l'interface (plus de 1 Go) : le contenu n'a pas été remplacé. Restaurez plutôt en copie.");
+      }
+      safetyBackup = created;
+      const r = await replaceSiteContent(slug, content, { mediaFiles });
+      return { mode, site: existing, safetyBackup, ...r, skipped: content.skipped };
+    } catch (e) {
+      if (safetyBackup && !(e instanceof RestoreError)) {
+        const err = new RestoreError(500, `Restauration interrompue : le contenu de « ${existing.name} » peut être partiellement restauré. Sauvegarde de sécurité : ${safetyBackup}.`);
+        err.cause = e;
+        err.safetyBackup = safetyBackup;
+        throw err;
+      }
+      throw e;
+    } finally {
+      build.release();
+    }
+  } finally {
+    restoreInProgress = false;
+  }
+}
+
+module.exports = {
+  createBackupArchive,
+  listBackups,
+  backupConfig,
+  backupFilePath,
+  scheduleBackups,
+  RestoreError,
+  RESTORE_MAX_ARCHIVE_BYTES,
+  discardIfUnrestorable,
+  // Validation de la demande (lib/backup), réexportée pour la route
+  parseRestoreRequest: backup.parseRestoreRequest,
+  describeBackup,
+  restoreSiteFromBackup,
+};

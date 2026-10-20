@@ -1,7 +1,8 @@
 // Boîte de réception des messages d'un site : collection Payload « submissions », repli
 // JSON (DATA_DIR/submissions_<slug>.json, jamais servi statiquement) en mode sans base.
-// La rétention (12 mois, 500 messages) est appliquée à chaque enregistrement et à chaque
-// lecture : un site qui ne reçoit plus de messages ne garde pas les anciens.
+// La rétention (12 mois, 500 messages) est appliquée à chaque enregistrement, à chaque
+// lecture et par la purge quotidienne (services/retention.js) : un message de plus de
+// 12 mois est supprimé même si personne n'ouvre plus le site.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -160,6 +161,32 @@ async function removeSubmission(slug, id) {
   return true;
 }
 
+// Purge quotidienne des fichiers de repli de tous les sites (sans les ouvrir un à un
+// depuis l'interface). Lecture et écriture synchrones par fichier ; un fichier illisible
+// est signalé, jamais écrasé. Renvoie le nombre de messages supprimés.
+const SUBMISSIONS_FILE_RE = /^submissions_(.+)\.json$/;
+function purgeExpiredSubmissionFiles({ dir = DATA_DIR, now = Date.now() } = {}) {
+  if (!fs.existsSync(dir)) return 0;
+  let deleted = 0;
+  for (const name of fs.readdirSync(dir)) {
+    const slug = (SUBMISSIONS_FILE_RE.exec(name) || [])[1];
+    if (!slug || !isValidSlug(slug)) continue;
+    const file = path.join(dir, name);
+    try {
+      const data = readJsonStrict(file, []);
+      const list = Array.isArray(data) ? data : [];
+      const kept = pruneSubmissions(list, now);
+      if (kept.length < list.length) {
+        writeJsonAtomic(file, kept, { pretty: false });
+        deleted += list.length - kept.length;
+      }
+    } catch (e) {
+      console.error(`🧹 [Rétention] Messages de ${name} non purgés :`, (e && e.message) || e);
+    }
+  }
+  return deleted;
+}
+
 // Suppression du fichier de repli (site supprimé).
 function purgeSubmissionsFile(slug) {
   if (!isValidSlug(slug)) return;
@@ -175,4 +202,5 @@ module.exports = {
   markSubmissionRead,
   removeSubmission,
   purgeSubmissionsFile,
+  purgeExpiredSubmissionFiles,
 };

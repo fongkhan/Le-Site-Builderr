@@ -5,7 +5,8 @@ const cors = require('cors');
 const auth = require('../auth');
 const sitesStore = require('../sites-store');
 const stats = require('../lib/stats');
-const { sendError, createRouter, isHtmlFormPost, sendFormPage } = require('../core/http');
+const { sendError, createRouter, isHtmlFormPost, sendContactFormPage } = require('../core/http');
+const { invalidContactFields, contactErrorBody } = require('../lib/contact');
 const { logAudit } = require('../core/audit');
 const { sendMail } = require('../core/mail');
 const { getSiteStatsFile } = require('../core/config');
@@ -31,39 +32,33 @@ function composeAppointmentMessage(body) {
   return lines.join('\n');
 }
 
-// Email aux propriétaires du site. Sans propriétaire rattaché, le message est écrit
-// dans les logs du serveur ; un échec d'envoi est remonté à l'appelant.
+// Email aux propriétaires du site. Renvoie false sans propriétaire rattaché (rien
+// d'envoyé) ; un échec d'envoi est remonté à l'appelant. Le contenu du message n'est
+// jamais écrit dans les logs du serveur, qui échappent à la rétention de 12 mois annoncée
+// par la politique de confidentialité des sites : seule la boîte de réception le garde.
 async function notifySiteOwners(site, { name, email, message, isAppointment }) {
   const recipients = await getSiteOwners(site.slug);
+  if (recipients.length === 0) return false;
   const subject = `${isAppointment ? '📅 Demande de rendez-vous' : '📬 Nouveau message'} via ${site.name}`;
   const text =
     `Nouveau message reçu depuis le site « ${site.name} » (${site.domain}) :\n\n` +
     `Nom : ${name.trim()}\nEmail : ${email.trim()}\n\n${message.trim()}\n\n` +
     `— Envoyé par le formulaire de contact Meta-Builder`;
-
-  if (recipients.length > 0) {
-    try {
-      // Répondre au mail répond directement au visiteur
-      await sendMail(recipients, subject, text, { replyTo: email.trim() });
-    } catch (mailErr) {
-      // Le message n'est jamais perdu : il reste dans les logs du serveur
-      console.log(`📬 [Contact] Message pour « ${site.slug} » non distribué par email :\n${text}`);
-      throw mailErr;
-    }
-  } else {
-    // Aucun compte rattaché : ne pas perdre le message pour autant
-    console.log(`📬 [Contact] Message pour « ${site.slug} » (aucun propriétaire rattaché) :\n${text}`);
-  }
+  // Répondre au mail répond directement au visiteur
+  await sendMail(recipients, subject, text, { replyTo: email.trim() });
+  return true;
 }
 
+// Erreurs : code stable (lib/contact.js) dans le JSON, traduit par le script du site ;
+// page HTML dans la langue du formulaire (?lang=) pour un envoi sans JavaScript.
 router.post('/api/contact/:slug', cors(), async (req, res) => {
   const isHtmlForm = isHtmlFormPost(req);
-  const fail = (status, error) => (isHtmlForm
-    ? sendFormPage(req, res, status, "Message non envoyé", error)
-    : res.status(status).json({ error }));
+  const fail = (status, code, fields) => (isHtmlForm
+    ? sendContactFormPage(req, res, status, code)
+    : res.status(status).json(contactErrorBody(code, fields)));
   try {
     const site = await sitesStore.getSiteBySlug(req.params.slug);
-    if (!site) return fail(404, "Site inconnu.");
+    if (!site) return fail(404, 'unknown_site');
 
     const body = req.body || {};
     const { name, email, company } = body;
@@ -71,17 +66,15 @@ router.post('/api/contact/:slug', cors(), async (req, res) => {
     const isAppointment = body.kind === 'appointment' || (isHtmlForm && ['service', 'slot', 'phone'].some((k) => typeof body[k] === 'string'));
     const message = isAppointment ? composeAppointmentMessage(body) : body.message;
     const done = () => (isHtmlForm
-      ? sendFormPage(req, res, 200, 'Merci !', isAppointment ? 'Votre demande de rendez-vous a bien été envoyée.' : 'Votre message a bien été envoyé.')
+      ? sendContactFormPage(req, res, 200, isAppointment ? 'sent_appointment' : 'sent')
       : res.json({ success: true }));
 
     // Honeypot : un humain ne remplit jamais ce champ caché. On répond un succès sans
     // rien envoyer pour ne pas donner d'indice aux robots.
     if (typeof company === 'string' && company.trim() !== '') return done();
 
-    const isNonEmpty = (v, max) => typeof v === 'string' && v.trim().length > 0 && v.length <= max;
-    if (!isNonEmpty(name, 120) || !isNonEmpty(message, 5000) || !isNonEmpty(email, 200) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return fail(400, "Nom, email valide et message sont requis.");
-    }
+    const invalid = invalidContactFields({ name, email, message });
+    if (invalid.length > 0) return fail(400, 'invalid_fields', invalid);
 
     // Boîte de réception : enregistré avant l'email. Si l'un des deux aboutit, le
     // visiteur reçoit un succès ; seul l'échec des deux lui est signalé.
@@ -99,21 +92,26 @@ router.post('/api/contact/:slug', cors(), async (req, res) => {
       console.error(`❌ [Contact] Message pour « ${site.slug} » non enregistré —`, (storeErr && storeErr.message) || storeErr);
     }
 
+    let noOwner = false;
     try {
-      await notifySiteOwners(site, { name, email, message, isAppointment });
+      noOwner = !(await notifySiteOwners(site, { name, email, message, isAppointment }));
     } catch (mailErr) {
       if (!stored) throw mailErr;
       console.error(`❌ [Contact] Email pour « ${site.slug} » non envoyé (message conservé dans la boîte de réception) —`, (mailErr && mailErr.message) || mailErr);
+    }
+    if (noOwner) {
+      // Aucun propriétaire rattaché : message conservé dans la seule boîte de réception
+      // (journal : site et heure uniquement, jamais le contenu)
+      if (!stored) throw new Error(`message pour « ${site.slug} » ni enregistré ni envoyé (aucun propriétaire rattaché)`);
+      console.log(`📬 [Contact] Message pour « ${site.slug} » reçu le ${new Date().toISOString()} (aucun propriétaire rattaché) : conservé dans la boîte de réception.`);
     }
     // Sans l'email du visiteur : le journal d'audit ne stocke pas de données personnelles
     logAudit(req, 'contact.recu', site.slug, isAppointment ? 'demande de rendez-vous' : 'formulaire de contact');
     done();
   } catch (e) {
-    if (isHtmlForm) {
-      console.error('❌ [Contact] envoi impossible —', (e && e.message) || e);
-      return sendFormPage(req, res, 500, 'Message non envoyé', "Impossible d'envoyer le message pour le moment. Réessayez plus tard.");
-    }
-    sendError(res, "Impossible d'envoyer le message pour le moment.", e);
+    // Détail dans les logs du serveur, jamais dans la réponse
+    console.error('❌ [Contact] envoi impossible —', (e && (e.stack || e.message)) || e);
+    if (!res.headersSent) fail(500, 'send_failed');
   }
 });
 

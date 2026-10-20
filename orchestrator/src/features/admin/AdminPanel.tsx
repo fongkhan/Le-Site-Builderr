@@ -11,6 +11,7 @@ import { CreateClientModal } from './CreateClientModal';
 import { StatsBanner } from './panels/StatsBanner';
 import { OverviewPanel } from './panels/OverviewPanel';
 import { HostingPanel } from './panels/HostingPanel';
+import { SystemPanel } from './panels/SystemPanel';
 import { BackupsPanel } from './panels/BackupsPanel';
 import { ScanPanel } from './panels/ScanPanel';
 import { CreateSitePanel } from './panels/CreateSitePanel';
@@ -90,7 +91,9 @@ export function AdminPanel() {
 
       <HostingPanel />
 
-      <BackupsPanel />
+      <SystemPanel version={version} />
+
+      <BackupsPanel onRestored={sitesChanged} />
 
       <div className="grid-2col">
         <ScanPanel scannedSites={scannedSites} onScanned={setScannedSites} onImportClick={setImportCandidate} />

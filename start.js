@@ -1,5 +1,6 @@
 // Lanceur de la stack Meta-Builder : vérifie les prérequis (préflight) AVANT de
-// démarrer, avec des messages d'erreur explicites et la commande corrective.
+// démarrer, avec des messages d'erreur explicites et la commande corrective, puis lance le
+// serveur et l'orchestrateur et, à l'arrêt, attend qu'ils se soient arrêtés proprement.
 // N'utilise que des modules Node natifs : il doit fonctionner même sans node_modules.
 
 const { spawn } = require('child_process');
@@ -11,39 +12,48 @@ const SERVER_DIR = path.join(__dirname, 'server');
 const ORCHESTRATOR_DIR = path.join(__dirname, 'orchestrator');
 const ENV_FILE = path.join(SERVER_DIR, '.env');
 
+// Commande du serveur (depuis server/) : tsx chargé DANS le process du serveur, sans la
+// CLI tsx. Celle-ci relaie les signaux et tue le serveur (SIGKILL) s'il n'en confirme pas
+// la réception sous 30 ms (boucle d'événements occupée par une copie synchrone de
+// déploiement…) : arrêt propre sauté, publication perdue, build orphelin.
+const SERVER_NODE_ARGS = ['--import', 'tsx', 'index.js'];
+
 const errors = [];
 const warnings = [];
-
-// --- Préflight 1 : version de Node (Vite 7 et Astro exigent ≥ 22.12) ---
-const [major, minor] = process.versions.node.split('.').map(Number);
-if (major < 22 || (major === 22 && minor < 12)) {
-  errors.push(
-    `Node.js ${process.versions.node} est trop ancien (requis : ≥ 22.12).\n` +
-    `   → Installez Node 22 LTS : https://nodejs.org (ou « nvm install 22 »).\n` +
-    `   Symptôme typique sinon : « crypto.hash is not a function » au démarrage de Vite.`
-  );
-}
-
-// --- Préflight 2 : server/.env présent ---
 let envContent = '';
-if (!fs.existsSync(ENV_FILE)) {
-  errors.push(
-    `Le fichier server/.env est absent : le serveur démarrerait sans base de données\n` +
-    `   et toutes les routes protégées (dont le login) répondraient 503.\n` +
-    `   → Copiez le modèle puis renseignez-le :\n` +
-    `     cp server/.env.example server/.env   (Windows : copy server\\.env.example server\\.env)`
-  );
-} else {
-  envContent = fs.readFileSync(ENV_FILE, 'utf-8');
-}
 
-// --- Préflight 3 : dépendances installées (la racine n'a aucune dépendance : non vérifiée) ---
-for (const [label, dir] of [['server', SERVER_DIR], ['orchestrator', ORCHESTRATOR_DIR]]) {
-  if (!fs.existsSync(path.join(dir, 'node_modules'))) {
+// Préflights 1 à 3 (exécutés par main() : le module reste importable sans effet de bord).
+function preflight() {
+  // --- Préflight 1 : version de Node (Vite 7 et Astro exigent ≥ 22.12) ---
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  if (major < 22 || (major === 22 && minor < 12)) {
     errors.push(
-      `Dépendances non installées dans « ${label} » (${path.relative(process.cwd(), dir) || '.'}).\n` +
-      `   → cd ${path.relative(process.cwd(), dir) || '.'} && npm install`
+      `Node.js ${process.versions.node} est trop ancien (requis : ≥ 22.12).\n` +
+      `   → Installez Node 22 LTS : https://nodejs.org (ou « nvm install 22 »).\n` +
+      `   Symptôme typique sinon : « crypto.hash is not a function » au démarrage de Vite.`
     );
+  }
+
+  // --- Préflight 2 : server/.env présent ---
+  if (!fs.existsSync(ENV_FILE)) {
+    errors.push(
+      `Le fichier server/.env est absent : le serveur démarrerait sans base de données\n` +
+      `   et toutes les routes protégées (dont le login) répondraient 503.\n` +
+      `   → Copiez le modèle puis renseignez-le :\n` +
+      `     cp server/.env.example server/.env   (Windows : copy server\\.env.example server\\.env)`
+    );
+  } else {
+    envContent = fs.readFileSync(ENV_FILE, 'utf-8');
+  }
+
+  // --- Préflight 3 : dépendances installées (la racine n'a aucune dépendance : non vérifiée) ---
+  for (const [label, dir] of [['server', SERVER_DIR], ['orchestrator', ORCHESTRATOR_DIR]]) {
+    if (!fs.existsSync(path.join(dir, 'node_modules'))) {
+      errors.push(
+        `Dépendances non installées dans « ${label} » (${path.relative(process.cwd(), dir) || '.'}).\n` +
+        `   → cd ${path.relative(process.cwd(), dir) || '.'} && npm install`
+      );
+    }
   }
 }
 
@@ -69,7 +79,69 @@ function checkTcp({ host, port }, timeoutMs = 3000) {
   });
 }
 
+// Délai d'arrêt propre du serveur (SHUTDOWN_GRACE_MS) : variable d'environnement, sinon
+// premier entier après « SHUTDOWN_GRACE_MS= » en début de ligne du .env, sinon 15 s.
+function readShutdownGraceMs(env, processEnv = process.env) {
+  const fromProcess = Number.parseInt(processEnv.SHUTDOWN_GRACE_MS ?? '', 10);
+  if (fromProcess > 0) return fromProcess;
+  const m = String(env || '').match(/^\s*SHUTDOWN_GRACE_MS\s*=\s*["']?(\d+)/m);
+  const fromFile = m ? Number(m[1]) : 0;
+  return fromFile > 0 ? fromFile : 15000;
+}
+
+// Arrêt de la stack : SIGTERM à chaque enfant encore vivant, puis attente de leur sortie
+// (le serveur termine ses requêtes et remet en file un build interrompu). Au-delà de
+// timeoutMs, les survivants sont tués (SIGKILL) et le lanceur sort en erreur. Un nouvel
+// appel (second Ctrl+C) relaie SIGTERM aux enfants encore vivants, sans sortir.
+// Sous Windows, kill() reste immédiat (pas de signal POSIX).
+function createStopper({ children, timeoutMs, log = console, exit = (code) => process.exit(code) }) {
+  let stopping = false;
+  let finished = false;
+  let timer = null;
+  const alive = () => children.filter(({ proc }) => proc.exitCode === null && proc.signalCode === null);
+  const terminate = () => {
+    for (const { proc } of alive()) {
+      try { proc.kill('SIGTERM'); } catch { /* déjà sorti */ }
+    }
+  };
+  const finish = (code) => {
+    if (finished) return;
+    finished = true;
+    if (timer) clearTimeout(timer);
+    timer = null;
+    exit(code);
+  };
+  const onChildExit = () => {
+    if (stopping && alive().length === 0) finish(0);
+  };
+
+  function stop() {
+    if (stopping) {
+      terminate();
+      return;
+    }
+    stopping = true;
+    log.log('\n=== FERMETURE DE LA STACK (arrêt propre en cours) ===');
+    for (const { proc } of children) proc.once('exit', onChildExit);
+    terminate();
+    if (alive().length === 0) return finish(0);
+    timer = setTimeout(() => {
+      for (const { name, proc } of alive()) {
+        log.error(`⛔ ${name} ne s'est pas arrêté à temps : arrêt forcé.`);
+        try { proc.kill('SIGKILL'); } catch { /* déjà sorti */ }
+      }
+      finish(1);
+    }, timeoutMs);
+  }
+
+  return {
+    stop,
+    get stopping() { return stopping; },
+  };
+}
+
 async function main() {
+  preflight();
   const db = envContent ? parseDbHostPort(envContent) : null;
   if (envContent && !db) {
     warnings.push(
@@ -97,21 +169,37 @@ async function main() {
   console.log('✔ Préflight OK (Node, .env, dépendances, PostgreSQL joignable)');
   console.log('⏳ Premier démarrage : l\'initialisation Payload (push du schéma + seed) peut prendre ~1 minute.\n');
 
-  // 1. Serveur Express + Payload (port 4000)
-  const serverProcess = spawn('npx', ['tsx', 'index.js'], {
+  // Enfants lancés SANS shell (node directement) : un signal atteint le vrai process, qui
+  // ne survit jamais au lanceur (sinon : process orphelin et EADDRINUSE au redémarrage).
+  let viteBin;
+  try {
+    require.resolve('tsx', { paths: [SERVER_DIR] });
+    viteBin = path.join(path.dirname(require.resolve('vite/package.json', { paths: [ORCHESTRATOR_DIR] })), 'bin', 'vite.js');
+  } catch {
+    console.error('\n❌ Dépendances incomplètes (tsx ou vite introuvable).\n   → cd server && npm install, puis cd orchestrator && npm install');
+    process.exit(1);
+  }
+
+  // 1. Serveur Express + Payload (port 4000), tsx chargé dans son process
+  const serverProcess = spawn(process.execPath, SERVER_NODE_ARGS, {
     cwd: SERVER_DIR,
-    shell: true,
     stdio: 'inherit',
   });
 
-  // 2. Orchestrateur React/Vite (port 5173)
-  const clientProcess = spawn('npm', ['run', 'dev'], {
+  // 2. Orchestrateur React/Vite (port 5173), via le binaire de vite
+  const clientProcess = spawn(process.execPath, [viteBin], {
     cwd: ORCHESTRATOR_DIR,
-    shell: true,
     stdio: 'inherit',
+  });
+
+  const stopper = createStopper({
+    children: [{ name: 'Le serveur', proc: serverProcess }, { name: "L'orchestrateur", proc: clientProcess }],
+    // Marge au-delà du délai d'arrêt propre du serveur
+    timeoutMs: readShutdownGraceMs(envContent) + 5000,
   });
 
   serverProcess.on('exit', (code) => {
+    if (stopper.stopping) return;
     if (code !== 0 && code !== null) {
       console.error(`\n❌ Le serveur (port 4000) s'est arrêté avec le code ${code}.`);
       console.error(`   Si l'erreur mentionne « vendor-chunks » ou MODULE_NOT_FOUND dans .next :`);
@@ -122,6 +210,7 @@ async function main() {
   });
 
   clientProcess.on('exit', (code) => {
+    if (stopper.stopping) return;
     if (code !== 0 && code !== null) {
       console.error(`\n❌ L'orchestrateur (port 5173) s'est arrêté avec le code ${code}.`);
       serverProcess.kill();
@@ -132,17 +221,14 @@ async function main() {
   console.log('→ Serveur API : http://localhost:4000');
   console.log('→ Interface  : http://localhost:5173  (comptes de démo dans le README)');
 
-  // Ctrl+C (SIGINT) ou arrêt demandé (SIGTERM : kill, docker stop…) : le serveur reçoit
-  // SIGTERM et interrompt lui-même le build en cours (lancé dans son propre groupe de
-  // processus, que le signal du terminal n'atteint pas).
-  const stop = () => {
-    console.log('\n=== FERMETURE DE LA STACK ===');
-    serverProcess.kill('SIGTERM');
-    clientProcess.kill('SIGTERM');
-    process.exit();
-  };
-  process.on('SIGINT', stop);
-  process.on('SIGTERM', stop);
+  // Ctrl+C (SIGINT) ou arrêt demandé (SIGTERM : kill, docker stop…) : chaque enfant reçoit
+  // SIGTERM et le lanceur attend leur sortie. Le serveur termine ses requêtes et interrompt
+  // lui-même le build en cours (lancé dans son propre groupe de processus, que le signal du
+  // terminal n'atteint pas) ; il ignore le SIGTERM relayé juste après un Ctrl+C.
+  process.on('SIGINT', (s) => stopper.stop(s));
+  process.on('SIGTERM', (s) => stopper.stop(s));
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { createStopper, readShutdownGraceMs, SERVER_NODE_ARGS };

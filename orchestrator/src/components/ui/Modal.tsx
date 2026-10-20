@@ -11,6 +11,11 @@ interface ModalProps {
   bodyPadding?: boolean;
   /** false : Escape, clic à l'extérieur et bouton Fermer sont sans effet (opération en cours) */
   dismissible?: boolean;
+  /**
+   * Formulaire : corps et pied dans un <form> (Entrée dans un champ valide la modale).
+   * Le bouton principal du pied doit être type="submit", tous les autres type="button".
+   */
+  onSubmit?: () => void;
 }
 
 const FOCUSABLE = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -21,7 +26,7 @@ const modalStack: symbol[] = [];
 
 // Modale rendue dans <body> (portail) : jamais confinée par un ancêtre transformé ou
 // flouté, quelle que soit la page qui l'ouvre.
-export function Modal({ title, subtitle, onClose, children, maxWidth = 600, footer, bodyPadding = true, dismissible = true }: ModalProps) {
+export function Modal({ title, subtitle, onClose, children, maxWidth = 600, footer, bodyPadding = true, dismissible = true, onSubmit }: ModalProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   // onClose/dismissible via ref : l'effet du piège de focus ne se réarme pas à chaque
@@ -87,6 +92,13 @@ export function Modal({ title, subtitle, onClose, children, maxWidth = 600, foot
     if (dismissible) onClose();
   };
 
+  const body = (
+    <div className="modal-body" style={bodyPadding ? undefined : { padding: 0 }}>
+      {children}
+    </div>
+  );
+  const footerBar = footer && <div className="modal-footer">{footer}</div>;
+
   return createPortal(
     <div className="modal-overlay animate-slide" onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
       <div
@@ -103,14 +115,31 @@ export function Modal({ title, subtitle, onClose, children, maxWidth = 600, foot
             <h3 id={titleId} style={{ fontSize: '1.2rem', color: 'white' }}>{title}</h3>
             {subtitle && <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{subtitle}</span>}
           </div>
-          <button className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '0.85rem' }} onClick={close} disabled={!dismissible} aria-label="Fermer">
+          <button type="button" className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '0.85rem' }} onClick={close} disabled={!dismissible} aria-label="Fermer">
             Fermer
           </button>
         </div>
-        <div className="modal-body" style={bodyPadding ? undefined : { padding: 0 }}>
-          {children}
-        </div>
-        {footer && <div className="modal-footer">{footer}</div>}
+        {onSubmit ? (
+          <form
+            className="modal-form"
+            noValidate
+            onSubmit={(e) => {
+              e.preventDefault();
+              // Le submit synthétique de React traverse les portails : une modale ouverte
+              // depuis celle-ci ne doit jamais soumettre sa parente.
+              e.stopPropagation();
+              onSubmit();
+            }}
+          >
+            {body}
+            {footerBar}
+          </form>
+        ) : (
+          <>
+            {body}
+            {footerBar}
+          </>
+        )}
       </div>
     </div>,
     document.body,

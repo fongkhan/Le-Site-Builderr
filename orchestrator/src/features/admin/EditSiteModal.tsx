@@ -1,18 +1,33 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { updateSite } from '../../api/sites';
 import { attachCustomDomain, verifyCustomDomain, detachCustomDomain } from '../../api/domains';
 import type { CustomDomainRecord } from '../../api/domains';
 import { errorMessage } from '../../api/client';
 import { Modal } from '../../components/ui/Modal';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
+import { FieldError } from '../../components/ui/FieldError';
 import { useToast } from '../../components/ui/ToastContext';
 import { DOMAIN_STATUS_DISPLAY } from './constants';
 import { StackSelect } from './StackSelect';
+import { focusField, invalidProps, validateSiteName } from '../../lib/formValidation';
 import type { Site } from '../../types';
 
 export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose: () => void; onSaved: () => void }) {
   const toast = useToast();
+  const uid = useId();
+  const ids = {
+    name: `${uid}-nom`,
+    nameError: `${uid}-nom-erreur`,
+    documentRoot: `${uid}-racine`,
+    repository: `${uid}-depot`,
+    stack: `${uid}-stack`,
+    provider: `${uid}-fournisseur`,
+    analyticsId: `${uid}-mesure`,
+    analyticsHost: `${uid}-matomo`,
+    customDomain: `${uid}-domaine-client`,
+  };
   const [name, setName] = useState(site.name);
+  const [nameError, setNameError] = useState<string | undefined>();
   const [domain, setDomain] = useState(site.domain);
   // Domaine servi tel que connu du serveur (change après activation/détachement d'un
   // domaine personnalisé) : référence pour savoir si l'utilisateur l'a modifié.
@@ -38,8 +53,11 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
   const [confirmDetach, setConfirmDetach] = useState(false);
 
   const handleSave = async () => {
-    if (!name.trim()) {
-      toast.error('Le nom du site est requis.');
+    if (saving) return;
+    const error = validateSiteName(name);
+    setNameError(error);
+    if (error) {
+      focusField(ids.name);
       return;
     }
     // Seuls les champs réellement modifiés sont envoyés : jamais d'écrasement d'une
@@ -149,18 +167,28 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
     <Modal
       title="✏️ Modifier la configuration du site"
       onClose={onClose}
+      onSubmit={handleSave}
       footer={
         <>
-          <button className="btn btn-secondary" onClick={onClose}>Fermer</button>
-          <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
+          <button type="button" className="btn btn-secondary" onClick={onClose}>Fermer</button>
+          <button type="submit" className="btn btn-primary" disabled={saving}>
             {saving ? 'Enregistrement…' : 'Enregistrer'}
           </button>
         </>
       }
     >
       <div>
-        <label className="field-label">Nom du site *</label>
-        <input type="text" className="input-text" value={name} onChange={(e) => setName(e.target.value)} />
+        <label className="field-label" htmlFor={ids.name}>Nom du site *</label>
+        <input
+          id={ids.name}
+          type="text"
+          className="input-text"
+          required
+          value={name}
+          onChange={(e) => { setName(e.target.value); setNameError(undefined); }}
+          {...invalidProps(ids.nameError, nameError)}
+        />
+        <FieldError id={ids.nameError} message={nameError} />
       </div>
       <div>
         <label className="field-label" htmlFor="edit-site-domain">
@@ -177,28 +205,28 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
         />
       </div>
       <div>
-        <label className="field-label">Document Root (dossier web public)</label>
-        <input type="text" className="input-text" value={documentRoot} onChange={(e) => setDocumentRoot(e.target.value)} />
+        <label className="field-label" htmlFor={ids.documentRoot}>Document Root (dossier web public)</label>
+        <input id={ids.documentRoot} type="text" className="input-text" value={documentRoot} onChange={(e) => setDocumentRoot(e.target.value)} />
       </div>
       <div>
-        <label className="field-label">Repository (code source — optionnel)</label>
-        <input type="text" className="input-text" value={repositoryPath} onChange={(e) => setRepositoryPath(e.target.value)} />
+        <label className="field-label" htmlFor={ids.repository}>Repository (code source — optionnel)</label>
+        <input id={ids.repository} type="text" className="input-text" value={repositoryPath} onChange={(e) => setRepositoryPath(e.target.value)} />
       </div>
       <div>
-        <label className="field-label">Stack technique</label>
-        <StackSelect value={stack} onChange={setStack} />
+        <label className="field-label" htmlFor={ids.stack}>Stack technique</label>
+        <StackSelect id={ids.stack} value={stack} onChange={setStack} />
       </div>
 
       {/* --- Mesure d'audience (RGPD) --- */}
       <div style={{ borderTop: '1px solid var(--border-color)', marginTop: 16, paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <label className="field-label" style={{ margin: 0 }}>📊 Mesure d'audience (analytics)</label>
+        <h4 className="field-label" style={{ margin: 0 }}>📊 Mesure d'audience (analytics)</h4>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', margin: 0 }}>
           Le script n'est chargé sur le site publié qu'après consentement du visiteur (bannière RGPD automatique).
         </p>
         <div style={{ display: 'grid', gridTemplateColumns: analyticsProvider === 'matomo' ? '1fr 1fr 1fr' : '1fr 1fr', gap: 8 }}>
           <div>
-            <label className="field-label">Fournisseur</label>
-            <select className="select-dark" value={analyticsProvider} onChange={(e) => setAnalyticsProvider(e.target.value)} style={{ padding: 8, fontSize: '0.85rem' }}>
+            <label className="field-label" htmlFor={ids.provider}>Fournisseur</label>
+            <select id={ids.provider} className="select-dark" value={analyticsProvider} onChange={(e) => setAnalyticsProvider(e.target.value)} style={{ padding: 8, fontSize: '0.85rem' }}>
               <option value="">Aucun</option>
               <option value="ga4">Google Analytics 4</option>
               <option value="matomo">Matomo</option>
@@ -206,14 +234,14 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
           </div>
           {analyticsProvider && (
             <div>
-              <label className="field-label">{analyticsProvider === 'ga4' ? 'ID de mesure (G-…)' : 'idSite (numérique)'}</label>
-              <input type="text" className="input-text" placeholder={analyticsProvider === 'ga4' ? 'G-XXXXXXXXXX' : '1'} value={analyticsId} onChange={(e) => setAnalyticsId(e.target.value)} />
+              <label className="field-label" htmlFor={ids.analyticsId}>{analyticsProvider === 'ga4' ? 'ID de mesure (G-…)' : 'idSite (numérique)'}</label>
+              <input id={ids.analyticsId} type="text" className="input-text" placeholder={analyticsProvider === 'ga4' ? 'G-XXXXXXXXXX' : '1'} value={analyticsId} onChange={(e) => setAnalyticsId(e.target.value)} />
             </div>
           )}
           {analyticsProvider === 'matomo' && (
             <div>
-              <label className="field-label">Hôte Matomo</label>
-              <input type="text" className="input-text" placeholder="stats.mondomaine.fr" value={analyticsHost} onChange={(e) => setAnalyticsHost(e.target.value)} />
+              <label className="field-label" htmlFor={ids.analyticsHost}>Hôte Matomo</label>
+              <input id={ids.analyticsHost} type="text" className="input-text" placeholder="stats.mondomaine.fr" value={analyticsHost} onChange={(e) => setAnalyticsHost(e.target.value)} />
             </div>
           )}
         </div>
@@ -222,7 +250,7 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
       {/* --- Domaine personnalisé --- */}
       <div style={{ borderTop: '1px solid var(--border-color)', marginTop: 16, paddingTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-          <label className="field-label" style={{ margin: 0 }}>🌐 Domaine personnalisé du client</label>
+          <h4 className="field-label" style={{ margin: 0 }}>🌐 Domaine personnalisé du client</h4>
           <span className="badge" style={{ color: st.color, borderColor: st.color, fontSize: '0.72rem' }}>{st.label}</span>
         </div>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.82rem', margin: 0 }}>
@@ -235,7 +263,7 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
             <span style={{ fontSize: '0.9rem' }}>
               Domaine actif : <strong style={{ color: 'var(--accent-emerald)' }}>{customDomain || customInput}</strong>
             </span>
-            <button className="btn btn-secondary" style={{ borderColor: 'var(--accent-rose)', color: 'var(--accent-rose)' }} onClick={() => setConfirmDetach(true)} disabled={domainBusy}>
+            <button type="button" className="btn btn-secondary" style={{ borderColor: 'var(--accent-rose)', color: 'var(--accent-rose)' }} onClick={() => setConfirmDetach(true)} disabled={domainBusy}>
               Détacher
             </button>
           </div>
@@ -243,16 +271,24 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
           <>
             <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
               <div style={{ flex: 1, minWidth: 200 }}>
-                <label className="field-label">Nom de domaine</label>
+                <label className="field-label" htmlFor={ids.customDomain}>Nom de domaine</label>
                 <input
+                  id={ids.customDomain}
                   type="text"
                   className="input-text"
                   placeholder="mon-commerce.fr"
                   value={customInput}
                   onChange={(e) => setCustomInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Entrée : génère les instructions DNS (sans enregistrer la configuration)
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      if (!domainBusy) handleAttach();
+                    }
+                  }}
                 />
               </div>
-              <button className="btn btn-secondary" onClick={handleAttach} disabled={domainBusy}>
+              <button type="button" className="btn btn-secondary" onClick={handleAttach} disabled={domainBusy}>
                 {domainBusy ? '…' : 'Générer les instructions'}
               </button>
             </div>
@@ -268,16 +304,16 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
                   <span />
                   <span style={{ color: 'var(--text-muted)' }}>Hôte</span>
                   <code style={{ overflowWrap: 'anywhere' }}>{record.host}</code>
-                  <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '0.72rem' }} onClick={() => copy(record.host)}>Copier</button>
+                  <button type="button" className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '0.72rem' }} onClick={() => copy(record.host)}>Copier</button>
                   <span style={{ color: 'var(--text-muted)' }}>Valeur</span>
                   <code style={{ overflowWrap: 'anywhere' }}>{record.value}</code>
-                  <button className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '0.72rem' }} onClick={() => copy(record.value)}>Copier</button>
+                  <button type="button" className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '0.72rem' }} onClick={() => copy(record.value)}>Copier</button>
                 </div>
                 {pointingHint && (
                   <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)' }}>2. {pointingHint}</div>
                 )}
                 <div>
-                  <button className="btn btn-primary" onClick={handleVerify} disabled={domainBusy}>
+                  <button type="button" className="btn btn-primary" onClick={handleVerify} disabled={domainBusy}>
                     {domainBusy ? 'Vérification…' : 'Vérifier & activer'}
                   </button>
                 </div>
@@ -289,10 +325,10 @@ export function EditSiteModal({ site, onClose, onSaved }: { site: Site; onClose:
                 <span style={{ fontSize: '0.82rem', color: 'var(--amber-400)' }}>
                   Vérification en attente pour <strong>{customDomain || customInput}</strong>.
                 </span>
-                <button className="btn btn-primary" onClick={handleVerify} disabled={domainBusy}>
+                <button type="button" className="btn btn-primary" onClick={handleVerify} disabled={domainBusy}>
                   {domainBusy ? 'Vérification…' : 'Vérifier & activer'}
                 </button>
-                <button className="btn btn-secondary" style={{ color: 'var(--accent-rose)' }} onClick={() => setConfirmDetach(true)} disabled={domainBusy}>
+                <button type="button" className="btn btn-secondary" style={{ color: 'var(--accent-rose)' }} onClick={() => setConfirmDetach(true)} disabled={domainBusy}>
                   Annuler
                 </button>
               </div>

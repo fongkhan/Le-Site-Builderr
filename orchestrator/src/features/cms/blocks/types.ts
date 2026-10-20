@@ -1,4 +1,5 @@
 import type { Block, Theme } from '../../../types';
+import type { LinkTargets } from '../lib/ctaLink';
 
 export interface UpdateOptions {
   /** true : enregistrement immédiat (changement de structure) ; débouncé sinon (frappe) */
@@ -16,6 +17,8 @@ export interface BlockEditorProps {
   block: Block;
   siteSlug: string;
   update: BlockUpdater;
+  /** Pages et formulaires proposés pour le lien des boutons (facultatif : syntaxe seule) */
+  linkTargets?: LinkTargets;
 }
 
 export interface BlockPreviewProps {

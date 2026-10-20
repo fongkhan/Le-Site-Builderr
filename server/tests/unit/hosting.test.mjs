@@ -48,7 +48,14 @@ before(async () => {
       return send({ status: 1, data: null });
     }
     if (url.pathname === '/execute/Fileman/upload_files') {
-      return send({ status: 1, data: { succeeded: 1 } });
+      // Corps multipart lu en entier : octets reçus notés pour les assertions
+      let received = 0;
+      req.on('data', (chunk) => { received += chunk.length; });
+      req.on('end', () => {
+        entry.bytes = received;
+        send({ status: 1, data: { succeeded: 1 } });
+      });
+      return;
     }
     if (url.pathname === '/execute/AddonDomain/deladdondomain') {
       if (failing.has('AddonDomain/deladdondomain')) return send({ status: 0, errors: ['domaine inconnu'] });
@@ -140,6 +147,70 @@ test('cpanel — publish enchaîne upload → extract → unlink avec des chemin
   assert.equal(fileops[1].query.op, 'unlink');
 
   fs.rmSync(dist, { recursive: true, force: true });
+});
+
+test('uploadTimeoutMs — proportionnel à la taille (60 s minimum), surchargeable', () => {
+  const { uploadTimeoutMs } = require('../../lib/hosting.js');
+  assert.equal(uploadTimeoutMs(0, {}), 60000);
+  assert.equal(uploadTimeoutMs(100 * 1024 * 1024, {}), 420000);
+  assert.equal(uploadTimeoutMs(5, { CPANEL_UPLOAD_TIMEOUT_MS: '90000' }), 90000);
+  assert.equal(uploadTimeoutMs(0, { CPANEL_UPLOAD_TIMEOUT_MS: '0' }), 60000, 'valeur nulle ignorée');
+  assert.equal(uploadTimeoutMs(0, { CPANEL_UPLOAD_TIMEOUT_MS: 'abc' }), 60000, 'valeur invalide ignorée');
+});
+
+test('cpanel — publish envoie toute l’archive en flux et renvoie sa taille', async () => {
+  const dist = fs.mkdtempSync(path.join(os.tmpdir(), 'dist-'));
+  // Contenu peu compressible : l'archive dépasse largement la taille d'un en-tête
+  fs.writeFileSync(path.join(dist, 'index.html'), '<h1>ok</h1>');
+  fs.writeFileSync(path.join(dist, 'bruit.bin'), Buffer.from(Array.from({ length: 200000 }, (_, i) => (i * 7919) % 251)));
+  calls.length = 0;
+  try {
+    const r = await makeDriver().publish('flux', dist);
+    assert.ok(r.bytes > 1000, `taille renvoyée : ${r.bytes}`);
+    const upload = calls.find((c) => c.path.includes('upload_files'));
+    assert.ok(upload.bytes > r.bytes, `octets reçus (${upload.bytes}) > taille du zip (${r.bytes})`);
+  } finally {
+    fs.rmSync(dist, { recursive: true, force: true });
+  }
+});
+
+test('cpanel — délai dépassé pendant l’envoi : message explicite, sans jeton ni hôte, archive supprimée', async () => {
+  const dist = fs.mkdtempSync(path.join(os.tmpdir(), 'dist-'));
+  fs.writeFileSync(path.join(dist, 'index.html'), '<h1>ok</h1>');
+  const driver = createCpanelDriver({
+    host: 'cpanel.hote-secret.example',
+    user: 'demo-user',
+    token: 'demo-token',
+    rootDomain: 'exemple.fr',
+    port: mockPort,
+    baseUrl: `http://127.0.0.1:${mockPort}`,
+    fetchImpl: (url, init) => (String(url).includes('upload_files')
+      ? Promise.reject(new DOMException('x', 'TimeoutError'))
+      : fetch(url, init)),
+  });
+  const leftovers = () => fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('deploy-delai-') && n.endsWith('.zip'));
+  try {
+    await assert.rejects(driver.publish('delai', dist), (e) => {
+      assert.match(e.message, /délai dépassé \(60 s\)/);
+      assert.match(e.message, /envoi de l'archive/);
+      for (const secret of ['demo-token', 'hote-secret', '127.0.0.1', 'http']) {
+        assert.ok(!e.message.includes(secret), `« ${secret} » dans le message : ${e.message}`);
+      }
+      return true;
+    });
+    assert.deepEqual(leftovers(), [], 'archive locale supprimée après l’échec');
+  } finally {
+    fs.rmSync(dist, { recursive: true, force: true });
+  }
+});
+
+test('cpanel — délai dépassé sur un appel ordinaire : fonction citée, délai de 20 s', async () => {
+  const driver = createCpanelDriver({
+    host: '127.0.0.1', user: 'demo-user', token: 'demo-token', rootDomain: 'exemple.fr', port: mockPort,
+    baseUrl: `http://127.0.0.1:${mockPort}`,
+    fetchImpl: () => Promise.reject(new DOMException('x', 'TimeoutError')),
+  });
+  await assert.rejects(driver.testConnection(), /délai dépassé \(20 s\) pendant \/execute\/DomainInfo\/list_domains/);
 });
 
 test('cpanel — statut SSL : couvert (exact ou wildcard) = active, sinon pending', async () => {

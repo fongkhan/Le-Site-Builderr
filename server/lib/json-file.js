@@ -15,7 +15,7 @@ function readJsonStrict(filePath, fallback) {
   try {
     return JSON.parse(raw);
   } catch (err) {
-    throw new Error(`Fichier JSON illisible (${filePath}) : ${err.message}`);
+    throw new Error(`Fichier JSON illisible (${filePath}) : ${err.message}`, { cause: err });
   }
 }
 

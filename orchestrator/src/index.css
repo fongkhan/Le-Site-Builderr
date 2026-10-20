@@ -15,7 +15,7 @@
   --accent-purple: #a855f7;
   --accent-emerald: #10b981;
   --accent-rose: #f43f5e;
-  --font-sans: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-sans: 'Outfit Variable', 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
 body {
@@ -466,6 +466,35 @@ body {
   justify-content: flex-end;
   border-top: 1px solid var(--border-color);
   padding: 15px 24px;
+}
+
+/* Modale formulaire (<form> autour du corps et du pied) : sans min-height: 0, le corps
+   ne défilerait plus dans la hauteur maximale de la modale. */
+.modal-form {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Groupe de champs (<fieldset> + <legend>) sans cadre ni marges du navigateur */
+.field-group {
+  border: 0;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.field-group > legend {
+  padding: 0;
+}
+
+/* Erreur de saisie affichée sous le champ concerné */
+.field-error {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.8rem;
+  color: var(--red-300);
 }
 
 /* ---- Empty states ---- */

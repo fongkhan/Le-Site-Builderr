@@ -1,5 +1,6 @@
 ---
 import { t } from '../../lib/ui-strings.mjs';
+import type { CtaLink } from '../../lib/url';
 
 interface FeatureItem {
   feature: string;
@@ -11,6 +12,8 @@ interface PlanItem {
   description: string;
   features: FeatureItem[];
   ctaText: string;
+  /** Lien du bouton (vide : formulaire du site, mode Automatique). */
+  ctaLink?: string | null;
   isPopular: boolean;
 }
 
@@ -19,21 +22,25 @@ interface Props {
     title: string;
     plans: PlanItem[];
   };
-  /** Cible d'un bouton selon son libellé (ancre du formulaire de la page) ; sans cible, pas de bouton. */
-  ctaTarget?: (label?: string) => string | null;
+  /** Lien d'un bouton : lien saisi s'il est valide, sinon formulaire selon le libellé ; null : pas de bouton. */
+  resolveCta?: (link: unknown, label?: string) => CtaLink | null;
   /** Langue de la page (libellés d'interface, lib/ui-strings.mjs). */
   locale?: string;
 }
 
-const { data, ctaTarget, locale } = Astro.props;
-const ctaHrefFor = (label?: string) => (label && ctaTarget ? ctaTarget(label) : null);
+const { data, resolveCta, locale } = Astro.props;
+// Lien de chaque bouton calculé une seule fois (sans libellé : pas de bouton)
+const plans = (data.plans || []).filter(Boolean).map((plan) => ({
+  ...plan,
+  cta: plan.ctaText && resolveCta ? resolveCta(plan.ctaLink, plan.ctaText) : null,
+}));
 ---
 
 <section class="pricing-section">
   <div class="container">
     {data.title && <h2 class="section-title">{data.title}</h2>}
     <div class="pricing-grid">
-      {data.plans && data.plans.map((plan) => (
+      {plans.map((plan) => (
         <div class={`pricing-card ${plan.isPopular ? 'popular' : ''}`}>
           {plan.isPopular && (
             <span class="popular-badge">{t(locale, 'popular')}</span>
@@ -53,10 +60,15 @@ const ctaHrefFor = (label?: string) => (label && ctaTarget ? ctaTarget(label) : 
               </li>
             ))}
           </ul>
-          {ctaHrefFor(plan.ctaText) && (
+          {plan.cta && (
             <div class="card-footer">
-              <a href={ctaHrefFor(plan.ctaText)} class={`cta-btn ${plan.isPopular ? 'btn-primary' : 'btn-secondary'}`}>
-                {plan.ctaText}
+              <a
+                href={plan.cta.href}
+                class={`cta-btn ${plan.isPopular ? 'btn-primary' : 'btn-secondary'}`}
+                target={plan.cta.newTab ? '_blank' : undefined}
+                rel={plan.cta.newTab ? 'noopener noreferrer' : undefined}
+              >
+                {plan.ctaText}{plan.cta.newTab && <span class="visually-hidden"> {t(locale, 'newTab')}</span>}
               </a>
             </div>
           )}
@@ -88,11 +100,11 @@ const ctaHrefFor = (label?: string) => (label && ctaTarget ? ctaTarget(label) : 
   }
 
   .pricing-card {
-    background: #ffffff;
+    background: var(--color-surface);
     padding: 40px 30px;
     border-radius: var(--border-radius);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-    border: 1px solid rgba(0, 0, 0, 0.05);
+    border: 1px solid color-mix(in srgb, var(--color-text) 10%, transparent);
     transition: all 0.3s ease;
     text-align: left;
     display: flex;
@@ -118,7 +130,7 @@ const ctaHrefFor = (label?: string) => (label && ctaTarget ? ctaTarget(label) : 
     left: 50%;
     transform: translateX(-50%);
     background-color: var(--color-primary);
-    color: #ffffff;
+    color: var(--color-on-primary);
     padding: 4px 14px;
     border-radius: 20px;
     font-size: 0.75rem;
@@ -141,7 +153,7 @@ const ctaHrefFor = (label?: string) => (label && ctaTarget ? ctaTarget(label) : 
 
   .plan-desc {
     font-size: 0.875rem;
-    color: #6b7280;
+    color: var(--color-text-muted);
     margin: 0;
     min-height: 40px;
   }
@@ -173,7 +185,7 @@ const ctaHrefFor = (label?: string) => (label && ctaTarget ? ctaTarget(label) : 
     align-items: center;
     gap: 10px;
     font-size: 0.95rem;
-    color: #4b5563;
+    color: var(--color-text-muted);
   }
 
   .checkmark {
@@ -200,7 +212,7 @@ const ctaHrefFor = (label?: string) => (label && ctaTarget ? ctaTarget(label) : 
 
   .btn-primary {
     background-color: var(--color-primary);
-    color: #ffffff;
+    color: var(--color-on-primary);
   }
 
   .btn-primary:hover {
@@ -210,11 +222,12 @@ const ctaHrefFor = (label?: string) => (label && ctaTarget ? ctaTarget(label) : 
 
   .btn-secondary {
     background-color: var(--color-secondary);
-    color: var(--color-text);
+    color: var(--color-on-secondary);
     border: 1px solid rgba(0, 0, 0, 0.05);
   }
 
+  /* Assombrit légèrement la couleur secondaire : le texte garde son contraste */
   .btn-secondary:hover {
-    background-color: rgba(0, 0, 0, 0.02);
+    filter: brightness(0.95);
   }
 </style>

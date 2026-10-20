@@ -63,10 +63,12 @@ export function FileManagerModal({ site, onClose }: { site: Site; onClose: () =>
       bodyPadding={false}
     >
       <div style={{ padding: '10px 24px', background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: 15, alignItems: 'center', flexWrap: 'wrap' }}>
-        <button className={`btn ${folderType === 'documentRoot' ? 'btn-primary' : 'btn-secondary'}`} style={{ padding: '6px 14px', fontSize: '0.8rem' }} onClick={() => setFolderType('documentRoot')}>
+        <button type="button" aria-pressed={folderType === 'documentRoot'} className={`btn ${folderType === 'documentRoot' ? 'btn-primary' : 'btn-secondary'}`} style={{ padding: '6px 14px', fontSize: '0.8rem' }} onClick={() => setFolderType('documentRoot')}>
           🌐 Dossier web public
         </button>
         <button
+          type="button"
+          aria-pressed={folderType === 'repository'}
           className={`btn ${folderType === 'repository' ? 'btn-primary' : 'btn-secondary'}`}
           style={{ padding: '6px 14px', fontSize: '0.8rem' }}
           onClick={() => setFolderType('repository')}

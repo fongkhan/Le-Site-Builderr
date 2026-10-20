@@ -106,6 +106,12 @@ for (const file of htmlFiles) {
   }
 }
 
+// ---- Contrôles par thème : scripts/checks/*.mjs (ordre des noms) ----
+for (const name of fs.readdirSync(new URL('./checks/', import.meta.url)).filter((n) => n.endsWith('.mjs')).sort()) {
+  const mod = await import(new URL(`./checks/${name}`, import.meta.url).href);
+  await mod.default({ dist, base, htmlFiles, readDist, check });
+}
+
 if (failures.length) {
   console.error(`✖ ${failures.length} problème(s) dans le site généré :\n- ${failures.join('\n- ')}`);
   process.exit(1);

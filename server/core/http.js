@@ -2,6 +2,7 @@
 const express = require('express');
 const { rateLimit } = require('express-rate-limit');
 const { envInt } = require('./config');
+const { contactLang, contactPage, contactErrorBody } = require('../lib/contact');
 
 // TRUST_PROXY : nombre de proxys de confiance (« 1 »), ou valeur Express telle quelle
 // (« loopback », liste d'IP/CIDR). Vide, « false » ou « 0 » : désactivé.
@@ -31,14 +32,24 @@ function isHtmlFormPost(req) {
 
 // Réponse à un formulaire posté SANS JavaScript (navigateur, application/x-www-form-
 // urlencoded) : petite page lisible avec un lien de retour vers la page d'origine, jamais
-// du JSON brut affiché au visiteur.
-function sendFormPage(req, res, status, title, text) {
+// du JSON brut affiché au visiteur. Langue (<html lang>) et lien de retour paramétrables.
+function sendFormPage(req, res, status, title, text, { lang = 'fr', backLabel = '← Revenir au site' } = {}) {
   let back = '';
   try {
     const ref = new URL(req.get('referer') || '');
     if (ref.protocol === 'http:' || ref.protocol === 'https:') back = ref.href;
   } catch { /* pas de page d'origine exploitable */ }
-  res.status(status).type('html').send(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>${escapeHtml(title)}</title><style>body{font-family:system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 20px;text-align:center;color:#222}a{color:#2563eb}</style></head><body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p>${back ? `<p><a href="${escapeHtml(back)}">← Revenir au site</a></p>` : ''}</body></html>`);
+  res.status(status).type('html').send(`<!doctype html><html lang="${escapeHtml(lang)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>${escapeHtml(title)}</title><style>body{font-family:system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 20px;text-align:center;color:#222}a{color:#2563eb}</style></head><body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p>${back ? `<p><a href="${escapeHtml(back)}">${escapeHtml(backLabel)}</a></p>` : ''}</body></html>`);
+}
+
+// Page de réponse du formulaire de contact posté sans JavaScript, dans la langue de la
+// page d'origine (?lang= posé par le formulaire, sinon fr). `key` : code d'erreur de
+// lib/contact.js, « sent » ou « sent_appointment ». req.query existe aussi dans le
+// limiteur, monté avant le parsing du corps.
+function sendContactFormPage(req, res, status, key) {
+  const lang = contactLang(req.query && req.query.lang);
+  const page = contactPage(key, lang);
+  sendFormPage(req, res, status, page.title, page.text, { lang, backLabel: page.back });
 }
 
 // Page « connectez-vous » (navigateur sans session sur une ressource protégée, ex. un
@@ -58,7 +69,7 @@ const makeLimiter = (limit, message, extra = {}) => rateLimit({
   limit,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
-  handler: (req, res) => res.status(429).json({ error: message }),
+  handler: (req, res) => res.status(429).json({ error: message, code: 'rate_limited' }),
   ...extra,
 });
 
@@ -74,9 +85,8 @@ const limiters = {
   webhook: makeLimiter(60, "Trop de requêtes de build reçues. Réessayez plus tard."),
   contact: makeLimiter(10, "Trop de messages envoyés. Réessayez dans quelques minutes.", {
     handler: (req, res) => {
-      const message = "Trop de messages envoyés. Réessayez dans quelques minutes.";
-      if (isHtmlFormPost(req)) return sendFormPage(req, res, 429, 'Message non envoyé', message);
-      res.status(429).json({ error: message });
+      if (isHtmlFormPost(req)) return sendContactFormPage(req, res, 429, 'rate_limited');
+      res.status(429).json(contactErrorBody('rate_limited'));
     },
   }),
   // Beacon de stats : public, appelé une fois par page vue. Plafond généreux (une même
@@ -93,12 +103,149 @@ const limiters = {
   ),
 };
 
+// Routes d'authentification servies par Payload (via Next) : le limiteur s'applique au
+// chemin CANONIQUE (segments « . » et « .. » résolus, décodé, sans casse, « / » répétés ou
+// final ignorés), car Next et Payload servent aussi /api/users/LOGIN, /api/users/%6Cogin
+// ou /api/users/%2e/login. Express (req.path) reçoit le chemin brut.
+const { canonicalApiPath } = require('../lib/account-guards');
+const { trackBackground } = require('./shutdown');
+const AUTH_LIMITED_PATHS = [
+  ['/api/users/login', 'login'],
+  ['/api/users/forgot-password', 'passwordReset'],
+  ['/api/users/reset-password', 'passwordReset'],
+];
+
+// Nom du limiteur d'authentification d'un chemin brut (null : aucun).
+function authLimiterFor(rawPath) {
+  const p = canonicalApiPath(rawPath);
+  const hit = AUTH_LIMITED_PATHS.find(([prefix]) => p === prefix || p.startsWith(prefix + '/'));
+  return hit ? hit[1] : null;
+}
+
+// Au plus `limit` traitements à la fois, les suivants attendent leur tour. Le traitement
+// reçoit `release` : sa place est libérée au premier appel de `release` ou à la fin de sa
+// promesse, jamais sur un événement de la réponse (Payload poursuit l'opération quand le
+// client se déconnecte ; la réponse d'une requête pipelinée dont la connexion se ferme
+// n'émet ni « finish » ni « close »). Une requête dont la connexion s'est fermée pendant
+// l'attente n'est pas lancée. Renvoie le résultat du traitement.
+function concurrencyGate(limit) {
+  let active = 0;
+  const waiting = [];
+  const next = () => {
+    while (waiting.length > 0 && active < limit) {
+      const entry = waiting.shift();
+      if (entry.req.socket?.destroyed) entry.resolve();
+      else start(entry);
+    }
+  };
+  const start = ({ task, resolve, reject }) => {
+    active += 1;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      active -= 1;
+      next();
+    };
+    let result;
+    try {
+      result = Promise.resolve(task(release));
+    } catch (err) {
+      result = Promise.reject(err);
+    }
+    result.then(resolve, reject).finally(release);
+  };
+  return (req, task) => new Promise((resolve, reject) => {
+    const entry = { req, task, resolve, reject };
+    if (active < limit) start(entry);
+    else waiting.push(entry);
+  });
+}
+
+// Corps de la requête entièrement reçu, sans le lire (Next le lira ensuite) : vrai une
+// fois le message complet, faux si la connexion se ferme avant ou si le corps dépasse
+// maxBytes (annoncé ou déjà reçu). L'analyseur HTTP lit le socket sans événement JS :
+// l'état est relevé toutes les `pollMs`.
+function bodyReceived(req, maxBytes, pollMs = 25) {
+  const declared = Number(req.headers['content-length']);
+  if (Number.isFinite(declared) && declared > maxBytes) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let timer = null;
+    const check = () => {
+      let result = null;
+      if (req.complete) result = true;
+      else if (!req.socket || req.socket.destroyed || req.readableLength > maxBytes) result = false;
+      if (result === null) return false;
+      clearInterval(timer);
+      resolve(result);
+      return true;
+    };
+    if (!check()) timer = setInterval(check, pollMs);
+  });
+}
+
+// Mot de passe oublié (Payload) : la transaction de la requête reste ouverte pendant une
+// écriture hors transaction (seconde connexion du pool) puis pendant l'envoi SMTP.
+// Exécutées deux à la fois au plus, et seulement une fois le corps reçu (un envoi au
+// compte-gouttes ne garde aucune place) : des demandes simultanées (anonymes) ne peuvent
+// ni bloquer le pool ni l'occuper le temps des envois.
+const FORGOT_PASSWORD_PATH = '/api/users/forgot-password';
+const FORGOT_PASSWORD_MAX_BODY = 8 * 1024;
+const forgotPasswordGate = concurrencyGate(2);
+const isForgotPasswordPath = (rawPath) => {
+  const p = canonicalApiPath(rawPath);
+  return p === FORGOT_PASSWORD_PATH || p.startsWith(FORGOT_PASSWORD_PATH + '/');
+};
+
+// Traitement d'une demande de mot de passe oublié (run : gestionnaire Next) derrière la
+// file d'attente. Place libérée quand la réponse est terminée (res.end : opération Payload
+// finie), même si elle n'est jamais envoyée : réponse pipelinée dont la connexion s'est
+// fermée, pour laquelle la promesse de Next ne se résout jamais. Corps trop gros : 413 ;
+// connexion fermée avant la fin du corps : rien.
+async function runForgotPassword(req, res, run) {
+  if (!(await bodyReceived(req, FORGOT_PASSWORD_MAX_BODY))) {
+    if (!req.socket?.destroyed && !res.headersSent) {
+      res.status(413).set('Connection', 'close').json({ error: 'Requête trop volumineuse.' });
+    }
+    return;
+  }
+  return forgotPasswordGate(req, (release) => {
+    // Opération attendue par l'arrêt propre même si le client est parti : sa réponse ne
+    // compte alors plus parmi les requêtes en cours.
+    let finished;
+    trackBackground(new Promise((resolve) => { finished = resolve; }));
+    const done = () => {
+      release();
+      finished();
+    };
+    const end = res.end;
+    res.end = function endAndRelease(...args) {
+      done();
+      return end.apply(this, args);
+    };
+    let result;
+    try {
+      result = run();
+    } catch (err) {
+      done();
+      throw err;
+    }
+    return Promise.resolve(result).finally(done);
+  });
+}
+
+// Middleware unique : mêmes instances de limiteurs (donc même compteur par IP) quelle que
+// soit la forme du chemin.
+function authRateLimits(req, res, next) {
+  const name = authLimiterFor(req.path);
+  if (name) return limiters[name](req, res, next);
+  next();
+}
+
 // Limiteurs montés par préfixe de chemin (le login est servi par Next : le limiter
 // appelle next() vers lui).
 function mountRateLimits(app) {
-  app.use('/api/users/login', limiters.login);
-  app.use('/api/users/forgot-password', limiters.passwordReset);
-  app.use('/api/users/reset-password', limiters.passwordReset);
+  app.use(authRateLimits);
   app.use('/api/onboard', limiters.onboard);
   app.use('/webhook/rebuild', limiters.webhook);
   app.use('/api/contact', limiters.contact);
@@ -159,20 +306,21 @@ function jsonBodyForExpressRoutes(req, res, next) {
 }
 
 // Dernier middleware : erreurs non gérées rendues en JSON (jamais la page HTML par
-// défaut d'Express, qui peut contenir une stack en développement).
-// eslint-disable-next-line no-unused-vars
+// défaut d'Express, qui peut contenir une stack en développement). Quatre paramètres
+// obligatoires : Express reconnaît un gestionnaire d'erreurs à fn.length === 4.
 function jsonErrorHandler(err, req, res, next) {
   if (res.headersSent) return next(err);
-  // Formulaire d'un site publié posté sans JavaScript : page HTML plutôt que JSON
+  // Formulaire d'un site publié posté sans JavaScript : page HTML (langue de la page
+  // d'origine) plutôt que JSON
   if (isPublicRoute(req.path) && isHtmlFormPost(req) && err && (err.type === 'entity.too.large' || err.type === 'entity.parse.failed')) {
     const tooLarge = err.type === 'entity.too.large';
-    return sendFormPage(req, res, tooLarge ? 413 : 400, 'Message non envoyé', tooLarge ? 'Votre message est trop long.' : 'Formulaire invalide.');
+    return sendContactFormPage(req, res, tooLarge ? 413 : 400, tooLarge ? 'too_large' : 'invalid_body');
   }
   if (err && err.type === 'entity.parse.failed') {
-    return res.status(400).json({ error: "Corps de requête JSON invalide." });
+    return res.status(400).json({ error: "Corps de requête JSON invalide.", code: 'invalid_body' });
   }
   if (err && err.type === 'entity.too.large') {
-    return res.status(413).json({ error: "Corps de requête trop volumineux." });
+    return res.status(413).json({ error: "Corps de requête trop volumineux.", code: 'too_large' });
   }
   const status = err && Number(err.status || err.statusCode);
   if (status >= 400 && status < 500) {
@@ -210,10 +358,16 @@ module.exports = {
   sendError,
   isHtmlFormPost,
   sendFormPage,
+  sendContactFormPage,
   sendSignInPage,
   makeLimiter,
   limiters,
   mountRateLimits,
+  authLimiterFor,
+  concurrencyGate,
+  bodyReceived,
+  isForgotPasswordPath,
+  runForgotPassword,
   EXPRESS_ROUTE_PREFIXES,
   isExpressRoute,
   isPublicRoute,

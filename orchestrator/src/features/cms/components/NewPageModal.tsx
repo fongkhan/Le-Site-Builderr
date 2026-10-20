@@ -11,6 +11,7 @@ export function NewPageModal({ pages, onCancel, onCreate }: {
   onCreate: (title: string, locale: string) => void;
 }) {
   const titleId = useId();
+  const addressId = useId();
   const localeId = useId();
   const [title, setTitle] = useState('');
   const [locale, setLocale] = useState(DEFAULT_LOCALE);
@@ -26,11 +27,12 @@ export function NewPageModal({ pages, onCancel, onCreate }: {
       title="📄 Nouvelle page"
       subtitle="Elle apparaîtra dans le menu de navigation du site après le prochain déploiement."
       onClose={onCancel}
+      onSubmit={submit}
       maxWidth={440}
       footer={
         <>
           <button type="button" className="btn btn-secondary" onClick={onCancel}>Annuler</button>
-          <button type="button" className="btn btn-primary" disabled={!valid} onClick={submit}>
+          <button type="submit" className="btn btn-primary" disabled={!valid}>
             Créer la page
           </button>
         </>
@@ -43,13 +45,15 @@ export function NewPageModal({ pages, onCancel, onCreate }: {
           type="text"
           className="input-text"
           placeholder="ex : Contact, À propos, Nos horaires…"
+          required
           value={title}
           maxLength={120}
           onChange={(e) => setTitle(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+          aria-describedby={derived ? addressId : undefined}
+          aria-invalid={derived?.error ? true : undefined}
         />
         {derived && (
-          <span className="field-label" style={{ marginTop: 6, color: derived.error ? 'var(--accent-rose)' : undefined }} role={derived.error ? 'alert' : undefined}>
+          <span id={addressId} className="field-label" style={{ marginTop: 6, color: derived.error ? 'var(--accent-rose)' : undefined }} role={derived.error ? 'alert' : undefined}>
             {derived.error ?? <>Adresse : <code>{pageAddress(derived.slug, locale)}</code></>}
           </span>
         )}

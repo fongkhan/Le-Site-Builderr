@@ -9,8 +9,19 @@ const DIRECT_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gi
 const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
 const MAX_DIMENSION = 1200;
 
+interface InspirationImageProps {
+  value: string | null;
+  onChange: (dataUrl: string | null) => void;
+  /** id du champ fichier (focus sur erreur de saisie) */
+  inputId?: string;
+  /** Erreur de saisie affichée sous la zone (aria-invalid) */
+  invalid?: boolean;
+  /** id du message d'erreur (aria-describedby) */
+  describedBy?: string;
+}
+
 // Zone de dépôt de l'image/logo d'inspiration (glisser-déposer ou sélection).
-export function InspirationImage({ value, onChange }: { value: string | null; onChange: (dataUrl: string | null) => void }) {
+export function InspirationImage({ value, onChange, inputId, invalid, describedBy }: InspirationImageProps) {
   const toast = useToast();
 
   const readImage = (file: File) => {
@@ -71,7 +82,7 @@ export function InspirationImage({ value, onChange }: { value: string | null; on
         cursor: 'pointer',
         background: 'rgba(255,255,255,0.01)',
         position: 'relative',
-        borderColor: value ? 'var(--accent-blue)' : 'var(--border-color)',
+        borderColor: invalid ? 'var(--red-300)' : value ? 'var(--accent-blue)' : 'var(--border-color)',
       }}
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => {
@@ -81,8 +92,11 @@ export function InspirationImage({ value, onChange }: { value: string | null; on
       }}
     >
       <input
+        id={inputId}
         type="file"
         accept="image/*"
+        aria-invalid={invalid || undefined}
+        aria-describedby={describedBy}
         aria-label="Choisir une image ou un logo d'inspiration"
         onChange={handleImageUpload}
         style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }}

@@ -1,11 +1,17 @@
 ---
 import { safeHttpUrl } from '../../lib/url';
+import type { CtaLink } from '../../lib/url';
 import { t } from '../../lib/ui-strings.mjs';
+import { getSiteContent } from '../../lib/content';
+import { siteImage } from '../../lib/images';
+import { autoFitSizes } from '../../lib/grid-sizes.mjs';
 
 interface ProductItem {
   name?: string;
   price?: string;
   image?: string;
+  /** Lien du bouton « Commander » (vide : formulaire du site, mode Automatique). */
+  ctaLink?: string | null;
 }
 
 interface Props {
@@ -13,17 +19,29 @@ interface Props {
     title?: string;
     products?: ProductItem[];
   };
-  /** Cible du bouton selon son libellé (ancre du formulaire de la page) ; sans cible, pas de bouton. */
-  ctaTarget?: (label?: string) => string | null;
+  /** Lien d'un bouton : lien saisi s'il est valide, sinon formulaire selon le libellé ; null : pas de bouton. */
+  resolveCta?: (link: unknown, label?: string) => CtaLink | null;
   /** Langue de la page (libellés d'interface, lib/ui-strings.mjs). */
   locale?: string;
 }
 
-const { data, ctaTarget, locale } = Astro.props;
-// Pas de lien d'achat côté CMS : « Commander » mène au formulaire de la page. La cible
-// est choisie sur le libellé français (règle de ctaTarget) ; seul le texte affiché est traduit.
-const ctaHref = ctaTarget ? ctaTarget('Commander') : null;
-const products = (data.products || []).filter(Boolean).map((p) => ({ ...p, image: safeHttpUrl(p.image) }));
+const { data, resolveCta, locale } = Astro.props;
+const { media } = await getSiteContent();
+// Bouton « Commander » : lien du produit s'il est valide, sinon formulaire de la page
+// (mode Automatique, cible choisie sur le libellé français ; seul le texte affiché est
+// traduit). Image : texte alternatif de la médiathèque, sinon le nom du produit ; sizes
+// selon le nombre de fiches rendues (grille auto-fit : un produit seul occupe toute la
+// largeur).
+const items = (data.products || []).filter(Boolean);
+const sizes = autoFitSizes(items.length, { minWidth: 280, gap: 30 });
+const products = items.map((p) => {
+  const src = safeHttpUrl(p.image);
+  return {
+    ...p,
+    image: src ? siteImage(src, media, { fallbackAlt: p.name || '', sizes }) : null,
+    cta: resolveCta ? resolveCta(p.ctaLink, 'Commander') : null,
+  };
+});
 ---
 
 <section class="products-section">
@@ -33,13 +51,23 @@ const products = (data.products || []).filter(Boolean).map((p) => ({ ...p, image
       {products.map((product) => (
         <div class="product-card">
           <div class="product-image-container">
-            {product.image && <img src={product.image} alt={product.name || ''} loading="lazy" decoding="async" />}
+            {product.image && (
+              <img src={product.image.src} alt={product.image.alt} width={product.image.width} height={product.image.height} srcset={product.image.srcset} sizes={product.image.sizes} loading="lazy" decoding="async" />
+            )}
           </div>
           <div class="product-info">
             {product.name && <h3>{product.name}</h3>}
             {product.price && <span class="price">{product.price}</span>}
-            {ctaHref && (
-              <a class="buy-button" href={ctaHref} aria-label={product.name ? t(locale, 'orderProduct', { name: product.name }) : undefined}>{t(locale, 'order')}</a>
+            {product.cta && (
+              <a
+                class="buy-button"
+                href={product.cta.href}
+                target={product.cta.newTab ? '_blank' : undefined}
+                rel={product.cta.newTab ? 'noopener noreferrer' : undefined}
+                aria-label={product.name ? `${t(locale, 'orderProduct', { name: product.name })}${product.cta.newTab ? ` ${t(locale, 'newTab')}` : ''}` : undefined}
+              >
+                {t(locale, 'order')}{!product.name && product.cta.newTab && <span class="visually-hidden"> {t(locale, 'newTab')}</span>}
+              </a>
             )}
           </div>
         </div>
@@ -68,7 +96,7 @@ const products = (data.products || []).filter(Boolean).map((p) => ({ ...p, image
   }
 
   .product-card {
-    background: #ffffff;
+    background: var(--color-surface);
     border-radius: var(--border-radius);
     overflow: hidden;
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
@@ -128,7 +156,7 @@ const products = (data.products || []).filter(Boolean).map((p) => ({ ...p, image
     margin-top: auto;
     padding: 10px 20px;
     background-color: var(--color-primary);
-    color: #ffffff;
+    color: var(--color-on-primary);
     border: none;
     border-radius: var(--border-radius);
     font-weight: 600;

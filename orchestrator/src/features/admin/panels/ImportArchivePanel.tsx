@@ -3,7 +3,8 @@ import { importSiteArchive } from '../../../api/sites';
 import { errorMessage } from '../../../api/client';
 import { useToast } from '../../../components/ui/ToastContext';
 
-// Import d'une sauvegarde de site (archive zip produite par le bouton Exporter)
+// Import d'un site exporté (archive zip produite par le bouton Exporter). Les sauvegardes
+// automatiques se restaurent depuis le panneau « Sauvegardes du contenu ».
 export function ImportArchivePanel({ onImported }: { onImported: () => void }) {
   const toast = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -32,9 +33,9 @@ export function ImportArchivePanel({ onImported }: { onImported: () => void }) {
     <div className="glass-panel" style={{ display: 'flex', alignItems: 'center', gap: 15, flexWrap: 'wrap' }}>
       <span style={{ fontSize: '1.5rem' }}>📦</span>
       <div style={{ flex: 1, minWidth: 220 }}>
-        <strong>Restaurer une sauvegarde</strong>
+        <strong>Importer un site exporté</strong>
         <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: 4 }}>
-          Importez une archive exportée (bouton « Exporter » d'un site) : pages, articles, thème et build sont recréés sous un nouveau slug.
+          Importez une archive produite par le bouton « Exporter » d'un site : pages, articles, thème et build sont recréés sous un nouveau slug. Pour revenir à une sauvegarde automatique, utilisez « Restaurer… » dans « Sauvegardes du contenu ».
         </p>
       </div>
       <button className="btn btn-secondary" onClick={() => fileRef.current?.click()} disabled={importing} style={{ whiteSpace: 'nowrap' }}>

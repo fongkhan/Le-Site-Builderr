@@ -46,6 +46,23 @@ async function login(email, password) {
   return { status: res.status, token };
 }
 
+// Journal d'audit : entrée la plus récente correspondant aux filtres (params) et au
+// prédicat, créée depuis `since` (début du bloc − 2 s). Les écritures des routes Express
+// ne sont pas attendues : jusqu'à 15 essais espacés de 200 ms. Jeton admin requis.
+const RUN_STARTED_AT = Date.now();
+async function findAudit(params, predicate, since = RUN_STARTED_AT - 2000) {
+  const query = new URLSearchParams({ limit: '50', ...params }).toString();
+  for (let i = 0; i < 15; i++) {
+    if (!admin?.token) return null;
+    const r = await req(`/api/audit?${query}`, { token: admin.token });
+    const docs = Array.isArray(r.json) ? r.json : r.json?.docs || [];
+    const hit = docs.find((d) => Date.parse(d.createdAt) >= since && predicate(d));
+    if (hit) return hit;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return null;
+}
+
 // ---- Anonyme : tout doit être fermé ----
 {
   check('Anonyme : GET /api/sites -> 401', (await req('/api/sites')).status === 401);
@@ -126,7 +143,7 @@ if (client.token) {
 
 // ---- Médiathèque (ownership à la création) ----
 {
-  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
   const uploadAs = async (token, siteId) => {
     const form = new FormData();
     form.append('file', new Blob([png], { type: 'image/png' }), 'pixel.png');
@@ -258,6 +275,11 @@ if (admin.token) {
   check('Thème : radius injectant du CSS -> 400', (await postTheme({ ...baseTheme, radius: '12px;} body{display:none}' })).status === 400);
   check('Thème : couleur non-hex -> 400', (await postTheme({ ...baseTheme, colors: { ...baseTheme.colors, primary: 'url(javascript:1)' } })).status === 400);
   check('Thème : police hors allowlist -> 400', (await postTheme({ ...baseTheme, fonts: { heading: 'Comic Sans', body: 'Inter' } })).status === 400);
+  const since = Date.now() - 2000;
+  await postTheme({ ...baseTheme, radius: '13px' });
+  await postTheme(baseTheme);
+  const themeTrace = await findAudit({ action: 'theme.', target: 'boulangerie-artisanale' }, (d) => d.action === 'theme.modification' && (d.details || '').includes('rayon=13px→12px'), since);
+  check('Audit : modification du thème tracée', Boolean(themeTrace) && themeTrace.actor === 'admin@admin.com', JSON.stringify(themeTrace?.details));
 }
 
 // ---- Persistance : Payload est la source de vérité des sites ----
@@ -361,10 +383,17 @@ if (admin.token) {
 
 // ---- Réinitialisation de mot de passe ----
 {
+  const since = Date.now() - 2000;
   const known = await req('/api/users/forgot-password', { method: 'POST', body: { email: 'client@client.com' } });
   const unknown = await req('/api/users/forgot-password', { method: 'POST', body: { email: 'inconnu@nulle-part.example' } });
   check('Reset : forgot-password email connu -> 200', known.status === 200, `HTTP ${known.status}`);
   check('Reset : email inconnu -> même statut (anti-énumération)', unknown.status === known.status, `HTTP ${unknown.status}`);
+  if (admin.token) {
+    const traced = await findAudit({ action: 'motdepasse.', target: 'client@client.com' }, (d) => d.action === 'motdepasse.demande-reinit', since);
+    check('Audit : demande de réinitialisation tracée (compte connu)', Boolean(traced) && !/[0-9a-f]{40}/.test(traced.details || ''), JSON.stringify(traced?.details));
+    const none = await req(`/api/audit?target=${encodeURIComponent('inconnu@nulle-part.example')}`, { token: admin.token });
+    check('Audit : rien pour un email inconnu', none.status === 200 && none.json?.totalDocs === 0, `HTTP ${none.status} ${none.json?.totalDocs} entrée(s)`);
+  }
 
   const badToken = await req('/api/users/reset-password', { method: 'POST', body: { token: 'jeton-invalide', password: 'nouveau-mdp-123' } });
   check('Reset : token invalide -> 4xx (pas 500)', badToken.status >= 400 && badToken.status < 500, `HTTP ${badToken.status}`);
@@ -398,8 +427,11 @@ if (admin.token && client.token) {
   const valid = { name: 'Jean Test', email: 'jean@exemple.fr', message: 'Bonjour, ceci est un test.' };
   const ok = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: valid });
   check('Contact : message valide -> 200', ok.status === 200 && ok.json?.success === true, `HTTP ${ok.status}`);
-  check('Contact : site inconnu -> 404', (await req('/api/contact/site-inexistant', { method: 'POST', body: valid })).status === 404);
-  check('Contact : corps invalide -> 400', (await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { name: '', email: 'pas-un-email', message: '' } })).status === 400);
+  // Erreurs : code stable (traduit par le script du site) et champs refusés
+  const unknown = await req('/api/contact/site-inexistant', { method: 'POST', body: valid });
+  check('Contact : site inconnu -> 404 (code unknown_site)', unknown.status === 404 && unknown.json?.code === 'unknown_site', `HTTP ${unknown.status} ${JSON.stringify(unknown.json)}`);
+  const invalid = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { name: '', email: 'pas-un-email', message: '' } });
+  check('Contact : corps invalide -> 400 (code invalid_fields + champs)', invalid.status === 400 && invalid.json?.code === 'invalid_fields' && JSON.stringify(invalid.json?.fields) === '["name","email","message"]', `HTTP ${invalid.status} ${JSON.stringify(invalid.json)}`);
   // Message propre à cette exécution : le bloc « Messages reçus » vérifie qu'il n'est jamais stocké
   const hp = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { ...valid, message: `honeypot-${process.pid}`, company: 'robot inc' } });
   check('Contact : honeypot rempli -> 200 silencieux', hp.status === 200 && hp.json?.success === true);
@@ -449,7 +481,9 @@ if (admin.token && client.token) {
   }
   if (admin.token) {
     const audit = await req('/api/audit', { token: admin.token });
-    check('Audit : admin -> 200 (tableau)', audit.status === 200 && Array.isArray(audit.json));
+    check('Audit : admin -> 200 (page paginée)', audit.status === 200 && Array.isArray(audit.json?.docs) && typeof audit.json?.totalDocs === 'number', `HTTP ${audit.status}`);
+    const adminLogin = await findAudit({ action: 'connexion.', target: 'admin@admin.com' }, (d) => d.action === 'connexion.succes' && d.actor === 'admin@admin.com');
+    check('Audit : connexion admin tracée (connexion.succes)', Boolean(adminLogin));
 
     const exp = await fetch(`${BASE}/api/sites/boulangerie-artisanale/export`, { headers: { Origin: ORIGIN, Cookie: `payload-token=${admin.token}` } });
     check('Export : admin -> 200 (zip)', exp.status === 200 && (exp.headers.get('content-type') || '').includes('zip'));
@@ -503,17 +537,20 @@ if (admin.token && client.token) {
   });
   check("CORS : preflight d'une route privée depuis une origine inconnue -> refusé", !priv.headers.get('access-control-allow-origin'), `ACAO=${priv.headers.get('access-control-allow-origin')}`);
   const big = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { name: 'x', email: 'a@b.fr', message: 'x'.repeat(64 * 1024) } });
-  check('Contact : corps de 64 Ko -> 413 (limite des endpoints publics)', big.status === 413, `HTTP ${big.status}`);
+  check('Contact : corps de 64 Ko -> 413 (limite des endpoints publics, code too_large)', big.status === 413 && big.json?.code === 'too_large', `HTTP ${big.status} ${JSON.stringify(big.json)}`);
   // Demande de RDV envoyée par le script du site : le serveur compose le message
   const rdv = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { kind: 'appointment', name: 'Client RDV', email: 'rdv@example.com', service: 'Coupe', slot: 'mardi', phone: '0600000000' } });
   check('Contact : demande de RDV en JSON (sans message libre) -> 200', rdv.status === 200, `HTTP ${rdv.status}`);
-  // Formulaire posté sans JavaScript : une erreur s'affiche en page HTML, jamais en JSON brut
-  const bigForm = await fetch(`${BASE}/api/contact/boulangerie-artisanale`, {
+  // Formulaire posté sans JavaScript : une erreur s'affiche en page HTML, jamais en JSON
+  // brut, dans la langue du formulaire (?lang=)
+  const bigForm = await fetch(`${BASE}/api/contact/boulangerie-artisanale?lang=en`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: `name=x&email=a%40b.fr&message=${'x'.repeat(40 * 1024)}`,
   });
+  const bigFormHtml = await bigForm.text();
   check('Contact sans JavaScript : message trop long -> 413 en page HTML', bigForm.status === 413 && (bigForm.headers.get('content-type') || '').includes('text/html'), `HTTP ${bigForm.status} ${bigForm.headers.get('content-type')}`);
+  check('Contact sans JavaScript : page d’erreur dans la langue du formulaire (?lang=en)', bigFormHtml.includes('<html lang="en">') && bigFormHtml.includes('too long'), bigFormHtml.slice(0, 120));
 }
 
 // ---- Pages : suppression explicite, doublons, textes libres ----
@@ -529,6 +566,10 @@ if (admin.token) {
     check('Pages : une page absente du corps (autre onglet) est conservée', (await keys()) === 'equipe,home,tarifs', await keys());
     await req(url, { method: 'POST', body: { docs: [pg('home'), pg('tarifs')], deleted: [{ slug: 'equipe', locale: 'fr' }] }, token: admin.token });
     check('Pages : une page listée dans deleted est supprimée', (await keys()) === 'home,tarifs', await keys());
+    const pageCreated = await findAudit({ action: 'page.creation', target: slug }, (d) => (d.details || '').includes('fr:equipe'));
+    check('Audit : création de pages tracée (page.creation)', Boolean(pageCreated), JSON.stringify(pageCreated?.details));
+    const pageDeleted = await findAudit({ action: 'page.suppression', target: slug }, (d) => (d.details || '').includes('fr:equipe'));
+    check('Audit : suppression de page tracée (page.suppression)', Boolean(pageDeleted), JSON.stringify(pageDeleted?.details));
     const faq = { blockType: 'faq', title: 'JavaScript & TypeScript', items: [{ question: 'JavaScript est-il nécessaire ?', answer: 'Non.' }] };
     const text = await req(url, { method: 'POST', body: { docs: [pg('home', { layout: [faq] }), pg('tarifs')] }, token: admin.token });
     check('Pages : le mot « JavaScript » dans un texte est accepté', text.status === 200, `HTTP ${text.status}`);
@@ -615,10 +656,15 @@ if (admin.token) {
 {
   const STRONG = 'Cheval-Correct-42!';
   const LOGIN_FAILED = 'Email ou mot de passe incorrect, ou compte temporairement verrouillé.';
+  const since = Date.now() - 2000;
 
   // Échec de login : message unifié (aucune distinction compte inconnu / verrouillé)
   const unknownLogin = await req('/api/users/login', { method: 'POST', body: { email: 'lot1-inconnu@nulle-part.example', password: 'mauvais-mot-de-passe' } });
   check('Login : email inconnu -> 401 + message unifié', unknownLogin.status === 401 && unknownLogin.json?.errors?.[0]?.message === LOGIN_FAILED, `HTTP ${unknownLogin.status} ${JSON.stringify(unknownLogin.json?.errors?.[0]?.message)}`);
+  if (admin.token) {
+    const failed = await findAudit({ action: 'connexion.', target: 'lo***@nulle-part.example' }, (d) => d.action === 'connexion.echec' && d.details === 'motif=identifiants' && d.actor === 'anonyme', since);
+    check('Audit : échec de connexion tracé, email masqué', Boolean(failed));
+  }
 
   // Déverrouillage : admin only, 403 identique que le compte existe ou non
   if (client.token) {
@@ -700,6 +746,9 @@ if (admin.token) {
       const meA = await req('/api/users/me', { token: a.token });
       check('Sessions : session courante (A) conservée', meA.json?.user?.email === email, `user=${JSON.stringify(meA.json?.user?.email ?? null)}`);
       check('Sessions : rôles du compte intacts après révocation', JSON.stringify(meA.json?.user?.roles) === '["client"]', JSON.stringify(meA.json?.user?.roles));
+      const pwdChange = await findAudit({ action: 'utilisateur.', target: email }, (d) => d.action === 'utilisateur.modification' && d.actor === email && (d.details || '').includes('motdepasse=modifié'), since);
+      const journal = JSON.stringify((await req(`/api/audit?limit=200&target=${encodeURIComponent(email)}`, { token: admin.token })).json || {});
+      check('Audit : changement de mot de passe tracé sans la valeur', Boolean(pwdChange) && !journal.includes('Nouveau-Cheval-43?') && !journal.includes(STRONG), JSON.stringify(pwdChange?.details));
 
       // Changement par un admin : toutes les sessions du compte sont révoquées
       await req(`/api/users/${id}`, { method: 'PATCH', body: { password: 'Encore-Cheval-44!' }, token: admin.token });
@@ -716,11 +765,19 @@ if (admin.token) {
       }
       const locked = await req('/api/users/login', { method: 'POST', body: { email, password: 'Encore-Cheval-44!' } });
       check('Login : compte verrouillé -> 401 + même message que pour un compte inconnu', locked.status === 401 && locked.json?.errors?.[0]?.message === LOGIN_FAILED && JSON.stringify(locked.json) === JSON.stringify(unknownLogin.json), `HTTP ${locked.status} ${JSON.stringify(locked.json)}`);
+      const lockTrace = await findAudit({ action: 'connexion.', target: 'lo***@nulle-part.example' }, (d) => d.action === 'connexion.echec' && d.details === 'motif=verrouille', since);
+      check('Audit : verrouillage tracé (motif=verrouille)', Boolean(lockTrace));
 
       const unlocked = await req('/api/users/unlock', { method: 'POST', body: { email }, token: admin.token });
       check('Unlock : admin -> 200', unlocked.status === 200, `HTTP ${unlocked.status}`);
+      const unlockTrace = await findAudit({ action: 'utilisateur.deverrouillage', target: email }, (d) => d.actor === 'admin@admin.com', since);
+      check('Audit : déverrouillage tracé', Boolean(unlockTrace));
     }
     await purge();
+    if (id) {
+      const deletion = await findAudit({ action: 'utilisateur.suppression', target: email }, (d) => d.actor === 'admin@admin.com', since);
+      check('Audit : suppression du compte tracée', Boolean(deletion));
+    }
   }
 }
 
@@ -731,7 +788,7 @@ if (admin.token) {
   const { fileURLToPath } = await import('node:url');
   const serverDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const projectDir = path.dirname(serverDir);
-  const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+  const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
   const upload = async (token, siteId, data, type, name) => {
     const form = new FormData();
     form.append('file', new Blob([data], { type }), name);
@@ -740,6 +797,41 @@ if (admin.token) {
     let json = null;
     try { json = await res.clone().json(); } catch { /* non-JSON */ }
     return { status: res.status, json };
+  };
+  // Téléversement refusé par la limite de taille (413) : sur une connexion DÉDIÉE (Payload
+  // ferme la connexion keep-alive après un 413 multipart : la requête suivante sur le même
+  // socket recevrait ECONNRESET). Multipart construit à la main : _payload puis file.
+  const uploadFresh = async (token, siteId, data, type, name) => {
+    const http = await import('node:http');
+    const boundary = `----matrice${Date.now().toString(16)}`;
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="_payload"\r\n\r\n${JSON.stringify({ site: siteId })}\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\nContent-Type: ${type}\r\n\r\n`),
+      Buffer.from(data),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    return new Promise((resolve) => {
+      let status = 0;
+      const chunks = [];
+      const done = (error) => {
+        let json = null;
+        try { json = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { /* non-JSON */ }
+        resolve({ status, json, ...(error ? { error } : {}) });
+      };
+      const r = http.request(`${BASE}/api/media`, {
+        method: 'POST',
+        agent: false,
+        headers: { Origin: ORIGIN, Cookie: `payload-token=${token}`, 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': body.length },
+      }, (res) => {
+        status = res.statusCode;
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => done());
+        res.on('error', (err) => done(err.message));
+      });
+      // Connexion coupée par le serveur pendant l'envoi : le statut déjà reçu fait foi
+      r.on('error', (err) => done(err.message));
+      r.end(body);
+    });
   };
   const payloadSiteId = async (slug) => (await req(`/api/payload_sites?where[slug][equals]=${slug}&depth=0`, { token: admin.token })).json?.docs?.[0]?.id;
   const raw = (p, headers = {}) => fetch(`${BASE}${p}`, { headers: { Origin: ORIGIN, ...headers } });
@@ -755,10 +847,11 @@ if (admin.token) {
 
       const big = Buffer.alloc(9 * 1024 * 1024, 0);
       pixel.copy(big);
-      const bigUp = await upload(client.token, ownId, big, 'image/png', 'enorme.png');
-      check('Media : PNG de 9 Mo -> 413', bigUp.status === 413, `HTTP ${bigUp.status}`);
+      const bigUp = await uploadFresh(client.token, ownId, big, 'image/png', 'enorme.png');
+      check('Media : PNG de 9 Mo -> 413', bigUp.status === 413, `HTTP ${bigUp.status}${bigUp.error ? ` ${bigUp.error}` : ''}`);
       if (bigUp.json?.doc?.id) await req(`/api/media/${bigUp.json.doc.id}`, { method: 'DELETE', token: admin.token });
 
+      const since = Date.now() - 2000;
       const ok = await upload(client.token, ownId, pixel, 'image/png', 'pixel-lot2.png');
       check('Media : PNG 1 px -> 201', ok.status === 201, `HTTP ${ok.status}`);
       const filename = ok.json?.doc?.filename;
@@ -768,6 +861,12 @@ if (admin.token) {
         check('Media : fichier servi avec Cache-Control private', file.status === 200 && cache.includes('private'), `HTTP ${file.status} ${cache}`);
       }
       if (ok.json?.doc?.id) await req(`/api/media/${ok.json.doc.id}`, { method: 'DELETE', token: admin.token });
+      if (filename) {
+        const added = await findAudit({ action: 'media.', target: 'boulangerie-artisanale' }, (d) => d.action === 'media.ajout' && d.actor === 'client@client.com' && (d.details || '').includes(filename), since);
+        check('Audit : téléversement tracé (media.ajout)', Boolean(added), JSON.stringify(added?.details));
+        const removed = await findAudit({ action: 'media.', target: 'boulangerie-artisanale' }, (d) => d.action === 'media.suppression' && d.actor === 'admin@admin.com' && (d.details || '').includes(filename), since);
+        check('Audit : suppression de média tracée (media.suppression)', Boolean(removed), JSON.stringify(removed?.details));
+      }
     }
   }
 
@@ -1109,12 +1208,33 @@ if (admin.token) {
   }
 }
 
+// ---- Contrôles par thème : tests/security-checks/*.mjs (ordre des noms) ----
+{
+  const { readdirSync } = await import('node:fs');
+  const dir = new URL('./security-checks/', import.meta.url);
+  for (const name of readdirSync(dir).filter((n) => n.endsWith('.mjs')).sort()) {
+    const mod = await import(new URL(name, dir).href);
+    await mod.default({ BASE, ORIGIN, ADMIN_PASSWORD, CLIENT_PASSWORD, req, check, login, admin, client });
+  }
+}
+
 // ---- Rate-limit login (EN DERNIER : consomme le budget d'échecs de l'IP) ----
 // Les connexions réussies ne comptent pas (skipSuccessfulRequests) : seules les
 // tentatives ratées ci-dessous épuisent le quota jusqu'au 429. On cible un email
 // INEXISTANT : le rate-limit par IP se déclenche quand même (échecs = 401), mais on
 // évite de verrouiller un compte réel (Payload lock maxLoginAttempts).
 {
+  // Chemin encodé (/api/users/%6Cogin, servi par Next comme /api/users/login) : même
+  // limiteur, même compteur que le chemin canonique
+  let encoded429 = false;
+  let encodedAttempts = 0;
+  for (let i = 0; i < 20 && !encoded429; i++) {
+    encodedAttempts++;
+    const r = await req('/api/users/%6Cogin', { method: 'POST', body: { email: 'rate-limit-probe@nulle-part.example', password: 'mauvais-mot-de-passe' } });
+    if (r.status === 429) encoded429 = true;
+  }
+  check('Rate-limit : chemin de login encodé aussi limité -> 429', encoded429, `429 après ${encodedAttempts} essais`);
+
   let saw429 = false;
   let attempts = 0;
   for (let i = 0; i < 20 && !saw429; i++) {

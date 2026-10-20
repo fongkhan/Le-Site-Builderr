@@ -51,6 +51,16 @@ test('generateHtaccess — cache long des ressources Astro, court pour le HTML',
   assert.match(conf, /\\\.html\$"[\s\S]*?max-age=300/);
 });
 
+test('generateHtaccess — en-têtes de sécurité sous <IfModule mod_headers.c>', () => {
+  const conf = generateHtaccess();
+  const start = conf.indexOf('<IfModule mod_headers.c>');
+  const headers = conf.slice(start, conf.indexOf('</IfModule>', start));
+  assert.match(headers, /^ {2}Header always set X-Content-Type-Options "nosniff"$/m);
+  assert.match(headers, /^ {2}Header always set Referrer-Policy "strict-origin-when-cross-origin"$/m);
+  assert.match(headers, /^ {2}Header always set X-Frame-Options "SAMEORIGIN"$/m);
+  assert.match(headers, /^ {2}Header always set Content-Security-Policy "frame-ancestors 'self'"$/m);
+});
+
 test('sitemap — la page 404 du template n’y figure jamais (page CMS « 404 » réservée)', () => {
   // La fixture contient une page fr d'adresse « 404 » (masquée par la page d'erreur du
   // template) et une page en/404 (générée normalement) : mêmes routes que writeSeoFiles.

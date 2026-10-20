@@ -18,6 +18,7 @@ const SITE_SECTIONS: Record<string, string> = {
   blog: 'Blog',
   deploy: 'Déploiement',
   messages: 'Messages',
+  legal: 'Infos légales',
 };
 
 export function routeTitle(pathname: string, siteName?: string): string {

@@ -1,6 +1,8 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom'
+// Police de l'interface auto-hébergée (avant la feuille globale qui l'utilise)
+import '@fontsource-variable/outfit/wght.css'
 import './index.css'
 import { AuthProvider } from './auth/AuthContext'
 import { RequireAuth } from './auth/RequireAuth'
@@ -47,6 +49,7 @@ const router = createBrowserRouter([
                   { path: 'blog', lazy: async () => ({ Component: (await import('./features/blog/BlogPage')).BlogPage }) },
                   { path: 'deploy', lazy: async () => ({ Component: (await import('./features/deploy/DeployPage')).DeployPage }) },
                   { path: 'messages', lazy: async () => ({ Component: (await import('./features/messages/MessagesPage')).MessagesPage }) },
+                  { path: 'legal', lazy: async () => ({ Component: (await import('./features/legal/LegalPage')).LegalPage }) },
                 ],
               },
               {

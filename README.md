@@ -9,7 +9,7 @@ Plateforme d'industrialisation et de génération automatique de sites web compo
 Le projet est conçu en trois couches :
 
 1. **L'Orchestrateur (SaaS UI)** — Application React 19 / Vite (port 5173), routée par URL (`react-router`), **protégée par login**. C'est le tableau de bord : liste de sites, onboarding IA, design, contenu, déploiement, et panel d'administration (admins uniquement).
-2. **Le Serveur (Backend)** — Node.js / Express + Next.js 15 + Payload CMS v3 (port 4000). Gère les données (PostgreSQL via Drizzle), l'**authentification et les rôles**, l'API sites/pages/thèmes, les appels IA et le webhook de build avec verrou.
+2. **Le Serveur (Backend)** — Node.js / Express + Next.js 16 + Payload CMS v3 (port 4000). Gère les données (PostgreSQL via Drizzle), l'**authentification et les rôles**, l'API sites/pages/thèmes, les appels IA et le webhook de build avec verrou.
 3. **Le Template Client (Astro)** — Projet Astro (SSG) injectant les tokens de design et les blocs de contenu au moment du build.
 
 Organisation du serveur (`server/`) :
@@ -19,8 +19,8 @@ Organisation du serveur (`server/`) :
 | `index.js` | Point d'entrée : chargement de l'environnement, garde-fous de démarrage, Next + Payload, écoute du port |
 | `express-app.js` | Assemblage d'Express dans l'ordre de montage (CORS, en-têtes, limiteurs, JSON, statiques, routes, Next, erreurs) |
 | `core/` | Socle transverse : configuration et chemins, instance Payload et comptes initiaux, driver d'hébergement, HTTP (erreurs, limiteurs, routeurs protégés), audit, email, journal de build |
-| `services/` | Règles métier sans Express : contenu (pages, articles, thème), sites (domaine, confinement, propriétaires), pipeline de build (verrou, file, déploiement atomique), sauvegardes |
-| `routes/` | Endpoints HTTP par domaine : `sites`, `admin`, `content`, `domains`, `public` (contact, statistiques), `ai`, `build` |
+| `services/` | Règles métier sans Express : contenu (pages, articles, thème), médiathèque, messages reçus, sites (domaine, confinement, propriétaires), pipeline de build (verrou, file, déploiement atomique), sauvegardes et restauration, rétention, panneau Système |
+| `routes/` | Endpoints HTTP par domaine : `health` (sondes de santé), `sites`, `admin`, `system` (panneau Système), `content`, `media` (médiathèque), `domains`, `legal` (informations légales), `public` (contact, statistiques), `ai`, `build` |
 | `lib/` | Fonctions pures testées unitairement (slugs, chemins, thème, SEO, i18n, médias, domaines, offres…) |
 
 ---
@@ -53,6 +53,17 @@ En production, l'email de l'admin initial est **obligatoire** (`SEED_ADMIN_EMAIL
 - Changer de mot de passe révoque les autres sessions ouvertes (la session courante est conservée si l'utilisateur modifie son propre compte) ; une réinitialisation les révoque toutes.
 - Cookie de session `Secure` en production (`COOKIE_SECURE=true|false` pour forcer).
 - Les chemins serveur d'un site (`documentRoot`, `repositoryPath`) et le jeton de vérification de domaine ne sont lisibles que par un admin.
+
+### Journal d'audit
+
+Le panneau d'administration (« 🧾 Journal d'audit ») liste les actions sensibles, des plus récentes aux plus anciennes :
+- **Comptes** : création, modification (email, rôles, offre, quota IA, sites rattachés, mot de passe — mention « modifié », jamais la valeur), suppression, déverrouillage ; demande et réalisation d'une réinitialisation de mot de passe.
+- **Connexions** : chaque échec (email **masqué**, ex. `je***@exemple.fr`, et motif : identifiants refusés ou compte verrouillé) ; les connexions réussies des admins (de tous les comptes avec `AUDIT_LOGINS=true`).
+- **Sites et contenus** : sites (création, suppression, duplication, domaine…), pages créées ou supprimées, modifications du thème, articles, médias téléversés ou supprimés, publications, sauvegardes.
+
+Aucun secret, jeton, mot de passe ni adresse IP n'y est écrit. Le panneau filtre par catégorie et par cible exacte (slug d'un site ou email) et charge les entrées par pages (« Charger plus »). Les entrées ne sont ni modifiables ni supprimables, ni par l'API ni par le panel Payload : seule la purge de rétention du serveur les retire, une fois par jour, au-delà de `AUDIT_RETENTION_DAYS` jours (365 par défaut, `0` = jamais) ; chaque purge est elle-même tracée (`journal.purge`). L'historique des builds suit la même règle avec `BUILDS_RETENTION_DAYS`.
+
+Les limiteurs de connexion et de réinitialisation de mot de passe s'appliquent quelle que soit la forme du chemin (casse, caractères encodés, segments `.` et `..` même encodés, `/` répétés ou final), comme le message d'échec unifié. L'API GraphQL de Payload est désactivée (l'orchestrateur et le panel n'utilisent que l'API REST). En CI, `npx tsx tests/auth-empty-db-check.mjs` vérifie sur une base vide temporaire qu'aucun premier compte ne peut être créé anonymement.
 
 ---
 
@@ -136,9 +147,78 @@ En dev, le front proxifie `/api`, `/webhook`, `/preview`, `/admin` et `/_next` v
 | Le login échoue avec une erreur **503** | PostgreSQL injoignable ou `server/.env` absent/incomplet | `docker compose up -d`, puis vérifiez `DATABASE_URI` dans `server/.env` et relancez |
 | `crypto.hash is not a function` ou Vite/Astro refuse de démarrer | Node trop ancien (< 22.12) | Installez Node 22 LTS (`node -v` pour vérifier) |
 | `Cannot find module './vendor-chunks/...'` ou erreurs `MODULE_NOT_FOUND` dans `.next` | Cache Next.js corrompu (kill brutal, double serveur) | Arrêtez tout, `rm -rf server/.next`, relancez `npm start` |
-| `EADDRINUSE` port 4000 ou 5173 | Un ancien process tourne encore | Tuez-le (`npx kill-port 4000 5173` ou via le gestionnaire de tâches) |
+| `EADDRINUSE` port 4000 ou 5173 | Un ancien process tourne encore (lancé hors du lanceur, ou tué brutalement) | Le lanceur attend désormais l'arrêt du serveur avant de rendre la main ; sinon tuez le process restant (`npx kill-port 4000 5173` ou via le gestionnaire de tâches) |
 | Premier démarrage très long (~1 min) sans erreur | Normal : push du schéma Payload + seed des comptes | Patientez jusqu'à « Serveur Meta-Builder démarré » |
 | `role "postgres" does not exist` / `database "metabuilder_db" does not exist` (option B) | Base ou utilisateur jamais créés | Créez la base (étape 2, option B) ou passez à Docker (option A) |
+
+---
+
+## 🏭 Déployer le serveur en production
+
+En production, **un seul process** sert tout sur la même origine : l'interface de l'orchestrateur (`/`, compilée dans `orchestrator/dist`), l'admin Payload (`/admin`), l'API (`/api`), les aperçus (`/preview`) et les brouillons (`/draft`). Le schéma de la base est créé et mis à jour par des **migrations versionnées** (`server/migrations/`), appliquées au démarrage.
+
+**1. Base PostgreSQL dédiée et neuve.** Jamais la base de développement : `npm start` y pousse le schéma automatiquement, et le démarrage de production la refuse (voir « Base de développement existante » ci-dessous pour l'adopter).
+
+**2. `server/.env`** (en plus de `DATABASE_URI` et `PAYLOAD_SECRET`) :
+```bash
+SEED_ADMIN_EMAIL=admin@mondomaine.fr        # premier administrateur (créé au premier démarrage)
+SEED_ADMIN_PASSWORD=une-phrase-de-passe-longue   # 12 caractères minimum
+FRONTEND_ORIGIN=https://builder.mondomaine.fr     # adresse publique de CE serveur (en premier)
+PUBLIC_API_URL=https://builder.mondomaine.fr      # utilisée par les sites publiés (contact, statistiques)
+TRUST_PROXY=1                                     # derrière un reverse-proxy (nginx, o2switch…)
+# COOKIE_SECURE=false                             # seulement pour une recette en HTTP simple
+# SERVE_ORCHESTRATOR=false                        # si l'interface est hébergée ailleurs
+```
+`FRONTEND_ORIGIN` **doit** contenir l'adresse publique du serveur : sinon la protection CSRF de Payload ignore la session des requêtes de l'interface et de `/admin` (connexion acceptée, puis 401/403). La première valeur sert aussi aux liens envoyés par email (réinitialisation du mot de passe). Le cookie de session est `Secure` en production : servez le site en HTTPS.
+
+**3. Installation et builds** (sans `NODE_ENV=production` à ce stade : `npm ci` omettrait TypeScript, requis par le build) :
+```bash
+(cd server && npm ci) && (cd orchestrator && npm ci) && (cd client-template && npm ci)
+(cd orchestrator && npm run build)   # interface → orchestrator/dist
+(cd server && npm run build)         # build Next (admin Payload) → server/.next ; lit server/.env, sans connexion à la base
+```
+
+**4. Lancement** : `cd server && npm run start:prod` (mode production sur toutes les plateformes, sans variable à poser). Au démarrage : migrations en attente appliquées, administrateur `SEED_ADMIN_EMAIL` créé seulement s'il n'existe encore aucun administrateur (supprimé ou renommé ensuite, il n'est jamais recréé ; `SEED_ADMIN_PASSWORD` peut alors être retiré du `.env`), puis écoute du port. Sonde de disponibilité : `GET /api/health/ready`. Sous un superviseur, régler le délai d'arrêt **au-dessus** de `SHUTDOWN_GRACE_MS` (15 s par défaut en production) :
+```ini
+# /etc/systemd/system/meta-builder.service
+[Unit]
+Description=Meta-Builder (serveur)
+After=network.target postgresql.service
+
+[Service]
+User=metabuilder
+WorkingDirectory=/srv/meta-builder/server
+ExecStart=/usr/bin/node --import tsx index.js --production
+Restart=on-failure
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+```
+Avec PM2, depuis `server/` : `pm2 start index.js --name meta-builder --node-args="--import tsx" --kill-timeout 30000 -- --production`. Sous un superviseur, lancer `node --import tsx` directement plutôt que `npm run start:prod` (un signal d'arrêt adressé au seul process `npm` n'est pas relayé au serveur) ou que la CLI `tsx` (elle tue le serveur par SIGKILL s'il est occupé au moment du signal, par exemple pendant la copie d'un déploiement).
+
+**5. Mise à jour** :
+1. **sauvegarde de la base** (`pg_dump -Fc <base> > avant-maj.dump`) et des dossiers de données (`server/uploads`, `server/data`, `backups`) ;
+2. `git pull` puis `npm ci` dans `server`, `orchestrator` et `client-template` (depuis une 2.3.0 qui a déjà publié un site, faire d'abord `git checkout -- client-template/src/styles/theme.css` : ce fichier est désormais généré au build et ignoré par git) ;
+3. builds (`orchestrator` puis `server`, étape 3) ;
+4. redémarrage : les nouvelles migrations s'appliquent au démarrage. Une migration en échec arrête le serveur (aucune requête servie) : restaurez la sauvegarde ou corrigez, puis relancez.
+
+**Base de développement existante** : démarrez-la une fois en développement avec **la même version** (`npm start` : schéma synchronisé), arrêtez, puis `cd server && npm run migrate:baseline`. La commande vérifie que la base correspond au schéma de cette version, marque les migrations comme appliquées et retire la marque du mode développement ; `npm run start:prod` l'accepte ensuite. Les comptes de démonstration éventuels (`admin@admin.com`, `client@client.com`) sont signalés : changez leurs mots de passe ou supprimez-les.
+
+**Règle** : toute modification d'une collection (`payload.config.ts`) exige sa migration, générée puis committée avec le code : `cd server && npm run migrate:create -- <nom>` (fichiers `.ts`, `.json` et `index.ts` de `server/migrations/`, jamais écrits à la main). La CI le vérifie (`npm run migrate:check`, sans base ni réseau). Autres commandes : `npm run migrate` (appliquer), `npm run migrate:status` (état). Une colonne ou une table renommée fait poser une question par drizzle-kit : hors terminal interactif (CI, hook git), la commande échoue (code 1) au lieu d'attendre ; lancez alors `migrate:create` dans un terminal. Après une mise à jour de Payload ou l'ajout d'un composant d'administration, `cd server && npx tsx scripts/migrate.js importmap` régénère `app/(payload)/admin/importMap.js` (à committer ; `npm test` vérifie qu'il est à jour).
+
+| Symptôme | Cause | Solution |
+|---|---|---|
+| `Build de production absent (server/.next)` | `npm run build` jamais lancé dans `server/` (ou `.next` supprimé) | `cd server && npm run build`, puis redémarrer |
+| `Base créée en mode développement` | Base créée ou utilisée par `npm start` (schéma poussé automatiquement) | Base neuve, ou adoption avec `npm run migrate:baseline` (ci-dessus) |
+| `orchestrator/dist absent` au démarrage | Interface non construite | `cd orchestrator && npm run build`, ou `SERVE_ORCHESTRATOR=false` si elle est hébergée ailleurs |
+| Connexion acceptée puis 401/403 dans l'interface ou `/admin` | `FRONTEND_ORIGIN` ne contient pas l'adresse publique du serveur | Ajouter l'adresse (`https://…`, sans `/` final) puis redémarrer |
+| `Schéma modifié sans migration` (CI ou `migrate:check`) | Collection modifiée sans migration | `npm run migrate:create -- <nom>` et committer les fichiers générés |
+| `Question sans réponse` (`migrate:*` hors terminal) | Colonne ou table renommée : drizzle-kit demande s'il s'agit d'un renommage | `npm run migrate:create -- <nom>` dans un terminal interactif, répondre, committer |
+
+**Conteneur** (facultatif) : `docker compose --profile prod up -d --build` construit l'image du `Dockerfile` (dépendances, builds de l'orchestrateur et du serveur) et lance le serveur sur `http://127.0.0.1:4000` avec une base dédiée `metabuilder_prod` (créée et migrée au premier démarrage) ; réglages lus dans `server/.env` (étape 2), données dans des volumes nommés. `docker compose up -d` seul ne lance toujours que la base de développement.
+
+Le démarrage en développement (`npm start`) n'écrase plus le build de production (Next 16 le place dans `server/.next/dev`). Fichiers : `server/migrations/` (migrations générées), `server/scripts/migrate.js` (commandes `migrate:*` : le CLI `npx payload migrate` ne démarre pas sur ce projet CommonJS), `scripts/audit-gate.mjs` et `security/audit-allowlist.json` (garde d'audit, ci-dessous).
 
 ---
 
@@ -179,23 +259,44 @@ Ce que fait le mode cPanel :
 ### 1. Tunnel d'Onboarding IA
 * Besoin métier en langage naturel + choix des fonctionnalités (e-commerce, blog, multi-boutique).
 * Inspiration graphique : ambiance prédéfinie, image/logo (vision IA) ou URL de référence.
-* Fournisseurs : OpenAI (`gpt-4o-mini`), Anthropic (`claude-3-5-sonnet`), Google (`gemini-2.5-flash`) — défaut : `DEFAULT_PROVIDER` (openai).
+* Fournisseurs : OpenAI (`gpt-4o-mini`), Anthropic (`claude-opus-5-5`), Google (`gemini-2.5-flash`), modèles surchargeables par `OPENAI_MODEL`, `ANTHROPIC_MODEL` et `GEMINI_MODEL` — défaut : `DEFAULT_PROVIDER` (openai).
 * Génère la stack qualifiée, l'ébauche de page et la charte graphique, puis rattache le site au compte.
 
 ### 2. Design & thème
 * Ajustement des tokens (couleurs, polices, arrondis) avec aperçu en direct et statut « brouillon non sauvegardé ».
+* **Logo** choisi dans la médiathèque du site (jamais le fichier d'un autre site), affiché dans l'en-tête du site publié avec ses dimensions ; sans logo, le nom du site et une **icône d'onglet** générée (monogramme aux initiales du site, aux couleurs du thème).
+* **Contraste AA garanti pour le texte des boutons** (texte clair ou foncé choisi pour atteindre 4,5:1 sur la couleur principale et la couleur secondaire) ; **avertissements de lisibilité** à l'enregistrement, jamais bloquants, quand le texte sur le fond, la couleur primaire sur le fond ou le texte sur la couleur secondaire reste sous 4,5:1.
 * Application automatique dans `client-template/src/styles/theme.css` au build.
 
 ### 3. CMS par blocs
-* Éditeur de sections (Hero, Features, ProductGrid, Gallery, Témoignages, FAQ, Tarifs) : ajout, réordonnancement, duplication, édition, suppression (avec « Annuler » dans la notification).
+* Éditeur de sections, 11 types : Bannière (`hero`), Services (`features`), Produits (`product-grid`), Galerie (`gallery`), Témoignages (`testimonials`), FAQ (`faq`), Tarifs (`pricing`), Contact (`contact`), Prise de RDV (`appointment`), Infos pratiques (`info`), Pied de page (`footer`) : ajout, réordonnancement, duplication, édition, suppression (avec « Annuler » dans la notification).
+* **Liens des boutons** (bannière, formules, produits) : automatique (formulaire de contact ou de rendez-vous), formulaire de la page, page du site (y compris les pages légales générées), adresse web (nouvel onglet), téléphone ou email. Un lien refusé ou vers une page supprimée est ignoré au build (signalé dans le journal) : le bouton revient au formulaire.
 * **Annuler / rétablir** (boutons ou `Ctrl/Cmd+Z`, `Maj+Ctrl/Cmd+Z`) pendant la session d'édition.
-* **Menu du site** : ordre des pages réglable (monter / descendre) et page masquable du menu (toujours publiée, par ex. mentions légales).
+* **Menu du site** : ordre des pages réglable (monter / descendre) et page masquable du menu (toujours publiée) ; les mentions légales et la politique de confidentialité sont générées automatiquement, une page CMS à la même adresse reste prioritaire.
 * Aperçu WYSIWYG en temps réel avec les tokens du thème ; sauvegarde automatique ciblée (seules les pages modifiées sont écrites).
 * **Médiathèque** : images PNG, JPEG, WebP, GIF et AVIF (SVG refusé), `MEDIA_MAX_MB` (8 Mo par défaut), redimensionnées à 2400 px quand `sharp` est disponible.
 * Persistance dans Payload CMS (PostgreSQL) + fichiers JSON de fallback.
 
+### Médiathèque du site
+* **Parcourir et réutiliser** : le bouton 🖼️ de chaque champ image ouvre la médiathèque du site (vignettes, dimensions, poids, recherche au-delà de 8 images) ; « Choisir » place l'image dans le champ, sans nouveau téléversement.
+* **Texte alternatif** par image (200 caractères au plus), repris par le site publié pour chaque usage (galerie, produits, couvertures d'articles) ; vide, le bloc garde son texte de repli (nom du produit, « Photo N – titre »).
+* **Suppression contrôlée** : refusée tant que l'image est citée par une page (toutes langues) ou un article, **brouillons compris** — la médiathèque nomme les contenus concernés. La suppression (`DELETE /api/media/:id`) et le remplacement de fichier (`PATCH /api/media/:id`) par l'API REST Payload sont réservés aux admins.
+* Endpoints (admin ou propriétaire du site) : `GET /api/sites/:slug/media` (images et usages), `PATCH /api/sites/:slug/media/:id` (`{ alt }`), `DELETE /api/sites/:slug/media/:id` (409 si utilisée, journal d'audit `media.suppression`).
+* **Sites publiés** : le build lit le canal interne `/internal/site-media` (texte alternatif, dimensions, variantes) : chaque `<img>` de la médiathèque reçoit `width`/`height` (aucun décalage de mise en page) et un `srcset` de variantes 480, 960 et 1600 px (celles nettement plus petites que l'original) écrites au déploiement sous `/media/w<largeur>/` — seulement si `sharp` est disponible, sinon l'image d'origine seule (jamais de lien cassé). Couverture d'article prioritaire, fond du Hero en tête de page préchargé. Les noms des médias ignorés ou introuvables figurent dans le journal de build.
+
 ### Messages reçus
-* Chaque envoi du formulaire de contact ou de prise de rendez-vous d'un site publié est conservé (12 mois, 500 messages maximum par site) et consultable par son propriétaire dans l'onglet **Messages** : non lus, marquer comme lu, répondre par email, supprimer. Un email de notification en échec ne fait plus perdre le message.
+* Chaque envoi du formulaire de contact ou de prise de rendez-vous d'un site publié est conservé (12 mois, 500 messages maximum par site) et consultable par son propriétaire dans l'onglet **Messages** : non lus, marquer comme lu, répondre par email, supprimer. Un email de notification en échec ne fait plus perdre le message. Les messages de plus de 12 mois sont supprimés chaque jour par la purge de rétention, même si personne n'ouvre le site ; leur contenu n'est jamais écrit dans les journaux du serveur.
+
+### Mentions légales et confidentialité des sites publiés
+* **Pages générées** pour chaque site : « Mentions légales » (`/mentions-legales/`) et « Politique de confidentialité » (`/confidentialite/`), plus `/en/legal-notice/` et `/en/privacy-policy/` quand le site a un accueil en anglais (une page d'une langue sans accueil renvoie aux pages françaises). Elles ne figurent ni dans le menu ni dans le sitemap ; des liens discrets en bas de chaque page (404 et blog compris) y mènent, avec « Gérer les cookies » quand une mesure d'audience est active (et un lien vers la politique dans la bannière de consentement).
+* **Une page du CMS à la même adresse reste prioritaire** (ex. une page « mentions-legales » masquée du menu) : la page générée correspondante n'est pas construite, ce que le journal de build signale ; l'onglet « Infos légales » l'indique aussi.
+* **Onglet « Infos légales »** (propriétaire du site ou admin) : éditeur (raison sociale, forme juridique et capital, adresse, immatriculation, TVA, téléphone, email), directeur ou directrice de la publication, hébergeur ; champs obligatoires signalés (badge « ! » sur l'onglet), reprise de l'adresse, du téléphone et de l'email du bloc « Infos pratiques ». API : `GET`/`PUT /api/sites/:slug/legal` (objet complet validé : champs connus, texte borné, email et téléphones plausibles ; journal d'audit `site.informations-legales` sans les valeurs). La fiche du site reste réservée aux admins dans l'API REST Payload.
+* **Hébergeur par défaut** : `LEGAL_HOST_NAME`, `LEGAL_HOST_ADDRESS`, `LEGAL_HOST_PHONE` (serveur, voir `server/.env.example`), remplaçables champ par champ pour chaque site. Aucune adresse n'est écrite en dur.
+* **Contenu adapté au site** : formulaires présents, statistiques anonymes, mesure d'audience (après consentement) ou aucun cookie, droits et lien vers la CNIL. La durée de conservation des messages est dérivée de la rétention de la boîte de réception (365 jours → 12 mois). Les textes sont un modèle neutre : à faire vérifier si l'activité a des obligations particulières.
+* **Mention RGPD sous chaque formulaire** (finalité, durée de conservation, lien vers la politique de la langue de la page).
+* **Brouillon** : un champ obligatoire vide s'affiche « À compléter : … » ; **site publié** : la ligne est omise (raison sociale vide : nom du site) et le build journalise les manques.
+* **Erreurs du formulaire de contact traduites** : la réponse JSON porte un code stable (`unknown_site`, `invalid_fields` avec la liste `fields`, `invalid_body`, `too_large`, `rate_limited`, `send_failed`) que le script du site traduit, et les champs refusés sont signalés ; sans JavaScript, la page de réponse suit la langue du formulaire (`?lang=fr|en`), limiteur et corps trop volumineux compris.
+* **Schéma** : group `legal` de la collection `payload_sites` (11 colonnes `legal_*`), créé automatiquement hors production (push) et par la migration initiale en production (`server/migrations/`).
 
 ### 4. Pipeline de déploiement avec file d'attente
 * Webhook de build authentifié, verrou physique `build.lock` (nettoyé au boot si orphelin).
@@ -205,13 +306,37 @@ Ce que fait le mode cPanel :
 * **Reprise après crash** : au démarrage, un site écarté par une bascule interrompue (`<dossier>.old-…`) est restauré s'il manque, les copies partielles (`.tmp-…`) et les releases inachevées (`<id>.partial`) sont supprimées ; le scan d'import ignore ces dossiers.
 * Copie du bundle statique vers le `documentRoot` du site (simulation o2switch).
 
+### Exploitation : arrêt propre, reprise et panneau Système
+* **Arrêt propre** (`SIGTERM`, `SIGINT`, Ctrl+C) : le serveur cesse d'accepter des connexions, termine les requêtes en cours et attend les tâches de fond (historique, emails), au plus `SHUTDOWN_GRACE_MS` (15 s en production, 3 s sinon). Pendant l'arrêt, `GET /api/health/ready` répond `503 { "status": "stopping" }` ; un second signal (plus d'une seconde après le premier) force l'arrêt.
+* **Build interrompu repris au redémarrage** : un build en cours est arrêté et remis en tête de file, sans échec ni email ; un rollback ou une prévisualisation demandés pendant l'arrêt reçoivent un `503` explicite.
+* **File de publications conservée** dans `server/data/build-queue.json` à chaque changement et relancée au démarrage (les sites supprimés entre-temps sont écartés) : seul un arrêt brutal pendant un build perd ce build.
+* Régler le délai d'arrêt du superviseur **au-dessus** de `SHUTDOWN_GRACE_MS` (systemd `TimeoutStopSec`, `docker stop -t`, PM2 `kill_timeout`).
+* Le lanceur (`npm start`, `start.js`) démarre le serveur et l'orchestrateur sans shell intermédiaire et attend leur arrêt : plus de processus orphelin ni d'`EADDRINUSE` au redémarrage.
+* **Panneau Système** (administration) : version, Node, environnement, hébergement, durée de fonctionnement, espace disque, taille des dossiers (données, médiathèque, sites publiés, versions, brouillons, sauvegardes, dépôts), build et file d'attente, état des sauvegardes.
+* **Données orphelines** (fichiers de données, versions, brouillons et copies du modèle de sites supprimés) : listées puis nettoyées après confirmation (journal d'audit `maintenance.purge`). L'inventaire est recalculé par le serveur ; les dossiers publiés sans site et les dépôts non créés par l'outil sont seulement signalés, jamais supprimés. Nettoyage indisponible sans base de données.
+* La copie du modèle créée par l'outil pour un site (`repositories/<slug>`, marquée) est supprimée avec le site ; un dépôt importé ou préexistant est conservé. Un site créé sur les restes d'un ancien site (dossier publié, versions, données) reçoit un identifiant suffixé (`mon-site-2`).
+* Une page absente sous `/preview` ou `/draft` renvoie la page 404 du site (celle de la langue si elle existe).
+* Publication cPanel : délai d'envoi proportionnel à la taille de l'archive (`CPANEL_UPLOAD_TIMEOUT_MS` pour le fixer) et messages d'erreur explicites (étape, délai), sans hôte ni jeton.
+
 ### Supervision : endpoints de santé
 Publics, sans authentification, sans secret, version ni chemin dans la réponse :
 * `GET /api/health` — vivacité : `200 { "status": "ok", "uptimeS": 42 }` dès que le process répond.
 * `GET /api/health/ready` — disponibilité : `200` (`ok` ou `degraded`) ou `503` (`down`) avec `{ "status", "checks": { "database", "storage", "build": { "inProgress", "queueLength" } } }`. `database` exécute un `select 1` borné à 2 s ; `storage` vérifie l'accès en écriture aux données, à la production et à la médiathèque ; `build` est informatif. Le résultat est mis en cache 2 s : une sonde fréquente ne sollicite jamais la base à chaque appel et ne reçoit jamais de 429. À utiliser pour une sonde de disponibilité, un `HEALTHCHECK` Docker ou l'attente de démarrage en CI (`curl -fsS http://localhost:4000/api/health/ready`).
 
+### Sauvegardes et restauration
+* **Contenu sauvegardé** : fiches (informations légales comprises), pages, thèmes, articles et images téléversées de tous les sites avec leur texte alternatif, dans `backups/backup-<date>.zip` (une archive par sauvegarde, jamais écrasée même si deux sauvegardes tombent dans la même seconde).
+* **Réglages** : `BACKUP_ENABLED=true` active la planification (vérifiée au plus toutes les heures, quel que soit l'intervalle), `BACKUP_INTERVAL_HOURS` (24 par défaut), `BACKUP_KEEP` (14 archives planifiées ou manuelles conservées), `BACKUP_MEDIA=false` pour exclure les images (archives plus légères ; une restauration ne reprend alors que les images encore présentes). « Sauvegarder maintenant » reste disponible dans le panel d'administration.
+* **Sauvegardes de sécurité** (avant un remplacement ou la suppression d'un site) : `backups/backup-<date>-securite.zip`, conservées à part (`BACKUP_KEEP_SAFETY`, `BACKUP_KEEP` par défaut) : une série de suppressions ou de restaurations n'efface jamais l'historique planifié, et ne repousse pas la sauvegarde planifiée suivante.
+* **Restaurer…** (panel d'administration, « Sauvegardes du contenu ») : choisir un site de la sauvegarde, puis
+  * **copie** (recommandé) : nouveau site en brouillon « <nom> (restauration) » ; un site supprimé depuis est recréé sous son slug d'origine s'il est libre, sinon (dossier publié de l'ancien site conservé…) sous un slug suffixé (`mon-site-2`), annoncé avant la restauration. Le site actuel n'est pas modifié ; la copie n'est rattachée à aucun compte client (ni domaine personnalisé ni mesure d'audience restaurés) ;
+  * **remplacement** : pages, articles et thème du site existant remplacés, images manquantes restaurées, après une **sauvegarde de sécurité** de tous les sites et sous le créneau de build. Le site en ligne ne change qu'à la prochaine publication.
+* **Suppression d'un site** : une sauvegarde préalable de tous les sites est proposée (cochée par défaut) ; le site supprimé reste ainsi restaurable en copie.
+* Endpoints (admin) : `GET /api/admin/backups/sites?name=<archive>` (sites contenus, pages, articles, images) et `POST /api/admin/backups/restore` `{ name, slug, mode: "copy" | "replace" }`. Les archives de plus de 1 Go ne sont pas restaurables depuis l'interface : une sauvegarde de sécurité de cette taille est retirée, et la suppression ou le remplacement qu'elle devait protéger est refusé (`409`, rien n'est modifié).
+* **Export d'un site** (`GET /api/sites/:slug/export`) : `meta.json` porte aussi les informations légales, reprises (normalisées) par l'import d'archive.
+* La matrice de sécurité met à l'abri les archives existantes du serveur testé (liens physiques dans `backups/`) et les remet en place à la fin : la rétention appliquée aux sauvegardes qu'elle crée n'en supprime aucune.
+
 ### 5. Payload CMS v3 multi-tenant
-* Collections `users` (auth + rôles + quota IA), `payload_sites` (source de vérité), `pages` (blocs), `themes`, avec access control par rôle et ownership.
+* Collections `users` (auth, rôles, offre et quota IA), `payload_sites` (source de vérité des sites), `pages` (blocs), `posts` (articles), `themes`, `media` (médiathèque), `builds` (historique des publications), `audit_logs` (journal d'audit) et `submissions` (messages reçus), avec access control par rôle et ownership.
 * Panel d'administration Payload complet pour la gestion des comptes et des données.
 
 ### 6. Quotas IA & réinitialisation de mot de passe
@@ -219,17 +344,40 @@ Publics, sans authentification, sans secret, version ni chemin dans la réponse 
 * **Mot de passe oublié** : lien « Mot de passe oublié ? » → email de réinitialisation (SMTP ou, sans SMTP, lien loggé en console en mode dev) → page de nouveau mot de passe.
 
 ### 7. Durcissement HTTP & robustesse
-* **helmet** (en-têtes de sécurité ; CSP désactivée pour préserver l'admin Payload/Next) + **rate-limiting** : anti brute-force sur le login (seuls les échecs comptent), anti-abus sur l'onboarding IA et le webhook de build. `TRUST_PROXY` active la confiance au reverse-proxy pour l'IP client (off par défaut).
+* **helmet** (en-têtes de sécurité) + **rate-limiting** : anti brute-force sur le login (seuls les échecs comptent), anti-abus sur l'onboarding IA et le webhook de build. Les limiteurs de connexion et de réinitialisation du mot de passe (`RL_LOGIN_MAX`, `RL_PASSWORD_RESET_MAX`) s'appliquent quelle que soit la casse ou l'encodage du chemin ; l'API GraphQL de Payload est désactivée (voir « Journal d'audit »). `TRUST_PROXY` active la confiance au reverse-proxy pour l'IP client (off par défaut).
+* **CSP** : orchestrateur compilé (meta posée au build ; en production, servi par le serveur avec `frame-ancestors 'self'` en en-tête — à poser chez l'hébergeur si l'interface est servie ailleurs) ; sites publiés : meta CSP sans `'unsafe-inline'` (scripts et styles hachés par Astro), hôtes GA4/Matomo et origine de l'API autorisés automatiquement d'après le build (GA4 avec Google Signals : requêtes vers www.google.com/doubleclick bloquées). Pages HTML servies sous `/preview` et `/draft` : CSP sans plugin, sans `<base>` externe, jamais encadrées par un autre site ; SVG, XML et XSL en bac à sable sans script. L'admin Payload (Next) reste sans CSP (elle casserait ses ressources injectées).
+* **Polices auto-hébergées** : celles de l'orchestrateur sont servies localement et celles des thèmes chargées à la demande pour les aperçus ; aucune requête vers Google Fonts, ni depuis l'orchestrateur ni depuis les sites publiés.
+* **Sites publiés sur l'hébergement Apache** (cPanel) : `.htaccess` généré à chaque publication (page 404 du site, pas de listing de dossier, `nosniff`, `Referrer-Policy`, `X-Frame-Options` et `frame-ancestors 'self'`, cache des ressources et compression, directives sous `<IfModule>`).
 * **Confinement des chemins** : `documentRoot`/`repositoryPath` sont validés (jamais hors `public_html`/`repositories`) et les slugs vides sont rejetés — impossible de viser un dossier arbitraire au déploiement/suppression.
 * **Déploiement atomique** (copie vers dossier temporaire puis `rename` + rollback) et **verrou anti-concurrence** en mémoire fermant la fenêtre TOCTOU entre deux builds.
 * **Validation de thème** (couleurs hexadécimales, dimensions, polices en allowlist) avant écriture du CSS — anti-injection.
 * Les réponses `500` ne divulguent pas les détails internes ; toute exception d'une route est rendue en JSON (jamais de requête pendante) ; une exception non-capturée arrête le process en production (relance par le superviseur).
-* **API REST Payload verrouillée** : un client lit son site mais ne peut modifier ni ses paramètres de déploiement (chemins, domaine, statut) ni le site de rattachement d'une page, d'un article, d'un thème ou d'un média.
-* **Endpoints publics** (formulaire de contact, beacon de statistiques) : CORS ouvert à toute origine sans cookie, corps limité à 32 Ko (ailleurs : 10 Mo pour l'onboarding, 2 Mo pour pages, articles et thème, 256 Ko pour le reste), limiteurs dédiés ; mot de passe oublié / réinitialisation également limités.
+* **API REST Payload verrouillée** : un client lit son site mais ne peut modifier ni ses paramètres de déploiement (chemins, domaine, statut) ni le site de rattachement d'une page, d'un article, d'un thème ou d'un média, ni supprimer un média.
+* **Endpoints publics** (formulaire de contact, beacon de statistiques) : CORS ouvert à toute origine sans cookie, corps limité à 32 Ko (ailleurs : 10 Mo pour l'onboarding, 2 Mo pour pages, articles et thème, 256 Ko pour le reste), limiteurs dédiés ; mot de passe oublié / réinitialisation également limités (mot de passe oublié : deux demandes traitées à la fois, une fois leur corps reçu, les suivantes attendent leur tour ; corps limité à 8 Ko).
 * **Garde-fous de production** (`NODE_ENV=production`) : refus de démarrer avec `DEV_NO_AUTH`, aucun compte « password123 » (admin créé seulement avec un `SEED_ADMIN_PASSWORD` d'au moins 12 caractères), refus de démarrer sans compte admin (`SEED_ADMIN_EMAIL` et `SEED_ADMIN_PASSWORD` requis au premier démarrage), création anonyme de compte refusée, arrêt si la base est injoignable, secrets du serveur jamais transmis au build.
 
 ### Note dépendances — version de Next.js
-`@payloadcms/next@3.86` contraint Next à `>=15.4.11 <15.5.0` (puis `>=16.2.6`). Le projet est donc **épinglé à la dernière 15.4 disponible (`~15.4.11`)**, qui inclut déjà les correctifs de sécurité de la branche 15.4 (bien au-delà de CVE-2025-29927). Passer à Next 15.5/16 nécessiterait une montée coordonnée de Payload et de `@payloadcms/next` : migration majeure, hors périmètre de ce durcissement.
+* **Payload 3.91 et Next 16.4** (`~16.4.2`) : corrigent notamment les injections SQL de Payload, l'exécution de code à distance par l'optimiseur d'images AVIF de Next et la SSRF des Server Actions sur serveur personnalisé. `payload` et les paquets `@payloadcms/*` sont épinglés à la **même version exacte** ; pour monter de version, modifier ces versions et purger leurs entrées de `package-lock.json` avant `npm install` (refaire cette recette plutôt que résoudre un conflit de lock à la main).
+* **Optimiseur d'images de Next désactivé** (`images.unoptimized` dans `server/next.config.mjs`, et `/_next/image` répond 404 côté Express) : l'admin Payload ne l'utilise pas ; les images des sites sont redimensionnées par sharp (0.35) au téléversement.
+* **Garde d'audit** : `node scripts/audit-gate.mjs` (workflow « Audit des dépendances » : chaque lundi, à la demande et sur toute modification des dépendances) refuse toute vulnérabilité élevée ou critique des dépendances de production (`npm audit --omit=dev` de `server`, `orchestrator` et `client-template`) non couverte par une **exception datée** de `security/audit-allowlist.json` (paquet, identifiants GHSA, emplacements, justification, expiration à 6 mois au plus). Exceptions actuelles : `braces` (serveur, via sass épinglé par `@payloadcms/next`) ; `astro` et `sharp` (template : faille de l'optimisation d'images, `astro:assets` n'est pas utilisé — garde `client-template/scripts/checks/garde-astro-assets.mjs` —, correctif seulement en Astro 7). Une exception expirée ou devenue inutile est signalée.
+
+---
+
+## ✅ Tests et vérifications
+
+Commandes exécutées par la CI (`.github/workflows/ci.yml`, et `audit.yml` pour la garde d'audit), à lancer avant de proposer une modification.
+
+| Commande | Dossier | Ce qui est vérifié | Prérequis |
+|---|---|---|---|
+| `npm test` | `server` | Tests unitaires (`tests/unit/*.test.mjs`) : logique pure, routes et services simulés, inventaire des gardes de **toutes** les routes Express (`tests/unit/routes-guard.test.mjs` : toute nouvelle route doit être ajoutée à `EXPECTED` avec sa garde — `public`, `build`, `auth`, `site` ou `admin`), cohérence de cette documentation, de `server/.env.example` et des blocs (`tests/unit/docs-consistency.test.mjs`) | Aucun : ni PostgreSQL ni réseau |
+| `npm run lint` | `server` | ESLint (règles recommandées, `server/eslint.config.mjs`) | — |
+| `npm run typecheck` | `server` | TypeScript (`payload.config.ts`, `app/`, migrations), sans build Next | — |
+| `npm run migrate:check` | `server` | Schéma de `payload.config.ts` couvert par les migrations committées | Ni base ni réseau |
+| `npm run lint`, `npm test`, `npm run build` | `orchestrator` | ESLint, tests Vitest, typecheck et build Vite (CSP posée au build) | — |
+| `TEMPLATE_FIXTURE=$PWD/fixtures/site.json SITE_BASE_PATH=/preview/demo PUBLIC_SITE_URL=https://demo.example PUBLIC_SITE_NAME=Demo PUBLIC_SITE_LOGO=/media/logo-demo.png npm run build` puis `node scripts/check-fixture-build.mjs /preview/demo --logo=/media/logo-demo.png` ; idem à la racine (`SITE_BASE_PATH=/`, argument `/`) | `client-template` | Site de démonstration généré depuis la fixture : pages et blocs, liens préfixés par le chemin de base, structure accessible, puis modules `scripts/checks/*.mjs` (médias, boutons, identité, pages légales, CSP, raccordements, parité sitemap / pages générées…) | Variables des deux builds du job « Template Astro » |
+| `node tests/security-check.mjs` | `server` | Matrice de sécurité contre un serveur réel : rôles, ownership, limiteurs, en-têtes, médias, contact… (modules `tests/security-checks/*.mjs`) | Serveur démarré avec PostgreSQL et `AI_DAILY_QUOTA=0` (`BASE_URL` pour un autre port que 4000) |
+| `npx tsx tests/auth-empty-db-check.mjs` | `server` | Base vide : aucun premier compte créable anonymement, GraphQL désactivé, message de connexion unifié | PostgreSQL joignable par `DATABASE_URI` (droit `CREATE DATABASE` : base temporaire créée puis supprimée) |
+| `node scripts/audit-gate.mjs` | racine | Aucune vulnérabilité élevée ou critique des dépendances de production hors exceptions datées (`security/audit-allowlist.json`) | Accès au registre npm |
 
 ---
 

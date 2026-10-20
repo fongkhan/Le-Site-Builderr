@@ -38,6 +38,25 @@ describe('rendu des blocs', () => {
     expect(html).toContain('Demander un rendez-vous');
   });
 
+  it("l'éditeur Hero propose la médiathèque du site à côté du téléversement", () => {
+    const hero = BLOCK_DEFINITIONS.find((d) => d.type === 'hero')!;
+    const html = renderToString(
+      <ToastProvider>
+        <hero.Editor block={hero.defaults} siteSlug="mon-site" update={noop} />
+      </ToastProvider>,
+    );
+    expect(html).toContain('aria-label="Choisir dans la médiathèque"');
+    expect(html.indexOf('aria-label="Choisir dans la médiathèque"')).toBeLessThan(html.indexOf('aria-label="Téléverser une image"'));
+    // Fenêtre fermée par défaut : rien n'est chargé ni affiché
+    expect(html).not.toContain('Médiathèque du site');
+  });
+
+  it('aperçu Hero : police du thème auto-hébergée (version variable en tête de pile)', () => {
+    const hero = BLOCK_DEFINITIONS.find((d) => d.type === 'hero')!;
+    const html = renderToString(<hero.Preview block={hero.defaults} theme={DEFAULT_THEME} />);
+    expect(html).toContain('Playfair Display Variable');
+  });
+
   it('couleurs translucides valides même pour #RGB', () => {
     const faq = BLOCK_DEFINITIONS.find((d) => d.type === 'faq')!;
     const theme = { ...DEFAULT_THEME, colors: { ...DEFAULT_THEME.colors, secondary: '#abc' } };

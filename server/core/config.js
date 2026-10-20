@@ -20,6 +20,8 @@ const FRONTEND_ORIGINS = (process.env.FRONTEND_ORIGIN || 'http://localhost:5173'
 const DATA_DIR = path.join(SERVER_DIR, 'data');
 const LOGS_FILE = path.join(DATA_DIR, 'build-logs.txt');
 const SITES_FILE = path.join(DATA_DIR, 'sites.json');
+// File d'attente des builds conservée à l'arrêt (reprise au redémarrage)
+const BUILD_QUEUE_FILE = path.join(DATA_DIR, 'build-queue.json');
 
 const ASTRO_PROJECT_DIR = path.join(PROJECT_DIR, 'client-template');
 const DIST_DIR = path.join(ASTRO_PROJECT_DIR, 'dist');
@@ -35,11 +37,19 @@ const DRAFTS_DIR = path.join(PROJECT_DIR, 'drafts');
 const BACKUPS_DIR = path.join(PROJECT_DIR, 'backups');
 // Fichiers de la médiathèque (collection Payload « media », staticDir)
 const UPLOADS_DIR = path.join(SERVER_DIR, 'uploads');
+// Interface de l'orchestrateur compilée (npm run build dans orchestrator/) : servie par
+// ce serveur en production, sauf SERVE_ORCHESTRATOR=false (interface hébergée ailleurs)
+const ORCHESTRATOR_DIST_DIR = path.join(PROJECT_DIR, 'orchestrator', 'dist');
+const SERVE_ORCHESTRATOR = IS_PRODUCTION && process.env.SERVE_ORCHESTRATOR !== 'false';
 
 const DEPLOY_KEEP_RELEASES = envInt('DEPLOY_KEEP_RELEASES', 3);
+// Arrêt propre : attente maximale des requêtes en cours et d'une publication (ms)
+const SHUTDOWN_GRACE_MS = envInt('SHUTDOWN_GRACE_MS', IS_PRODUCTION ? 15000 : 3000);
 const BACKUP_KEEP = envInt('BACKUP_KEEP', 14);
 const BACKUP_INTERVAL_HOURS = envInt('BACKUP_INTERVAL_HOURS', 24);
 const BACKUP_ENABLED = process.env.BACKUP_ENABLED === 'true';
+// Images téléversées des sites incluses dans les sauvegardes (par défaut)
+const BACKUP_MEDIA = process.env.BACKUP_MEDIA !== 'false';
 
 // Dossiers qui doivent exister dès le boot : données, production simulée (cible du scan
 // par défaut, créée par aucun autre chemin avant le premier déploiement) et brouillons
@@ -72,6 +82,7 @@ module.exports = {
   DATA_DIR,
   LOGS_FILE,
   SITES_FILE,
+  BUILD_QUEUE_FILE,
   ASTRO_PROJECT_DIR,
   DIST_DIR,
   LOCK_FILE,
@@ -81,10 +92,14 @@ module.exports = {
   DRAFTS_DIR,
   BACKUPS_DIR,
   UPLOADS_DIR,
+  ORCHESTRATOR_DIST_DIR,
+  SERVE_ORCHESTRATOR,
   DEPLOY_KEEP_RELEASES,
+  SHUTDOWN_GRACE_MS,
   BACKUP_KEEP,
   BACKUP_INTERVAL_HOURS,
   BACKUP_ENABLED,
+  BACKUP_MEDIA,
   ensureRuntimeDirs,
   getSitePagesFile,
   getSiteThemeFile,

@@ -49,11 +49,11 @@ const { data } = Astro.props;
   }
 
   .feature-card {
-    background: #ffffff;
+    background: var(--color-surface);
     padding: 40px 30px;
     border-radius: var(--border-radius);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-    border: 1px solid rgba(0, 0, 0, 0.05);
+    border: 1px solid color-mix(in srgb, var(--color-text) 10%, transparent);
     transition: all 0.3s ease;
     text-align: left;
   }
@@ -84,7 +84,7 @@ const { data } = Astro.props;
   }
 
   .feature-card p {
-    color: #666;
+    color: var(--color-text-muted);
     font-size: 0.95rem;
   }
 </style>

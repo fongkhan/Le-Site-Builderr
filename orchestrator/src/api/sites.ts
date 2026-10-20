@@ -12,7 +12,9 @@ export function fetchSiteOwners(): Promise<Record<string, string[]>> {
   return apiFetch<Record<string, string[]>>('/api/sites/owners');
 }
 
-export function createSite(input: { name: string; domain?: string; stack?: string; documentRoot?: string; repositoryPath?: string }): Promise<{ success: boolean; site: Site }> {
+// renamedFrom : slug d'origine, occupé par les fichiers d'un ancien site (le site a reçu
+// un slug suffixé, ex. « mon-site-2 »)
+export function createSite(input: { name: string; domain?: string; stack?: string; documentRoot?: string; repositoryPath?: string }): Promise<{ success: boolean; site: Site; renamedFrom?: string }> {
   return apiFetch('/api/sites', { method: 'POST', body: JSON.stringify(input) });
 }
 
@@ -31,8 +33,14 @@ export interface RemoteRemoval {
   files?: RemoteRemovalStep;
 }
 
-export function deleteSite(slug: string, deleteFiles: boolean): Promise<{ success: boolean; message: string; remote?: RemoteRemoval | null }> {
-  return apiFetch(`${sitePath(slug)}?deleteFiles=${deleteFiles}`, { method: 'DELETE' });
+// backup : sauvegarde préalable de tous les sites (le site reste restaurable) ; son nom
+// est renvoyé dans `backup`.
+export function deleteSite(
+  slug: string,
+  deleteFiles: boolean,
+  { backup = false }: { backup?: boolean } = {},
+): Promise<{ success: boolean; message: string; remote?: RemoteRemoval | null; backup?: string | null }> {
+  return apiFetch(`${sitePath(slug)}?deleteFiles=${deleteFiles}&backup=${backup}`, { method: 'DELETE' });
 }
 
 // Duplication d'un site (admin) : crée un jumeau sous un nouveau slug

@@ -1,6 +1,8 @@
 // Envoi d'email générique. Même convention que le reset de mot de passe : sans
-// SMTP_HOST, le message est écrit dans la console (mode développement).
-const { envInt } = require('./config');
+// SMTP_HOST, le message est écrit dans la console en développement. En production, seul
+// l'objet est journalisé : le corps peut contenir des données personnelles (message
+// d'un visiteur), qui ne doivent pas finir dans les journaux du serveur.
+const { envInt, IS_PRODUCTION } = require('./config');
 
 let mailTransport = null;
 
@@ -10,7 +12,11 @@ async function sendMail(recipients, subject, text, { replyTo } = {}) {
   const emails = Array.isArray(recipients) ? recipients : [recipients];
   if (emails.length === 0) return;
   if (!process.env.SMTP_HOST) {
-    console.log(`📧 [Dev] ${subject} → ${emails.join(', ')}${replyTo ? ` (répondre à ${replyTo})` : ''}\n${text}`);
+    if (IS_PRODUCTION) {
+      console.warn(`📧 [Email] SMTP_HOST non configuré : « ${subject} » non envoyé (${emails.length} destinataire(s)).`);
+    } else {
+      console.log(`📧 [Dev] ${subject} → ${emails.join(', ')}${replyTo ? ` (répondre à ${replyTo})` : ''}\n${text}`);
+    }
     return;
   }
   if (!mailTransport) {

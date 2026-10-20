@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { onboard } from '../../api/onboarding';
 import { preferredProvider } from '../../api/ai';
 import { ApiError, errorMessage } from '../../api/client';
@@ -6,6 +6,8 @@ import { useSites } from '../../state/SitesContext';
 import { useConfig } from '../../state/ConfigContext';
 import { useToast } from '../../components/ui/ToastContext';
 import { EmptyState } from '../../components/ui/EmptyState';
+import { FieldError } from '../../components/ui/FieldError';
+import { firstInvalid, focusField, invalidProps, validateOnboarding, type FieldErrors } from '../../lib/formValidation';
 import { InspirationImage } from './InspirationImage';
 import { OnboardingResult } from './OnboardingResult';
 import type { AiProvider, FeatureFlags, OnboardingResult as Qualification } from '../../types';
@@ -26,10 +28,25 @@ const AMBIANCES = [
 
 const NO_FEATURES: FeatureFlags = { blog_or_news: false, e_commerce: false, multi_store: false };
 
+// Libellés des groupes de champs (styles des anciens libellés)
+const GROUP_LEGEND_STYLE = { fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: 10 } as const;
+const FIELD_LABEL_STYLE = { fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-main)' } as const;
+
 export function OnboardingPage() {
   const { refresh } = useSites();
   const { config, refresh: refreshConfig } = useConfig();
   const toast = useToast();
+  const uid = useId();
+  const ids = {
+    name: `${uid}-nom`,
+    description: `${uid}-activite`,
+    descriptionError: `${uid}-activite-erreur`,
+    image: `${uid}-image`,
+    imageError: `${uid}-image-erreur`,
+    url: `${uid}-url`,
+  };
+  const [errors, setErrors] = useState<FieldErrors<'description' | 'image'>>({});
+  const clearError = (field: 'description' | 'image') => setErrors((prev) => (prev[field] ? { ...prev, [field]: undefined } : prev));
 
   // Choix explicite de l'utilisateur ; sinon le fournisseur préféré de la configuration
   const [chosenProvider, setChosenProvider] = useState<AiProvider | null>(null);
@@ -53,12 +70,11 @@ export function OnboardingPage() {
 
   const handleSubmit = async () => {
     if (submitting.current || loading || quotaExhausted) return;
-    if (!description.trim()) {
-      toast.error("Décrivez votre activité : c'est la base de la génération.");
-      return;
-    }
-    if (inspirationType === 'image' && !uploadedImage) {
-      toast.error('Ajoutez une image ou un logo, ou choisissez une ambiance prédéfinie.');
+    const found = validateOnboarding({ description, inspirationType, image: uploadedImage });
+    setErrors(found);
+    const first = firstInvalid(['description', 'image'] as const, found);
+    if (first) {
+      focusField(first === 'description' ? ids.description : ids.image);
       return;
     }
     submitting.current = true;
@@ -140,14 +156,15 @@ export function OnboardingPage() {
             )}
 
             {config && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-muted)' }}>Modèle d'IA :</span>
+              <fieldset className="field-group">
+                <legend className="field-label" style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: 8 }}>Modèle d'IA :</legend>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                   {(Object.keys(PROVIDER_LABELS) as AiProvider[]).filter((p) => config.availableProviders[p]).map((p) => (
                     <button
                       key={p}
                       type="button"
                       onClick={() => setChosenProvider(p)}
+                      aria-pressed={provider === p}
                       className={`btn ${provider === p ? 'btn-primary' : 'btn-secondary'}`}
                       style={{ padding: '8px 16px', fontSize: '0.85rem' }}
                     >
@@ -155,12 +172,13 @@ export function OnboardingPage() {
                     </button>
                   ))}
                 </div>
-              </div>
+              </fieldset>
             )}
 
             <div>
-              <label className="field-label" style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-main)' }}>Nom du site / projet :</label>
+              <label className="field-label" htmlFor={ids.name} style={FIELD_LABEL_STYLE}>Nom du site / projet :</label>
               <input
+                id={ids.name}
                 type="text"
                 className="input-text"
                 style={{ padding: '10px 14px' }}
@@ -170,18 +188,22 @@ export function OnboardingPage() {
               />
             </div>
             <div>
-              <label className="field-label" style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-main)' }}>Activité et description :</label>
+              <label className="field-label" htmlFor={ids.description} style={FIELD_LABEL_STYLE}>Activité et description * :</label>
               <textarea
+                id={ids.description}
                 className="input-text"
                 rows={3}
+                required
                 value={description}
-                onChange={(e) => setDescription(e.target.value)}
+                onChange={(e) => { setDescription(e.target.value); clearError('description'); }}
                 placeholder="Décrivez votre activité, vos services ou produits…"
+                {...invalidProps(ids.descriptionError, errors.description)}
               />
+              <FieldError id={ids.descriptionError} message={errors.description} />
             </div>
 
-            <div>
-              <label className="field-label" style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: 10 }}>Fonctionnalités requises :</label>
+            <fieldset className="field-group">
+              <legend className="field-label" style={GROUP_LEGEND_STYLE}>Fonctionnalités requises :</legend>
               <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
                   <input type="checkbox" checked={features.e_commerce} onChange={(e) => setFeatures({ ...features, e_commerce: e.target.checked })} style={{ width: 18, height: 18 }} />
@@ -196,35 +218,64 @@ export function OnboardingPage() {
                   <span>Plusieurs boutiques physiques</span>
                 </label>
               </div>
-            </div>
+            </fieldset>
 
-            <div>
-              <label className="field-label" style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-main)', marginBottom: 10 }}>Inspiration graphique :</label>
+            <fieldset className="field-group">
+              <legend className="field-label" style={GROUP_LEGEND_STYLE}>Inspiration graphique :</legend>
               <div style={{ display: 'flex', gap: 10, marginBottom: 15 }}>
-                <button type="button" onClick={() => setInspirationType('preset')} className={`btn ${inspirationType === 'preset' ? 'btn-primary' : 'btn-secondary'}`} style={{ padding: '6px 12px', fontSize: '0.85rem', flex: 1 }}>
+                <button
+                  type="button"
+                  onClick={() => { setInspirationType('preset'); clearError('image'); }}
+                  aria-pressed={inspirationType === 'preset'}
+                  className={`btn ${inspirationType === 'preset' ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ padding: '6px 12px', fontSize: '0.85rem', flex: 1 }}
+                >
                   🎨 Ambiance prédéfinie
                 </button>
-                <button type="button" onClick={() => setInspirationType('image')} className={`btn ${inspirationType === 'image' ? 'btn-primary' : 'btn-secondary'}`} style={{ padding: '6px 12px', fontSize: '0.85rem', flex: 1 }}>
+                <button
+                  type="button"
+                  onClick={() => setInspirationType('image')}
+                  aria-pressed={inspirationType === 'image'}
+                  className={`btn ${inspirationType === 'image' ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ padding: '6px 12px', fontSize: '0.85rem', flex: 1 }}
+                >
                   📸 Depuis une image / un logo
                 </button>
               </div>
 
               {inspirationType === 'preset' ? (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
+                <div role="group" aria-label="Ambiance prédéfinie" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
                   {AMBIANCES.map((a) => (
-                    <button key={a.value} type="button" onClick={() => setAmbiance(a.value)} className={`btn ${ambiance === a.value ? 'btn-primary' : 'btn-secondary'}`} style={{ padding: 10, fontSize: '0.9rem' }}>
+                    <button
+                      key={a.value}
+                      type="button"
+                      onClick={() => setAmbiance(a.value)}
+                      aria-pressed={ambiance === a.value}
+                      className={`btn ${ambiance === a.value ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ padding: 10, fontSize: '0.9rem' }}
+                    >
                       {a.label}
                     </button>
                   ))}
                 </div>
               ) : (
-                <InspirationImage value={uploadedImage} onChange={setUploadedImage} />
+                <>
+                  <InspirationImage
+                    value={uploadedImage}
+                    onChange={(image) => { setUploadedImage(image); if (image) clearError('image'); }}
+                    inputId={ids.image}
+                    invalid={Boolean(errors.image)}
+                    describedBy={errors.image ? ids.imageError : undefined}
+                  />
+                  <FieldError id={ids.imageError} message={errors.image} />
+                </>
               )}
-            </div>
+            </fieldset>
 
             <div>
-              <label className="field-label" style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-main)' }}>URL d'un site d'inspiration (optionnel) :</label>
+              <label className="field-label" htmlFor={ids.url} style={FIELD_LABEL_STYLE}>URL d'un site d'inspiration (optionnel) :</label>
               <input
+                id={ids.url}
                 type="text"
                 className="input-text"
                 style={{ padding: '10px 14px' }}
@@ -234,7 +285,7 @@ export function OnboardingPage() {
               />
             </div>
 
-            <button className="btn btn-primary" onClick={handleSubmit} disabled={loading || quotaExhausted} style={{ width: '100%', padding: '14px 20px', fontSize: '1.05rem' }}>
+            <button type="button" className="btn btn-primary" onClick={handleSubmit} disabled={loading || quotaExhausted} style={{ width: '100%', padding: '14px 20px', fontSize: '1.05rem' }}>
               {loading ? '🧠 Analyse & génération par l\'IA…' :
                quotaExhausted ? '⛔ Quota IA journalier atteint' :
                '✨ Générer l\'ébauche & l\'architecture du site'}

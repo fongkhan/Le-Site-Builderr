@@ -20,6 +20,7 @@ export function PageSettings({ page, deleteBlocker, onRename, onDelete, canMoveU
   onToggleNav: (visible: boolean) => void;
 }) {
   const id = useId();
+  const emptyMessageId = `${id}-vide`;
   // Brouillon local : un titre vide n'est jamais envoyé (le serveur le refuserait)
   const [draft, setDraft] = useState(page.title);
   // Titre changé hors du champ (annuler/rétablir) : le brouillon suit
@@ -47,6 +48,7 @@ export function PageSettings({ page, deleteBlocker, onRename, onDelete, canMoveU
             value={draft}
             maxLength={120}
             aria-invalid={empty}
+            aria-describedby={empty ? emptyMessageId : undefined}
             onChange={(e) => {
               setDraft(e.target.value);
               if (e.target.value.trim()) onRename(e.target.value);
@@ -54,7 +56,7 @@ export function PageSettings({ page, deleteBlocker, onRename, onDelete, canMoveU
             onBlur={() => { if (empty) setDraft(page.title); }}
           />
           {empty && (
-            <span className="field-label" style={{ color: 'var(--accent-rose)', marginTop: 4 }}>
+            <span id={emptyMessageId} className="field-label" style={{ color: 'var(--accent-rose)', marginTop: 4 }}>
               Le titre ne peut pas être vide : « {page.title} » est conservé.
             </span>
           )}

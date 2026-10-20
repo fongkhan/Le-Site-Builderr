@@ -58,6 +58,53 @@ test('sanitizedEnv — secrets et connexions à la base filtrés, variables util
   assert.equal(out.PUBLIC_API_URL, 'https://api.example');
 });
 
+test('sanitizedEnv — noms réservés d’Astro/Vite et réglages du template jamais hérités', () => {
+  const env = { BASE_URL: 'http://localhost:4300', Base_Url: 'x', SITE: 'https://x', MODE: 'test', DEV: '1', PROD: '', SSR: '1', ASSETS_PREFIX: 'https://cdn', TEMPLATE_FIXTURE: '/tmp/f.json', PUBLIC_IS_DRAFT: '1', PATH: '/usr/bin', SITE_BASE_PATH: '/x', PUBLIC_API_URL: 'https://api.example' };
+  const out = build.sanitizedEnv(env);
+  for (const key of ['BASE_URL', 'Base_Url', 'SITE', 'MODE', 'DEV', 'PROD', 'SSR', 'ASSETS_PREFIX', 'TEMPLATE_FIXTURE', 'PUBLIC_IS_DRAFT']) {
+    assert.ok(!(key in out), `${key} ne doit pas être transmis au build`);
+  }
+  assert.equal(out.PATH, '/usr/bin');
+  assert.equal(out.SITE_BASE_PATH, '/x'); // remplacé ensuite par buildEnvFor
+  assert.equal(out.PUBLIC_API_URL, 'https://api.example');
+});
+
+test('buildEnvFor — BASE_URL, fixture et brouillon de l’environnement du serveur ignorés', () => {
+  const saved = Object.fromEntries(['BASE_URL', 'TEMPLATE_FIXTURE', 'PUBLIC_IS_DRAFT'].map((k) => [k, process.env[k]]));
+  Object.assign(process.env, { BASE_URL: 'http://localhost:4300', TEMPLATE_FIXTURE: '/tmp/fixture.json', PUBLIC_IS_DRAFT: '1' });
+  try {
+    const env = build.buildEnvFor({ name: 'Site', documentRoot: '' }, 'site');
+    assert.deepEqual(['BASE_URL', 'TEMPLATE_FIXTURE', 'PUBLIC_IS_DRAFT'].filter((k) => k in env), []);
+    assert.equal(env.SITE_BASE_PATH, '/preview/site');
+    assert.equal(build.buildEnvFor(null, 'site', { draft: true }).PUBLIC_IS_DRAFT, '1');
+  } finally {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
+
+test('buildEnvFor — mesure d’audience normalisée comme à l’écriture (saisie de l’admin Payload)', () => {
+  const site = { name: 'Site', domain: 's.example', analyticsProvider: 'matomo', analyticsId: '3', analyticsHost: 'Stats.Exemple.FR/' };
+  const env = build.buildEnvFor(site, 's');
+  assert.equal(env.PUBLIC_ANALYTICS_PROVIDER, 'matomo');
+  assert.equal(env.PUBLIC_ANALYTICS_ID, '3');
+  assert.equal(env.PUBLIC_ANALYTICS_HOST, 'stats.exemple.fr');
+  assert.equal(JSON.parse(env.PUBLIC_LEGAL_JSON).analyticsHost, 'stats.exemple.fr');
+  assert.equal(build.buildEnvFor({ ...site, analyticsProvider: 'GA4', analyticsId: 'g-abc123', analyticsHost: 'x' }, 's').PUBLIC_ANALYTICS_ID, 'G-ABC123');
+  // Configuration invalide : aucune mesure (ni bannière ni politique qui l'annonce)
+  for (const bad of [{ analyticsHost: 'stats.exemple.fr/chemin' }, { analyticsHost: '' }, { analyticsId: 'abc' }, { analyticsProvider: 'piwik' }]) {
+    const e = build.buildEnvFor({ ...site, ...bad }, 's');
+    assert.deepEqual([e.PUBLIC_ANALYTICS_PROVIDER, e.PUBLIC_ANALYTICS_ID, e.PUBLIC_ANALYTICS_HOST], ['', '', ''], JSON.stringify(bad));
+    assert.equal(JSON.parse(e.PUBLIC_LEGAL_JSON).analyticsProvider, '', JSON.stringify(bad));
+  }
+  // Brouillon : jamais chargée, mais annoncée par la politique du site publié
+  const draft = build.buildEnvFor(site, 's', { draft: true });
+  assert.equal(draft.PUBLIC_ANALYTICS_HOST, '');
+  assert.equal(JSON.parse(draft.PUBLIC_LEGAL_JSON).analyticsHost, 'stats.exemple.fr');
+});
+
 test('tryReserve — réservation exclusive, puis release', () => {
   assert.equal(build.isBusy(), false);
   assert.equal(build.tryReserve(), true);
@@ -183,4 +230,38 @@ test('brouillon — site supprimé pendant la compilation : aucun brouillon écr
   assert.equal(fs.existsSync(path.join(config.DRAFTS_DIR, 'supprime-en-brouillon')), false);
   assert.equal(build.isSiteBusy('supprime-en-brouillon'), false);
   assert.equal(build.isBusy(), false);
+});
+
+test('tryReserve(slug) — le site réservé (rollback, brouillon) est occupé jusqu’à release', () => {
+  assert.equal(build.isSiteBusy('reserve'), false);
+  assert.equal(build.tryReserve('reserve'), true);
+  assert.equal(build.isSiteBusy('reserve'), true);
+  assert.equal(build.isSiteBusy('autre'), false);
+  build.release();
+  assert.equal(build.isSiteBusy('reserve'), false);
+  // Sans slug : créneau réservé, aucun site occupé
+  assert.equal(build.tryReserve(), true);
+  assert.equal(build.isSiteBusy('reserve'), false);
+  build.release();
+});
+
+test('markDeleting / unmarkDeleting — suppression en cours visible jusqu’à la dernière fin', () => {
+  assert.equal(build.isSiteDeleting('en-suppression'), false);
+  build.markDeleting('en-suppression');
+  build.markDeleting('en-suppression'); // deux suppressions concurrentes
+  assert.equal(build.isSiteDeleting('en-suppression'), true);
+  assert.equal(build.isSiteDeleting('autre'), false);
+  build.unmarkDeleting('en-suppression');
+  assert.equal(build.isSiteDeleting('en-suppression'), true, 'la seconde suppression est encore en cours');
+  build.unmarkDeleting('en-suppression');
+  assert.equal(build.isSiteDeleting('en-suppression'), false);
+  assert.equal(build.isSiteDeleting(''), false);
+});
+
+test('buildHistoryExcerpt — chemins du serveur masqués, 1 500 derniers caractères', () => {
+  const excerpt = build.buildHistoryExcerpt(`${'x'.repeat(3000)}\nÉcrit dans ${path.join(config.PROJECT_DIR, 'client-template', 'dist')}`);
+  assert.ok(excerpt.length <= 1500);
+  assert.ok(!excerpt.includes(config.PROJECT_DIR), excerpt.slice(-200));
+  assert.match(excerpt, /Écrit dans \.\/client-template\/dist$/);
+  assert.equal(build.buildHistoryExcerpt(undefined), '');
 });
