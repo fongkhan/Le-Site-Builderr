@@ -4,6 +4,7 @@ const { getPayload } = require('payload');
 const sitesStore = require('../sites-store');
 const { IS_PRODUCTION } = require('./config');
 const { resolveSeedAdmin, missingAdminMessage } = require('../lib/seed');
+const { DEV_SCHEMA_MESSAGE, hasDevPushedSchema } = require('../lib/db-migrations');
 
 let payloadInstance = null;
 
@@ -68,6 +69,17 @@ async function seedUsers(payload) {
   }
 }
 
+// Production : migrations versionnées (server/migrations) appliquées avant toute requête.
+// Une base créée en mode développement (schéma poussé automatiquement) est refusée :
+// Payload y poserait une question interactive et le serveur resterait bloqué.
+async function applyProductionMigrations(payload) {
+  if (await hasDevPushedSchema(payload.db)) {
+    console.error(DEV_SCHEMA_MESSAGE);
+    process.exit(1);
+  }
+  await payload.db.migrate({ migrations: require('../migrations/index.ts').migrations });
+}
+
 async function initPayload() {
   if (process.env.DATABASE_URI) {
     try {
@@ -75,6 +87,14 @@ async function initPayload() {
       payloadInstance = await getPayload({
         config,
       });
+      if (IS_PRODUCTION) {
+        try {
+          await applyProductionMigrations(payloadInstance);
+        } catch (migrationErr) {
+          console.error(`❌ [Base] Migrations impossibles : ${migrationErr.message}`);
+          process.exit(1);
+        }
+      }
       console.log(`✔ [Payload CMS] Initialisé sur la base de données.`);
       // Payload devient la source de vérité : import one-way de sites.json (idempotent)
       await sitesStore.migrateFromJson();
@@ -96,4 +116,4 @@ async function initPayload() {
   }
 }
 
-module.exports = { getPayloadInstance, initPayload };
+module.exports = { getPayloadInstance, initPayload, applyProductionMigrations };

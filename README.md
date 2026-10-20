@@ -153,6 +153,74 @@ En dev, le front proxifie `/api`, `/webhook`, `/preview`, `/admin` et `/_next` v
 
 ---
 
+## 🏭 Déployer le serveur en production
+
+En production, **un seul process** sert tout sur la même origine : l'interface de l'orchestrateur (`/`, compilée dans `orchestrator/dist`), l'admin Payload (`/admin`), l'API (`/api`), les aperçus (`/preview`) et les brouillons (`/draft`). Le schéma de la base est créé et mis à jour par des **migrations versionnées** (`server/migrations/`), appliquées au démarrage.
+
+**1. Base PostgreSQL dédiée et neuve.** Jamais la base de développement : `npm start` y pousse le schéma automatiquement, et le démarrage de production la refuse (voir « Base de développement existante » ci-dessous pour l'adopter).
+
+**2. `server/.env`** (en plus de `DATABASE_URI` et `PAYLOAD_SECRET`) :
+```bash
+SEED_ADMIN_EMAIL=admin@mondomaine.fr        # premier administrateur (créé au premier démarrage)
+SEED_ADMIN_PASSWORD=une-phrase-de-passe-longue   # 12 caractères minimum
+FRONTEND_ORIGIN=https://builder.mondomaine.fr     # adresse publique de CE serveur (en premier)
+PUBLIC_API_URL=https://builder.mondomaine.fr      # utilisée par les sites publiés (contact, statistiques)
+TRUST_PROXY=1                                     # derrière un reverse-proxy (nginx, o2switch…)
+# COOKIE_SECURE=false                             # seulement pour une recette en HTTP simple
+# SERVE_ORCHESTRATOR=false                        # si l'interface est hébergée ailleurs
+```
+`FRONTEND_ORIGIN` **doit** contenir l'adresse publique du serveur : sinon la protection CSRF de Payload ignore la session des requêtes de l'interface et de `/admin` (connexion acceptée, puis 401/403). La première valeur sert aussi aux liens envoyés par email (réinitialisation du mot de passe). Le cookie de session est `Secure` en production : servez le site en HTTPS.
+
+**3. Installation et builds** (sans `NODE_ENV=production` à ce stade : `npm ci` omettrait TypeScript, requis par le build) :
+```bash
+(cd server && npm ci) && (cd orchestrator && npm ci) && (cd client-template && npm ci)
+(cd orchestrator && npm run build)   # interface → orchestrator/dist
+(cd server && npm run build)         # build Next (admin Payload) → server/.next ; lit server/.env, sans connexion à la base
+```
+
+**4. Lancement** : `cd server && npm run start:prod` (mode production sur toutes les plateformes, sans variable à poser). Au démarrage : migrations en attente appliquées, administrateur créé s'il n'en existe aucun, puis écoute du port. Sonde de disponibilité : `GET /api/health/ready`. Sous un superviseur, régler le délai d'arrêt **au-dessus** de `SHUTDOWN_GRACE_MS` (15 s par défaut en production) :
+```ini
+# /etc/systemd/system/meta-builder.service
+[Unit]
+Description=Meta-Builder (serveur)
+After=network.target postgresql.service
+
+[Service]
+User=metabuilder
+WorkingDirectory=/srv/meta-builder/server
+ExecStart=/usr/bin/node node_modules/tsx/dist/cli.mjs index.js --production
+Restart=on-failure
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+```
+Avec PM2, depuis `server/` : `pm2 start node_modules/tsx/dist/cli.mjs --name meta-builder --kill-timeout 30000 -- index.js --production`. Sous un superviseur, lancer cette commande directe plutôt que `npm run start:prod` : un signal d'arrêt adressé au seul process `npm` n'est pas relayé au serveur.
+
+**5. Mise à jour** :
+1. **sauvegarde de la base** (`pg_dump -Fc <base> > avant-maj.dump`) et des dossiers de données (`server/uploads`, `server/data`, `backups`) ;
+2. `git pull` puis `npm ci` dans `server`, `orchestrator` et `client-template` ;
+3. builds (`orchestrator` puis `server`, étape 3) ;
+4. redémarrage : les nouvelles migrations s'appliquent au démarrage. Une migration en échec arrête le serveur (aucune requête servie) : restaurez la sauvegarde ou corrigez, puis relancez.
+
+**Base de développement existante** : démarrez-la une fois en développement avec **la même version** (`npm start` : schéma synchronisé), arrêtez, puis `cd server && npm run migrate:baseline`. La commande vérifie que la base correspond au schéma de cette version, marque les migrations comme appliquées et retire la marque du mode développement ; `npm run start:prod` l'accepte ensuite. Les comptes de démonstration éventuels (`admin@admin.com`, `client@client.com`) sont signalés : changez leurs mots de passe ou supprimez-les.
+
+**Règle** : toute modification d'une collection (`payload.config.ts`) exige sa migration, générée puis committée avec le code : `cd server && npm run migrate:create -- <nom>` (fichiers `.ts`, `.json` et `index.ts` de `server/migrations/`, jamais écrits à la main). La CI le vérifie (`npm run migrate:check`, sans base ni réseau). Autres commandes : `npm run migrate` (appliquer), `npm run migrate:status` (état).
+
+| Symptôme | Cause | Solution |
+|---|---|---|
+| `Build de production absent (server/.next)` | `npm run build` jamais lancé dans `server/` (ou `.next` supprimé) | `cd server && npm run build`, puis redémarrer |
+| `Base créée en mode développement` | Base créée ou utilisée par `npm start` (schéma poussé automatiquement) | Base neuve, ou adoption avec `npm run migrate:baseline` (ci-dessus) |
+| `orchestrator/dist absent` au démarrage | Interface non construite | `cd orchestrator && npm run build`, ou `SERVE_ORCHESTRATOR=false` si elle est hébergée ailleurs |
+| Connexion acceptée puis 401/403 dans l'interface ou `/admin` | `FRONTEND_ORIGIN` ne contient pas l'adresse publique du serveur | Ajouter l'adresse (`https://…`, sans `/` final) puis redémarrer |
+| `Schéma modifié sans migration` (CI ou `migrate:check`) | Collection modifiée sans migration | `npm run migrate:create -- <nom>` et committer les fichiers générés |
+
+**Conteneur** (facultatif) : `docker compose --profile prod up -d --build` construit l'image du `Dockerfile` (dépendances, builds de l'orchestrateur et du serveur) et lance le serveur sur `http://127.0.0.1:4000` avec une base dédiée `metabuilder_prod` (créée et migrée au premier démarrage) ; réglages lus dans `server/.env` (étape 2), données dans des volumes nommés. `docker compose up -d` seul ne lance toujours que la base de développement.
+
+Le démarrage en développement (`npm start`) n'écrase plus le build de production (Next 16 le place dans `server/.next/dev`). Fichiers : `server/migrations/` (migrations générées), `server/scripts/migrate.js` (commandes `migrate:*` : le CLI `npx payload migrate` ne démarre pas sur ce projet CommonJS), `scripts/audit-gate.mjs` et `security/audit-allowlist.json` (garde d'audit, ci-dessous).
+
+---
+
 ## 🌍 Passer en production sur o2switch (API cPanel)
 
 Par défaut, tout est **simulé localement** (`HOSTING_DRIVER=simulation`) : domaine fictif, SSL fictif, publication dans `simulated_public_html/`. Pour publier **réellement** sur votre hébergement o2switch :
@@ -279,7 +347,9 @@ Publics, sans authentification, sans secret, version ni chemin dans la réponse 
 * **Garde-fous de production** (`NODE_ENV=production`) : refus de démarrer avec `DEV_NO_AUTH`, aucun compte « password123 » (admin créé seulement avec un `SEED_ADMIN_PASSWORD` d'au moins 12 caractères), refus de démarrer sans compte admin (`SEED_ADMIN_EMAIL` et `SEED_ADMIN_PASSWORD` requis au premier démarrage), création anonyme de compte refusée, arrêt si la base est injoignable, secrets du serveur jamais transmis au build.
 
 ### Note dépendances — version de Next.js
-`@payloadcms/next@3.86` contraint Next à `>=15.4.11 <15.5.0` (puis `>=16.2.6`). Le projet est donc **épinglé à la dernière 15.4 disponible (`~15.4.11`)**, qui inclut déjà les correctifs de sécurité de la branche 15.4 (bien au-delà de CVE-2025-29927). Passer à Next 15.5/16 nécessiterait une montée coordonnée de Payload et de `@payloadcms/next` : migration majeure, hors périmètre de ce durcissement.
+* **Payload 3.91 et Next 16.4** (`~16.4.2`) : corrigent notamment les injections SQL de Payload, l'exécution de code à distance par l'optimiseur d'images AVIF de Next et la SSRF des Server Actions sur serveur personnalisé. `payload` et les paquets `@payloadcms/*` sont épinglés à la **même version exacte** ; pour monter de version, modifier ces versions et purger leurs entrées de `package-lock.json` avant `npm install` (refaire cette recette plutôt que résoudre un conflit de lock à la main).
+* **Optimiseur d'images de Next désactivé** (`images.unoptimized` dans `server/next.config.mjs`, et `/_next/image` répond 404 côté Express) : l'admin Payload ne l'utilise pas ; les images des sites sont redimensionnées par sharp (0.35) au téléversement.
+* **Garde d'audit** : `node scripts/audit-gate.mjs` (workflow « Audit des dépendances » : chaque lundi, à la demande et sur toute modification des dépendances) refuse toute vulnérabilité élevée ou critique des dépendances de production (`npm audit --omit=dev` de `server`, `orchestrator` et `client-template`) non couverte par une **exception datée** de `security/audit-allowlist.json` (paquet, identifiants GHSA, emplacements, justification, expiration à 6 mois au plus). Exceptions actuelles : `braces` (serveur, via sass épinglé par `@payloadcms/next`) ; `astro` et `sharp` (template : faille de l'optimisation d'images, `astro:assets` n'est pas utilisé — garde `client-template/scripts/checks/garde-astro-assets.mjs` —, correctif seulement en Astro 7). Une exception expirée ou devenue inutile est signalée.
 
 ---
 

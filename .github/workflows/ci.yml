@@ -174,3 +174,175 @@ jobs:
       - name: Arrêter le serveur
         if: always()
         run: kill "$(cat server.pid)" 2>/dev/null || true
+
+  production:
+    name: Serveur — production (build, migrations, interface, matrice)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_DB: metabuilder_prod
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    # NODE_ENV n'est PAS défini ici : « npm ci » omettrait les devDependencies (typescript,
+    # requis par « next build »). Le mode production vient de « npm run start:prod ».
+    env:
+      DATABASE_URI: postgres://postgres:postgrespassword@127.0.0.1:5432/metabuilder_prod
+      PAYLOAD_SECRET: ci-prod-secret-0123456789abcdef0123456789abcdef
+      FRONTEND_ORIGIN: http://localhost:5173
+      PORT: 4000
+      AI_DAILY_QUOTA: '0'
+      SEED_ADMIN_EMAIL: admin@admin.com
+      SEED_ADMIN_PASSWORD: Ci-Prod-Admin-2026!
+      SEED_DEMO_CLIENT: 'true'
+      SEED_CLIENT_PASSWORD: Ci-Prod-Client-2026!
+      # Recette en HTTP simple : cookie de session sans l'attribut Secure
+      COOKIE_SECURE: 'false'
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            orchestrator/package-lock.json
+            server/package-lock.json
+      - name: Construire l'orchestrateur (servi par le serveur)
+        working-directory: orchestrator
+        run: |
+          npm ci
+          npm run build
+      - name: Installer le serveur
+        working-directory: server
+        run: npm ci
+      # Toute modification de collection exige sa migration (sans base ni réseau)
+      - name: Migrations à jour
+        working-directory: server
+        run: npm run migrate:check
+      - name: Build Next de production
+        working-directory: server
+        run: npm run build
+      - name: Démarrer en production (migrations appliquées au démarrage)
+        working-directory: server
+        run: |
+          npm run start:prod > server.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://localhost:4000/api/health/ready 2>/dev/null; then
+              echo "Serveur prêt."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Le serveur de production n'a pas démarré à temps."
+          cat server.log
+          exit 1
+      # Base neuve : schéma créé par les migrations versionnées, jamais poussé (batch -1)
+      - name: Migrations enregistrées dans la base
+        env:
+          PGPASSWORD: postgrespassword
+        run: |
+          applied="$(psql -h 127.0.0.1 -U postgres -d metabuilder_prod -tAc 'SELECT count(*) FROM payload_migrations WHERE batch > 0')"
+          pushed="$(psql -h 127.0.0.1 -U postgres -d metabuilder_prod -tAc 'SELECT count(*) FROM payload_migrations WHERE batch = -1')"
+          echo "Migrations appliquées : $applied ; schéma poussé (dev) : $pushed"
+          if [ "$applied" -lt 1 ] || [ "$pushed" -ne 0 ]; then
+            echo "::error::Migrations non appliquées, ou schéma poussé comme en développement."
+            exit 1
+          fi
+      - name: Vérifier la matrice de sécurité (production, interface servie)
+        working-directory: server
+        run: EXPECT_ORCHESTRATOR=true node tests/security-check.mjs
+      # Redémarrage : aucune migration rejouée. SIGTERM adressé au serveur lui-même (npm ne
+      # relaie pas le signal) ; « [i] » : le motif ne désigne jamais le shell de l'étape.
+      - name: Redémarrer sans rejouer les migrations
+        working-directory: server
+        run: |
+          pkill -TERM -f '[i]ndex\.js --production' || true
+          for i in $(seq 1 40); do
+            curl -fsS -o /dev/null http://localhost:4000/api/health 2>/dev/null || break
+            sleep 0.5
+          done
+          npm run start:prod >> server.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://localhost:4000/api/health/ready 2>/dev/null; then
+              count="$(grep -c 'Migrating:' server.log)"
+              echo "Migrations exécutées depuis le premier démarrage : $count"
+              if [ "$count" -ne 1 ]; then
+                echo "::error::Migration rejouée au redémarrage ($count exécutions)."
+                exit 1
+              fi
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Le serveur de production n'a pas redémarré à temps."
+          exit 1
+      - name: Logs serveur (en cas d'échec)
+        if: failure()
+        working-directory: server
+        run: cat server.log
+      - name: Arrêter le serveur
+        if: always()
+        run: pkill -TERM -f '[i]ndex\.js --production' || true
+
+  docker:
+    name: Image Docker de production (build et démarrage)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_DB: metabuilder_prod
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      # « docker compose up -d » ne lance que la base ; le profil prod ajoute le serveur
+      - name: docker-compose.yml valide (profil prod)
+        run: |
+          docker compose --profile prod config -q
+          test "$(docker compose config --services)" = "db"
+      - name: Construire l'image
+        run: docker build -t meta-builder:ci .
+      - name: Démarrer l'image (base neuve, migrations, interface servie)
+        run: |
+          docker run -d --name meta-builder --network host \
+            -e DATABASE_URI=postgres://postgres:postgrespassword@127.0.0.1:5432/metabuilder_prod \
+            -e PAYLOAD_SECRET=ci-docker-secret-0123456789abcdef0123456789abcdef \
+            -e SEED_ADMIN_EMAIL=admin@exemple.fr \
+            -e SEED_ADMIN_PASSWORD=Ci-Docker-Admin-2026! \
+            -e FRONTEND_ORIGIN=http://localhost:4000 \
+            -e COOKIE_SECURE=false \
+            meta-builder:ci
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://localhost:4000/api/health/ready 2>/dev/null; then
+              echo "Conteneur prêt."
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS -o /dev/null http://localhost:4000/api/health/ready || { echo "::error::Le conteneur n'a pas démarré à temps."; docker logs meta-builder; exit 1; }
+          curl -fsS -H 'Accept: text/html' http://localhost:4000/ | grep -q 'id="root"' || { echo "::error::Interface de l'orchestrateur non servie."; exit 1; }
+          code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -H 'Origin: http://localhost:4000' -d '{"email":"admin@exemple.fr","password":"Ci-Docker-Admin-2026!"}' http://localhost:4000/api/users/login)"
+          [ "$code" = "200" ] || { echo "::error::Connexion de l'administrateur : HTTP $code."; docker logs meta-builder; exit 1; }
+          docker logs meta-builder 2>&1 | grep -q 'Migrating:' || { echo "::error::Migrations non appliquées au démarrage."; exit 1; }
+      - name: Arrêt propre du conteneur
+        run: |
+          docker stop -t 30 meta-builder
+          docker logs meta-builder 2>&1 | grep -q 'Arrêt propre terminé' || { echo "::error::Arrêt propre non journalisé."; docker logs meta-builder; exit 1; }
+      - name: Logs du conteneur (en cas d'échec)
+        if: failure()
+        run: docker logs meta-builder || true

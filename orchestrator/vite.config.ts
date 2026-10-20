@@ -3,10 +3,9 @@ import react from '@vitejs/plugin-react'
 import { ORCHESTRATOR_CSP } from './src/lib/csp'
 
 // CSP de l'orchestrateur compilé : <meta http-equiv> en tête de dist/index.html (build
-// seulement : le serveur de dev de Vite injecte des scripts en ligne). dist n'est servi
-// par aucun code du dépôt : l'hébergeur doit poser frame-ancestors / X-Frame-Options en
-// en-tête (ignorés dans une balise <meta>) — à ajouter à l'en-tête le jour où Express
-// servira dist.
+// seulement : le serveur de dev de Vite injecte des scripts en ligne). frame-ancestors est
+// ignoré dans une balise <meta> : le serveur Express le pose en en-tête quand il sert dist
+// en production (server/express-app.js) ; un autre hébergeur de dist doit en faire autant.
 function orchestratorCsp(): Plugin {
   return {
     name: 'orchestrator-csp',

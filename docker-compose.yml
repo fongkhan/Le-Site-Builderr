@@ -3,6 +3,13 @@
 # Les identifiants correspondent au DATABASE_URI d'exemple de server/.env.example :
 #   postgres://postgres:postgrespassword@127.0.0.1:5432/metabuilder_db
 # (Seule la base est conteneurisée — la stack Node se lance avec « npm start ».)
+#
+# Production conteneurisée (profil « prod », jamais lancé par « docker compose up -d ») :
+#   docker compose --profile prod up -d --build
+# Serveur complet (image du Dockerfile) sur http://127.0.0.1:4000, base dédiée
+# metabuilder_prod créée et migrée au premier démarrage. Réglages (PAYLOAD_SECRET,
+# SEED_ADMIN_EMAIL, SEED_ADMIN_PASSWORD, FRONTEND_ORIGIN…) : server/.env (README,
+# « Déployer le serveur en production »).
 
 services:
   db:
@@ -23,5 +30,39 @@ services:
       timeout: 5s
       retries: 10
 
+  app:
+    profiles: ['prod']
+    build: .
+    # Processus init : signaux relayés (arrêt propre), processus zombies récoltés
+    init: true
+    env_file:
+      - path: server/.env
+        required: false
+    environment:
+      # Base dédiée (jamais metabuilder_db, la base de développement)
+      DATABASE_URI: postgres://postgres:${POSTGRES_PASSWORD:-postgrespassword}@db:5432/metabuilder_prod
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - '127.0.0.1:4000:4000'
+    # Arrêt propre : au-dessus de SHUTDOWN_GRACE_MS (15 s par défaut en production)
+    stop_grace_period: 30s
+    volumes:
+      - metabuilder_data:/app/server/data
+      - metabuilder_uploads:/app/server/uploads
+      - metabuilder_public_html:/app/simulated_public_html
+      - metabuilder_drafts:/app/drafts
+      - metabuilder_releases:/app/releases
+      - metabuilder_backups:/app/backups
+      - metabuilder_repositories:/app/repositories
+
 volumes:
   metabuilder_pgdata:
+  metabuilder_data:
+  metabuilder_uploads:
+  metabuilder_public_html:
+  metabuilder_drafts:
+  metabuilder_releases:
+  metabuilder_backups:
+  metabuilder_repositories:

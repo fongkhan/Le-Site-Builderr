@@ -37,6 +37,10 @@ const DRAFTS_DIR = path.join(PROJECT_DIR, 'drafts');
 const BACKUPS_DIR = path.join(PROJECT_DIR, 'backups');
 // Fichiers de la médiathèque (collection Payload « media », staticDir)
 const UPLOADS_DIR = path.join(SERVER_DIR, 'uploads');
+// Interface de l'orchestrateur compilée (npm run build dans orchestrator/) : servie par
+// ce serveur en production, sauf SERVE_ORCHESTRATOR=false (interface hébergée ailleurs)
+const ORCHESTRATOR_DIST_DIR = path.join(PROJECT_DIR, 'orchestrator', 'dist');
+const SERVE_ORCHESTRATOR = IS_PRODUCTION && process.env.SERVE_ORCHESTRATOR !== 'false';
 
 const DEPLOY_KEEP_RELEASES = envInt('DEPLOY_KEEP_RELEASES', 3);
 // Arrêt propre : attente maximale des requêtes en cours et d'une publication (ms)
@@ -88,6 +92,8 @@ module.exports = {
   DRAFTS_DIR,
   BACKUPS_DIR,
   UPLOADS_DIR,
+  ORCHESTRATOR_DIST_DIR,
+  SERVE_ORCHESTRATOR,
   DEPLOY_KEEP_RELEASES,
   SHUTDOWN_GRACE_MS,
   BACKUP_KEEP,

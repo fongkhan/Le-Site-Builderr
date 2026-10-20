@@ -187,7 +187,11 @@ export default buildConfig({
     pool: {
       connectionString: dbUri,
     },
-    // push actif en dev : le schéma est synchronisé automatiquement (aucune migration versionnée dans ce repo)
+    // Développement : schéma poussé automatiquement (push). Production : migrations
+    // versionnées de ce dossier, appliquées au démarrage par core/payload.js (pas de
+    // prodMigrations : sur une base de développement, Payload poserait une question
+    // interactive et bloquerait le serveur).
+    migrationDir: path.resolve(dirname, 'migrations'),
   }),
   collections: [
     {

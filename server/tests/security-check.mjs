@@ -143,7 +143,7 @@ if (client.token) {
 
 // ---- Médiathèque (ownership à la création) ----
 {
-  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
   const uploadAs = async (token, siteId) => {
     const form = new FormData();
     form.append('file', new Blob([png], { type: 'image/png' }), 'pixel.png');
@@ -788,7 +788,7 @@ if (admin.token) {
   const { fileURLToPath } = await import('node:url');
   const serverDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const projectDir = path.dirname(serverDir);
-  const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+  const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
   const upload = async (token, siteId, data, type, name) => {
     const form = new FormData();
     form.append('file', new Blob([data], { type }), name);
@@ -797,6 +797,41 @@ if (admin.token) {
     let json = null;
     try { json = await res.clone().json(); } catch { /* non-JSON */ }
     return { status: res.status, json };
+  };
+  // Téléversement refusé par la limite de taille (413) : sur une connexion DÉDIÉE (Payload
+  // ferme la connexion keep-alive après un 413 multipart : la requête suivante sur le même
+  // socket recevrait ECONNRESET). Multipart construit à la main : _payload puis file.
+  const uploadFresh = async (token, siteId, data, type, name) => {
+    const http = await import('node:http');
+    const boundary = `----matrice${Date.now().toString(16)}`;
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="_payload"\r\n\r\n${JSON.stringify({ site: siteId })}\r\n`),
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\nContent-Type: ${type}\r\n\r\n`),
+      Buffer.from(data),
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    return new Promise((resolve) => {
+      let status = 0;
+      const chunks = [];
+      const done = (error) => {
+        let json = null;
+        try { json = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { /* non-JSON */ }
+        resolve({ status, json, ...(error ? { error } : {}) });
+      };
+      const r = http.request(`${BASE}/api/media`, {
+        method: 'POST',
+        agent: false,
+        headers: { Origin: ORIGIN, Cookie: `payload-token=${token}`, 'Content-Type': `multipart/form-data; boundary=${boundary}`, 'Content-Length': body.length },
+      }, (res) => {
+        status = res.statusCode;
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => done());
+        res.on('error', (err) => done(err.message));
+      });
+      // Connexion coupée par le serveur pendant l'envoi : le statut déjà reçu fait foi
+      r.on('error', (err) => done(err.message));
+      r.end(body);
+    });
   };
   const payloadSiteId = async (slug) => (await req(`/api/payload_sites?where[slug][equals]=${slug}&depth=0`, { token: admin.token })).json?.docs?.[0]?.id;
   const raw = (p, headers = {}) => fetch(`${BASE}${p}`, { headers: { Origin: ORIGIN, ...headers } });
@@ -812,8 +847,8 @@ if (admin.token) {
 
       const big = Buffer.alloc(9 * 1024 * 1024, 0);
       pixel.copy(big);
-      const bigUp = await upload(client.token, ownId, big, 'image/png', 'enorme.png');
-      check('Media : PNG de 9 Mo -> 413', bigUp.status === 413, `HTTP ${bigUp.status}`);
+      const bigUp = await uploadFresh(client.token, ownId, big, 'image/png', 'enorme.png');
+      check('Media : PNG de 9 Mo -> 413', bigUp.status === 413, `HTTP ${bigUp.status}${bigUp.error ? ` ${bigUp.error}` : ''}`);
       if (bigUp.json?.doc?.id) await req(`/api/media/${bigUp.json.doc.id}`, { method: 'DELETE', token: admin.token });
 
       const since = Date.now() - 2000;

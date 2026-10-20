@@ -1,0 +1,31 @@
+name: Audit des dépendances
+
+# Séparé de la CI : le résultat de « npm audit » dépend de la base d'avis du registre
+# (non déterministe). Hebdomadaire, à la demande, et sur toute modification des
+# dépendances ou des exceptions.
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '**/package.json'
+      - '**/package-lock.json'
+      - 'security/audit-allowlist.json'
+      - 'scripts/audit-gate.mjs'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Vulnérabilités élevées ou critiques (exceptions datées)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Lockfiles seuls (aucune installation) ; exceptions : security/audit-allowlist.json
+      - name: Garde d'audit
+        run: node scripts/audit-gate.mjs

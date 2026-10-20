@@ -1,5 +1,8 @@
 // Point d'entrée du serveur Meta-Builder : Express (API de l'orchestrateur, build,
 // endpoints publics des sites) + Next/Payload CMS (admin, REST, authentification).
+// « --production » (npm run start:prod) : mode production sur toutes les plateformes,
+// avant tout chargement de module (config, Next et Payload lisent NODE_ENV à l'import).
+if (process.argv.includes('--production')) process.env.NODE_ENV = 'production';
 require('dotenv').config();
 require('./core/next-env-patch'); // avant next et payload
 require('./core/process-handlers');
@@ -22,6 +25,16 @@ if (auth.DEV_NO_AUTH) {
     process.exit(1);
   }
   console.warn('⚠️⚠️⚠️  [Sécurité] DEV_NO_AUTH=true : TOUTES les requêtes sont traitées comme un admin. À ne JAMAIS utiliser en production. ⚠️⚠️⚠️');
+}
+
+// Production sans build Next (npm run build) : arrêt explicite (avant tout effet
+// de bord du démarrage) plutôt qu'une erreur de Next
+if (config.IS_PRODUCTION) {
+  const missingBuild = require('./lib/prod-build').missingBuildMessage(__dirname);
+  if (missingBuild) {
+    console.error(missingBuild);
+    process.exit(1);
+  }
 }
 
 // L'instance Payload n'existe qu'après le boot : les modules reçoivent un getter.

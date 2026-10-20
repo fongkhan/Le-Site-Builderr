@@ -1,0 +1,28 @@
+{
+  "server": [
+    {
+      "package": "braces",
+      "ids": ["GHSA-vfj7-8cjw-p6xm"],
+      "nodes": ["node_modules/braces"],
+      "reason": "sass 1.77 → chokidar → braces, version épinglée par @payloadcms/next (aucun correctif compatible) ; braces ne sert qu'à surveiller des fichiers et ne reçoit aucun motif issu d'une saisie.",
+      "expires": "2027-01-31"
+    }
+  ],
+  "orchestrator": [],
+  "client-template": [
+    {
+      "package": "astro",
+      "ids": ["GHSA-26w7-cxv4-gfx2"],
+      "nodes": ["node_modules/astro"],
+      "reason": "Exécution de code à distance via l'optimisation d'images AVIF d'Astro (astro:assets), que le template n'utilise pas (garde scripts/checks/garde-astro-assets.mjs) ; correctif disponible seulement en Astro 7.",
+      "expires": "2027-01-31"
+    },
+    {
+      "package": "sharp",
+      "ids": ["GHSA-f88m-g3jw-g9cj", "GHSA-rgj7-g3m4-5g8c", "GHSA-wq5f-xc86-pv6w"],
+      "nodes": ["node_modules/sharp"],
+      "reason": "Dépendance optionnelle d'Astro, chargée seulement par l'optimisation d'images (astro:assets), jamais utilisée par le template (même garde que astro).",
+      "expires": "2027-01-31"
+    }
+  ]
+}

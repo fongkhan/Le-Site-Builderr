@@ -9,6 +9,8 @@ orchestrator/dist/
 client-template/dist/
 client-template/.astro/
 server/.next/
+# Généré par Next à chaque build ou démarrage (références vers .next/types)
+server/next-env.d.ts
 simulated_public_html/
 
 # Lockfiles

@@ -1,10 +1,12 @@
 // Assemblage de l'application Express. L'ORDRE de montage est significatif :
 // CORS → en-têtes de sécurité → limiteurs → parsing JSON → statiques → routes →
-// fallback Next (Payload admin + REST) → gestionnaire d'erreurs JSON.
+// interface de l'orchestrateur (production) → /_next/image fermé → fallback Next (Payload
+// admin + REST) → gestionnaire d'erreurs JSON.
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
-const { FRONTEND_ORIGINS, PUBLIC_HTML_DIR, DRAFTS_DIR, IS_PRODUCTION } = require('./core/config');
+const config = require('./core/config');
+const { FRONTEND_ORIGINS, PUBLIC_HTML_DIR, DRAFTS_DIR, IS_PRODUCTION } = config;
 const { mountRateLimits, jsonBodyForExpressRoutes, jsonErrorHandler, isPublicRoute, trustProxySetting, sendSignInPage } = require('./core/http');
 const auth = require('./auth');
 const { isValidSlug } = require('./lib/paths');
@@ -14,6 +16,7 @@ const path = require('path');
 const { assertSafePath } = require('./lib/paths');
 const { notFoundCandidates } = require('./lib/static-404');
 const { isShuttingDown } = require('./core/shutdown');
+const { isOrchestratorPagePath } = require('./lib/spa-routes');
 
 const ROUTERS = [
   require('./routes/health'),
@@ -109,6 +112,43 @@ const noStore = (req, res, next) => {
   next();
 };
 
+// Interface de l'orchestrateur compilée (production) : fichiers de dist (/assets/* en
+// cache long, noms versionnés par Vite) puis, pour toute page de l'application
+// (lib/spa-routes.js) demandée par un navigateur, index.html — jamais mis en cache,
+// jamais indexé, jamais encadré par un autre site (frame-ancestors est ignoré dans la
+// balise <meta> de la CSP : posé ici en en-tête). Lecture paresseuse de la configuration
+// (les tests la redirigent).
+function setOrchestratorPageHeaders(res) {
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+  res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
+}
+
+function mountOrchestrator(app) {
+  const distDir = config.ORCHESTRATOR_DIST_DIR;
+  const indexFile = path.join(distDir, 'index.html');
+  if (!fs.existsSync(indexFile)) {
+    console.warn('⚠️ [Orchestrateur] orchestrator/dist absent : cd orchestrator && npm run build (ou SERVE_ORCHESTRATOR=false si l\'interface est hébergée ailleurs)');
+    return;
+  }
+  const assetsDir = path.join(distDir, 'assets') + path.sep;
+  app.use(express.static(distDir, {
+    index: false,
+    setHeaders(res, filePath) {
+      if (filePath.startsWith(assetsDir)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      else if (filePath === indexFile) setOrchestratorPageHeaders(res);
+    },
+  }));
+  app.get('*', (req, res, next) => {
+    if (!isOrchestratorPagePath(req.path) || !req.accepts('html')) return next();
+    setOrchestratorPageHeaders(res);
+    res.sendFile(indexFile, { cacheControl: false }, (err) => {
+      if (err) next(err);
+    });
+  });
+  console.log('✔ [Orchestrateur] Interface servie depuis orchestrator/dist');
+}
+
 function createApp({ nextHandler }) {
   const app = express();
 
@@ -152,6 +192,13 @@ function createApp({ nextHandler }) {
   app.use('/draft', auth.authenticate, guardDraft, noindex, noStore, hideSwapDirs, express.static(DRAFTS_DIR, staticOptions), siteNotFound(DRAFTS_DIR));
 
   for (const router of ROUTERS) app.use(router);
+
+  // Production : l'interface de l'orchestrateur sur la même origine que l'API
+  if (config.SERVE_ORCHESTRATOR) mountOrchestrator(app);
+
+  // Optimiseur d'images de Next jamais atteint (désactivé dans next.config.mjs : RCE de
+  // l'optimiseur AVIF, SSRF) : 404 JSON. Couvre aussi le proxy /_next de Vite en dev.
+  app.all('/_next/image', (req, res) => res.status(404).json({ error: 'Ressource introuvable.' }));
 
   // Tout le reste : Next.js (admin Payload, API REST Payload, login…)
   app.all('*', (req, res) => nextHandler(req, res));

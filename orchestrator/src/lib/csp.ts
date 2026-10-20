@@ -7,7 +7,8 @@
 // - font-src data: : Vite insère en data: les petits fichiers woff2 (Plus Jakarta Sans) ;
 // - img-src https: http: : images des aperçus du CMS (URL saisies, Unsplash) ;
 //   data: blob: : aperçu local d'un fichier choisi (image d'inspiration de l'onboarding).
-// frame-ancestors est ignoré dans une balise <meta> : à poser en en-tête par l'hébergeur.
+// frame-ancestors est ignoré dans une balise <meta> : posé en en-tête par le serveur quand
+// il sert l'interface en production (server/express-app.js), sinon par l'hébergeur.
 export const ORCHESTRATOR_CSP_DIRECTIVES: readonly string[] = [
   "default-src 'self'",
   "script-src 'self'",
