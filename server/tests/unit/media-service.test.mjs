@@ -11,6 +11,7 @@ const SITE_ID = 7;
 let mediaDocs = [];
 let pageDocs = [];
 let postDocs = [];
+let themeDocs = [];
 const updates = [];
 const deletes = [];
 
@@ -27,6 +28,11 @@ const reset = () => {
   ];
   postDocs = [
     { id: 2, site: SITE_ID, title: 'Noël', slug: 'noel', status: 'draft', coverImage: '/api/media/file/brouillon.png' },
+  ];
+  // Logo du thème : image 14 (citée nulle part ailleurs)
+  mediaDocs.push({ id: 14, site: SITE_ID, filename: 'logo.png', alt: '', width: 10, height: 10, mimeType: 'image/png', createdAt: '2026-07-01T00:00:00.000Z' });
+  themeDocs = [
+    { id: 3, site: SITE_ID, colors: { primary: '#123456', secondary: '#ffffff', background: '#ffffff', text: '#111111' }, fonts: { heading: 'Inter', body: 'Inter' }, radius: '8px', logo: '/api/media/file/logo.png' },
   ];
   updates.length = 0;
   deletes.length = 0;
@@ -45,7 +51,7 @@ const matches = (doc, where) => {
 const fakePayload = {
   async find({ collection, where, limit }) {
     if (collection === 'payload_sites') return { docs: where.slug.equals === 'mon-site' ? [{ id: SITE_ID }] : [] };
-    const source = { media: mediaDocs, pages: pageDocs, posts: postDocs }[collection] || [];
+    const source = { media: mediaDocs, pages: pageDocs, posts: postDocs, themes: themeDocs }[collection] || [];
     const docs = source.filter((d) => matches(d, where));
     if (collection === 'media' && !where.and) docs.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
     return { docs: limit ? docs.slice(0, limit) : docs };
@@ -68,11 +74,12 @@ const { listSiteMedia, updateSiteMediaAlt, deleteSiteMedia, siteMediaManifest } 
 test('listSiteMedia — médias du site seulement, usages des pages et des articles brouillons', async () => {
   reset();
   const items = await listSiteMedia('mon-site');
-  assert.deepEqual(items.map((i) => i.id), ['10', '11', '12', '13']);
+  assert.deepEqual(items.map((i) => i.id), ['10', '11', '12', '13', '14']);
   const byName = Object.fromEntries(items.map((i) => [i.filename, i]));
   assert.deepEqual(byName['four.jpg'].usedIn, [{ type: 'page', title: 'Accueil', slug: 'home', locale: 'fr' }]);
   assert.deepEqual(byName['brouillon.png'].usedIn, [{ type: 'post', title: 'Noël', slug: 'noel', draft: true }]);
   assert.deepEqual(byName['libre.png'].usedIn, []);
+  assert.deepEqual(byName['logo.png'].usedIn, [{ type: 'theme', title: 'Logo du site', slug: '' }]);
   assert.equal(byName['four.jpg'].url, '/api/media/file/four.jpg');
   assert.deepEqual(await listSiteMedia('site-inconnu'), []);
 });
@@ -113,10 +120,20 @@ test('deleteSiteMedia — refusée si utilisée (sans suppression), effectuée s
   assert.equal((await deleteSiteMedia('mon-site', '10')).status, 'deleted');
 });
 
+test('deleteSiteMedia — logo du thème : refusée tant qu’il est le logo du site', async () => {
+  reset();
+  const inTheme = await deleteSiteMedia('mon-site', '14');
+  assert.deepEqual(inTheme, { status: 'in_use', usedIn: [{ type: 'theme', title: 'Logo du site', slug: '' }] });
+  assert.equal(deletes.length, 0, 'logo supprimé');
+  // Logo retiré du thème : la suppression passe
+  themeDocs[0].logo = '';
+  assert.deepEqual(await deleteSiteMedia('mon-site', '14'), { status: 'deleted', filename: 'logo.png' });
+});
+
 test('siteMediaManifest — images publiables du site, aucune donnée sans site', async () => {
   reset();
   const manifest = await siteMediaManifest('mon-site');
-  assert.deepEqual(manifest.docs.map((d) => d.filename), ['four.jpg', 'brouillon.png', 'libre.png']);
+  assert.deepEqual(manifest.docs.map((d) => d.filename), ['four.jpg', 'brouillon.png', 'libre.png', 'logo.png']);
   assert.deepEqual(manifest.docs[0], { filename: 'four.jpg', alt: 'Four', width: 1600, height: 1067, variants: manifest.docs[0].variants });
   assert.ok(Array.isArray(manifest.docs[0].variants));
   assert.deepEqual(await siteMediaManifest('site-inconnu'), { docs: [] });

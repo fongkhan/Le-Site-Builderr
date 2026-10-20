@@ -3,6 +3,7 @@
 // services/backups.js ; ces fonctions sont testables seules.
 const { isValidSlug } = require('./paths');
 const { isPublishableMediaName } = require('./media-policy');
+const { normalizeLegal } = require('./legal');
 
 // Nom d'archive horodaté, triable lexicographiquement = chronologiquement.
 // `date` est injectée pour la testabilité. Ex. backup-2026-07-22T11-30-00.zip
@@ -131,6 +132,13 @@ function parseBackupSiteMeta(text) {
   return { name: asText(m && m.name, 200), stack: asText(m && m.stack, 100) };
 }
 
+// site.json → informations légales du site, normalisées (11 clés ; archive antérieure
+// sans informations légales : champs vides).
+function parseBackupSiteLegal(text) {
+  const m = parseJsonObject(text);
+  return normalizeLegal(m && m.legal);
+}
+
 // Corps de POST /api/admin/backups/restore → { name, slug, mode } ou { error }.
 const RESTORE_MODES = ['copy', 'replace'];
 function parseRestoreRequest(body) {
@@ -156,6 +164,7 @@ module.exports = {
   backupMediaEntries,
   parseBackupManifest,
   parseBackupSiteMeta,
+  parseBackupSiteLegal,
   RESTORE_MODES,
   parseRestoreRequest,
 };

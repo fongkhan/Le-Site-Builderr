@@ -78,3 +78,14 @@ test('remapMediaFilenames — table vide ou Map, valeurs non textuelles inchang�
   assert.deepEqual(remapMediaFilenames({ a: '/media/x.png', n: 3, b: null }, {}), { a: '/media/x.png', n: 3, b: null });
   assert.deepEqual(remapMediaFilenames(['/media/x.png', true], new Map([['x.png', 'y.png']])), ['/media/y.png', true]);
 });
+
+test('remapMediaFilenames — nouveau nom avec parenthèses ou apostrophe : encodé en entier, relu sans troncature', () => {
+  const { remapMediaFilenames, collectMediaFilenames, encodeMediaName } = require('../../lib/media.js');
+  const out = remapMediaFilenames({ logo: '/api/media/file/logo.png', md: '![x](/media/logo.png)' }, { 'logo.png': "logo (1)-l'ancien.png" });
+  assert.equal(out.logo, '/api/media/file/logo%20%281%29-l%27ancien.png');
+  assert.equal(out.md, '![x](/media/logo%20%281%29-l%27ancien.png)');
+  assert.deepEqual(collectMediaFilenames(out), ["logo (1)-l'ancien.png"]);
+  assert.equal(encodeMediaName("a(b)'c*!.png"), 'a%28b%29%27c%2A%21.png');
+  // Même encodage que le logo du thème (lib/theme.js le réexporte)
+  assert.equal(require('../../lib/theme.js').encodeMediaName, encodeMediaName);
+});

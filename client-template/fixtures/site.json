@@ -1,6 +1,7 @@
 {
   "_comment": "Contenu de test du template (TEMPLATE_FIXTURE). Même forme que le canal interne /internal/site-pages et /internal/site-posts. Couvre les 11 types de blocs, 2 langues, des articles (dont un brouillon, ignoré) et des saisies hostiles (javascript:, CSS) qui doivent être neutralisées.",
   "_comment_medias_boutons": "Médiathèque (clé media, même forme que /internal/site-media : texte alternatif, dimensions, variantes) et liens des boutons d'action (ctaLink : page, ancre, adresse web, téléphone, email, et liens refusés ou introuvables qui retombent sur le mode Automatique). Vérifiés par scripts/checks/medias.mjs et boutons.mjs.",
+  "_comment_raccordements": "Raccordements entre fonctions : logo du thème (logo-demo.png, PUBLIC_SITE_LOGO du build /preview/demo) dimensionné d'après la médiathèque, bouton d'une formule de la page « cours » vers la page légale générée /confidentialite/. Vérifiés par scripts/checks/raccordements.mjs.",
   "media": { "docs": [ { "filename": "four.jpg", "alt": "Four à céramique \"raku\"", "width": 1600, "height": 1067, "variants": [480, 960] }, { "filename": "tasse.jpg", "alt": "", "width": 1200, "height": 1200, "variants": [480, 960] }, { "filename": "atelier.jpg", "alt": "Atelier de poterie", "width": 2400, "height": 1600, "variants": [480, 960, 1600] }, { "filename": "logo-demo.png", "alt": "", "width": 320, "height": 80, "variants": [] } ] },
   "pages": {
     "docs": [
@@ -124,7 +125,8 @@
             "title": "Formules",
             "plans": [
               { "name": "Séance", "price": "45 €", "description": "Sans engagement.", "features": [{ "feature": "3 h" }], "ctaText": "Réserver", "ctaLink": "mailto:bonjour@atelier-demo.example", "isPopular": false },
-              { "name": "Sans bouton", "price": "0 €", "description": "Pas de libellé : pas de bouton.", "features": [], "ctaText": "", "isPopular": false }
+              { "name": "Sans bouton", "price": "0 €", "description": "Pas de libellé : pas de bouton.", "features": [], "ctaText": "", "isPopular": false },
+              { "name": "Vos données", "price": "0 €", "description": "Bouton vers une page légale générée.", "features": [], "ctaText": "Lire la politique", "ctaLink": "/confidentialite/", "isPopular": false }
             ]
           },
           {

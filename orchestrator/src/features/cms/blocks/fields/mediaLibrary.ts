@@ -6,6 +6,7 @@ import { formatBytes } from '../../../../lib/format';
 const USAGE_SHOWN = 3;
 
 function usageText(u: MediaUsage): string {
+  if (u.type === 'theme') return 'thème (logo)';
   if (u.type === 'post') return `article « ${u.title} »${u.draft ? ' (brouillon)' : ''}`;
   const locale = u.locale || 'fr';
   return `page « ${u.title} »${locale !== 'fr' ? ` (${locale.toUpperCase()})` : ''}`;

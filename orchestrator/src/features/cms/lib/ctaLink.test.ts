@@ -65,10 +65,36 @@ describe('syntaxe des liens (mêmes règles que le template)', () => {
 describe('linkTargetsFor', () => {
   it('adresses des pages dédupliquées, blog compris ; pages réservées exclues', () => {
     const targets = linkTargetsFor([...PAGES, page('blog', 'fr'), page('404', 'fr'), page('tarifs', 'fr', [], 'Doublon')], frTarifs);
-    expect(targets.pages.map((p) => p.href)).toEqual(['/', '/tarifs/', '/en/', '/blog/']);
+    expect(targets.pages.map((p) => p.href).slice(0, 4)).toEqual(['/', '/tarifs/', '/en/', '/blog/']);
     expect(targets.pages[0].label).toBe('Accueil (/)');
     expect(targets.pages[1].label).toBe('Tarifs (/tarifs/)');
     expect(targets.pages[3].label).toBe('Actualités (/blog/)');
+  });
+
+  it('pages légales générées : celles de la langue de la page en tête, puis des autres langues servies', () => {
+    const fr = linkTargetsFor(PAGES, frTarifs).pages;
+    expect(fr.map((p) => p.href)).toEqual(['/', '/tarifs/', '/en/', '/blog/', '/mentions-legales/', '/confidentialite/', '/en/legal-notice/', '/en/privacy-policy/']);
+    expect(fr[4].label).toBe('Mentions légales (/mentions-legales/)');
+    expect(fr[5].label).toBe('Politique de confidentialité (/confidentialite/)');
+    expect(fr[7].label).toBe('Politique de confidentialité (/en/privacy-policy/)');
+    const en = linkTargetsFor(PAGES, enHome).pages.map((p) => p.href);
+    expect(en.slice(4)).toEqual(['/en/legal-notice/', '/en/privacy-policy/', '/mentions-legales/', '/confidentialite/']);
+    // Lien vers la politique générée : reconnu (aucun avertissement)
+    expect(linkHint('/confidentialite/', linkTargetsFor(PAGES, frTarifs))).toBeNull();
+    expect(linkHint('/en/privacy-policy', linkTargetsFor(PAGES, enHome))).toBeNull();
+  });
+
+  it('pages légales : langue sans page d’accueil non servie, page du CMS à la même adresse prioritaire', () => {
+    // Sans accueil anglais : pas de pages légales anglaises (le site publié ne les génère pas)
+    const about = page('about', 'en', [], 'About');
+    const noEnHome = linkTargetsFor([frHome, about], about).pages.map((p) => p.href);
+    expect(noEnHome).toEqual(['/', '/en/about/', '/blog/', '/mentions-legales/', '/confidentialite/']);
+    expect(linkHint('/en/legal-notice/', linkTargetsFor([frHome, about], about))?.warning).toBe(true);
+    // Page du CMS « mentions-legales » : proposée une seule fois, sous son titre
+    const cms = page('mentions-legales', 'fr', [], 'Infos éditeur');
+    const pages = linkTargetsFor([frHome, cms], frHome).pages;
+    expect(pages.filter((p) => p.href === '/mentions-legales/').map((p) => p.label)).toEqual(['Infos éditeur (/mentions-legales/)']);
+    expect(pages.map((p) => p.href)).toEqual(['/', '/mentions-legales/', '/blog/', '/confidentialite/']);
   });
 
   it('page sans formulaire : aucune ancre, mode Automatique possible (formulaire sur une autre page)', () => {

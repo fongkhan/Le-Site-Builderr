@@ -31,6 +31,14 @@ describe('LinkField', () => {
     expect(html).not.toContain('Lien introuvable');
   });
 
+  it('page légale générée : proposée et sélectionnée sans avertissement', () => {
+    const html = render('/confidentialite/');
+    expect(html).toContain('<option value="/confidentialite/" selected=""');
+    expect(html).toContain('Politique de confidentialité (/confidentialite/)');
+    expect(html).toContain('<option value="/mentions-legales/">Mentions légales (/mentions-legales/)</option>');
+    expect(html).not.toContain('Lien introuvable');
+  });
+
   it('adresse web : champ de saisie et ouverture dans un nouvel onglet', () => {
     const html = render('https://exemple.fr/r');
     expect(html).toContain('<option value="__web" selected=""');

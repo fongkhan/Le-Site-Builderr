@@ -56,10 +56,17 @@ function collectMediaFilenames(value, found = new Set()) {
   return [...found];
 }
 
+// Nom de fichier encodé pour une URL de média. encodeURIComponent laisse ! ' ( ) * en
+// clair : les extracteurs ci-dessus s'arrêtent à ' et ), ce qui tronquerait « logo (1).png ».
+function encodeMediaName(name) {
+  return encodeURIComponent(name).replace(/[!'()*]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
 // Renomme les fichiers médias cités (formes /api/media/file/<nom> et /media/<nom>, noms
 // encodés compris) selon `map` ({ ancien: nouveau } ou Map) : utilisé par la duplication
 // d'un site, dont les images sont copiées sous de nouveaux noms. Un nom absent de la table
-// est laissé tel quel. Renvoie une copie : l'entrée n'est jamais mutée.
+// est laissé tel quel ; le nouveau nom est encodé par encodeMediaName (relu en entier par
+// collectMediaFilenames). Renvoie une copie : l'entrée n'est jamais mutée.
 function remapMediaFilenames(value, map) {
   const lookup = map instanceof Map ? map : new Map(Object.entries(map || {}));
   if (lookup.size === 0) return value;
@@ -73,7 +80,7 @@ function remapMediaFilenames(value, map) {
           name = raw;
         }
         const target = lookup.get(name);
-        return typeof target === 'string' && target ? `/${prefix}/${encodeURIComponent(target)}` : match;
+        return typeof target === 'string' && target ? `/${prefix}/${encodeMediaName(target)}` : match;
       });
     }
     if (Array.isArray(v)) return v.map(walk);
@@ -87,4 +94,4 @@ function remapMediaFilenames(value, map) {
   return walk(value);
 }
 
-module.exports = { rewriteMediaUrls, mediaPrefixFor, collectMediaFilenames, remapMediaFilenames, MEDIA_API_PREFIX, MEDIA_STATIC_PREFIX };
+module.exports = { rewriteMediaUrls, mediaPrefixFor, collectMediaFilenames, encodeMediaName, remapMediaFilenames, MEDIA_API_PREFIX, MEDIA_STATIC_PREFIX };

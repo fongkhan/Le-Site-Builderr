@@ -57,7 +57,23 @@ test('mediaUsage — deux formes d’URL, nom encodé, page anglaise, article br
   assert.equal(usage.has('x.jpg'), false);
 });
 
+test('mediaUsage — logo du thème : usage « Logo du site » (nom encodé), thème absent ou sans logo ignoré', () => {
+  const pages = [{ title: 'Accueil', slug: 'home', locale: 'fr', layout: [{ blockType: 'hero', backgroundImage: '/api/media/file/four.jpg' }] }];
+  const theme = { colors: {}, logo: '/api/media/file/logo%20%281%29.png' };
+  const usage = mediaUsage(['four.jpg', 'logo (1).png', 'libre.png'], pages, [], theme);
+  assert.deepEqual(usage.get('logo (1).png'), [{ type: 'theme', title: 'Logo du site', slug: '' }]);
+  assert.deepEqual(usage.get('four.jpg'), [{ type: 'page', title: 'Accueil', slug: 'home', locale: 'fr' }]);
+  assert.deepEqual(usage.get('libre.png'), []);
+  // Le logo cite aussi une image d'une page : deux usages
+  assert.equal(mediaUsage(['four.jpg'], pages, [], { logo: '/api/media/file/four.jpg' }).get('four.jpg').length, 2);
+  for (const t of [undefined, null, {}, { logo: '' }, { logo: 42 }]) {
+    assert.deepEqual(mediaUsage(['logo (1).png'], [], [], t).get('logo (1).png'), [], JSON.stringify(t));
+  }
+});
+
 test('usageLabel / usageMessage — libellés et troncature à 5 usages', () => {
+  assert.equal(usageLabel({ type: 'theme', title: 'Logo du site', slug: '' }), 'thème (logo)');
+  assert.equal(usageMessage([{ type: 'theme', title: 'Logo du site', slug: '' }]), 'Image utilisée dans : thème (logo). Retirez-la de ces contenus avant de la supprimer.');
   assert.equal(usageLabel({ type: 'page', title: 'Accueil', locale: 'fr' }), 'page « Accueil »');
   assert.equal(usageLabel({ type: 'page', title: 'Home', locale: 'en' }), 'page « Home » (EN)');
   assert.equal(usageLabel({ type: 'post', title: 'Noël', draft: true }), 'article « Noël » (brouillon)');

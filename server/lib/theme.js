@@ -5,6 +5,7 @@
 // L'allowlist de polices est la source de vérité partagée avec l'IA (ai.js) et le
 // front (orchestrator/src/features/design/themeOptions.ts, vérifiée par un test) : la garder synchronisée.
 const { isPublishableMediaName } = require('./media-policy');
+const { encodeMediaName } = require('./media');
 
 const HEADING_FONTS = ['Playfair Display', 'Outfit', 'Space Grotesk', 'Lora', 'Inter'];
 const BODY_FONTS = ['Inter', 'DM Sans', 'Karla', 'Plus Jakarta Sans'];
@@ -158,12 +159,6 @@ function themeCss(t) {
 
 const LOGO_API_PREFIX = '/api/media/file/';
 const LOGO_PATH_CHARS = /^[A-Za-z0-9_.!~*'()%-]+$/;
-
-// encodeURIComponent laisse ! ' ( ) * en clair : les extracteurs d'URL de médias
-// (lib/media.js) s'arrêtent à ' et ), ce qui tronquerait « logo (1).png ».
-function encodeMediaName(name) {
-  return encodeURIComponent(name).replace(/[!'()*]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
-}
 
 // Nom de fichier (décodé) désigné par une valeur de logo, ou null si elle est refusée.
 function logoFilename(value) {

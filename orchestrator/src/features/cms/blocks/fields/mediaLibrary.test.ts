@@ -27,6 +27,13 @@ describe('usageLabel', () => {
     ])).toBe('Utilisée dans : page « Accueil », article « Noël » (brouillon)');
     expect(usageLabel([{ type: 'page', title: 'Home', slug: 'home', locale: 'en' }])).toBe('Utilisée dans : page « Home » (EN)');
   });
+  it('signale le logo du thème', () => {
+    expect(usageLabel([{ type: 'theme', title: 'Logo du site', slug: '' }])).toBe('Utilisée dans : thème (logo)');
+    expect(usageLabel([
+      { type: 'page', title: 'Accueil', slug: 'home', locale: 'fr' },
+      { type: 'theme', title: 'Logo du site', slug: '' },
+    ])).toBe('Utilisée dans : page « Accueil », thème (logo)');
+  });
   it('résume au-delà de trois contenus', () => {
     const usedIn = ['A', 'B', 'C', 'D', 'E'].map((title) => ({ type: 'page' as const, title, slug: title }));
     expect(usageLabel(usedIn)).toBe('Utilisée dans : page « A », page « B », page « C » et 2 autre(s)');

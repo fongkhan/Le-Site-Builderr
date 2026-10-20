@@ -31,9 +31,11 @@ const {
   sanitizeSiteContent,
   parseSiteContent,
   restoreMediaFiles,
+  themeForTarget,
   createSiteFromContent,
   replaceSiteContent,
 } = require('../../services/site-import.js');
+const { logoFilename } = require('../../lib/theme.js');
 
 // Fichiers de données des sites de test : nettoyés à la fin
 const RUN = `${process.pid}-${Date.now()}`;
@@ -86,6 +88,38 @@ test('sanitizeSiteContent — thème réduit à { theme } ; thème invalide éca
   assert.equal(invalid.skipped.theme, true);
   // Thème absent : rien d'écarté
   assert.equal(sanitizeSiteContent({}).skipped.theme, false);
+});
+
+test('sanitizeSiteContent — thème : logo valide gardé (forme canonique), logo invalide seul retiré', () => {
+  const withLogo = sanitizeSiteContent({ theme: { theme: { ...THEME, logo: '/api/media/file/logo%20(1).png' } } });
+  assert.deepEqual(withLogo.theme, { theme: { ...THEME, logo: '/api/media/file/logo%20%281%29.png' } });
+  assert.equal(withLogo.skipped.theme, false);
+  // Logo refusé (schéma exécutable, SVG, URL externe) : couleurs, polices et rayon conservés
+  for (const logo of ['javascript:alert(1)', '/api/media/file/logo.svg', 'https://cdn.example/logo.png']) {
+    const out = sanitizeSiteContent({ theme: { theme: { ...THEME, logo } } });
+    assert.deepEqual(out.theme, { theme: THEME }, logo);
+    assert.equal(out.skipped.theme, false, logo);
+  }
+  // Thème qui n'est pas un objet : écarté
+  for (const theme of ['#fff', ['x'], null]) {
+    assert.equal(sanitizeSiteContent({ theme: { theme } }).skipped.theme, true, JSON.stringify(theme));
+  }
+});
+
+test('themeForTarget — logo remappé vers la copie du site cible, retiré si le site ne la possède pas', () => {
+  const theme = { ...THEME, logo: '/api/media/file/logo.png' };
+  const media = { map: { 'logo.png': 'logo-1.png' }, owned: new Set(['logo-1.png']) };
+  assert.deepEqual(themeForTarget(theme, media), { ...THEME, logo: '/api/media/file/logo-1.png' });
+  assert.equal(theme.logo, '/api/media/file/logo.png', 'entrée modifiée');
+  // Nom avec parenthèses : encodé en entier (relu sans troncature)
+  const paren = themeForTarget({ ...THEME, logo: '/api/media/file/logo%20%281%29.png' }, { map: { 'logo (1).png': "logo (1)-l'ancien.png" }, owned: new Set(["logo (1)-l'ancien.png"]) });
+  assert.equal(paren.logo, '/api/media/file/logo%20%281%29-l%27ancien.png');
+  assert.equal(logoFilename(paren.logo), "logo (1)-l'ancien.png");
+  // Déjà possédé (remplacement) : conservé tel quel
+  assert.equal(themeForTarget(theme, { map: {}, owned: new Set(['logo.png']) }).logo, '/api/media/file/logo.png');
+  // Fichier ni copié ni possédé (autre site, image absente de la sauvegarde) : logo retiré
+  assert.deepEqual(themeForTarget(theme, { map: {}, owned: new Set() }), THEME);
+  assert.deepEqual(themeForTarget(theme, { map: { 'logo.png': 'logo-1.png' }, owned: new Set() }), THEME);
 });
 
 test('sanitizeSiteContent — articles : titre requis, slug canonique, image sûre, sans doublon', () => {
@@ -202,10 +236,23 @@ test('createSiteFromContent — site brouillon créé avec le contenu nettoyé',
   assert.deepEqual(readJson(getSiteThemeFile(SLUG)), { theme: THEME });
   assert.deepEqual(readJson(getSitePostsFile(SLUG)).docs.map((p) => p.slug), ['article']);
 
-  // Slug déjà pris : le suivant libre
-  const twin = await createSiteFromContent({ baseSlug: SLUG, content: { pages: null, posts: null, theme: null } });
+  // Sans informations légales : 11 champs vides
+  assert.equal(Object.keys(r.site.legal).length, 11);
+  assert.ok(Object.values(r.site.legal).every((v) => v === ''));
+
+  // Slug déjà pris : le suivant libre ; informations légales reprises, normalisées
+  const twin = await createSiteFromContent({
+    baseSlug: SLUG,
+    legal: { companyName: '  Atelier Démo  ', phone: '04 78 00 00 00', address: '1 rue X\r\n69000 Lyon', inconnu: 'x' },
+    content: { pages: null, posts: null, theme: null },
+  });
   assert.equal(twin.slug, `${SLUG}-2`);
   assert.equal(twin.site.name, `${SLUG}-2`);
+  assert.equal(twin.site.legal.companyName, 'Atelier Démo');
+  assert.equal(twin.site.legal.phone, '04 78 00 00 00');
+  assert.equal(twin.site.legal.address, '1 rue X\n69000 Lyon');
+  assert.equal(twin.site.legal.inconnu, undefined);
+  assert.deepEqual((await sitesStore.getSiteBySlug(twin.slug)).legal, twin.site.legal);
   await sitesStore.deleteSite(twin.slug);
 });
 
@@ -240,10 +287,11 @@ test('replaceSiteContent — pages, articles et thème remplacés ; élément ab
   fs.writeFileSync(getSitePostsFile(REPLACE_SLUG), JSON.stringify({ docs: [{ title: 'P1', slug: 'p1' }, { title: 'P2', slug: 'p2' }] }));
   fs.writeFileSync(getSiteThemeFile(REPLACE_SLUG), JSON.stringify(DEFAULT_THEME));
 
+  // Logo d'une image que le site ne possède pas (sans base : aucune) : retiré
   const restored = sanitizeSiteContent({
     pages: { docs: [page('home', 'Accueil restauré'), page('nouvelle', 'Nouvelle')] },
     posts: [{ title: 'P2 restauré', slug: 'p2' }, { title: 'P3', slug: 'p3' }],
-    theme: { theme: THEME },
+    theme: { theme: { ...THEME, logo: '/api/media/file/logo.png' } },
   });
   const r = await replaceSiteContent(REPLACE_SLUG, restored);
   assert.deepEqual(r, { pages: 2, posts: 2, theme: true, media: { restored: 0, copied: 0, kept: 0, missing: [] } });

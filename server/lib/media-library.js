@@ -1,6 +1,6 @@
 // Médiathèque d'un site — fonctions pures, testables sans serveur : texte alternatif,
-// usages d'une image dans les pages et les articles, forme renvoyée à l'orchestrateur et
-// manifeste lu par le build du site (/internal/site-media).
+// usages d'une image dans les pages, les articles et le thème (logo), forme renvoyée à
+// l'orchestrateur et manifeste lu par le build du site (/internal/site-media).
 const { collectMediaFilenames, MEDIA_API_PREFIX } = require('./media');
 const { isPublishableMediaName } = require('./media-policy');
 const { variantWidthsFor, loadSharp } = require('./media-variants');
@@ -19,11 +19,12 @@ function cleanAlt(value) {
 const isPayloadMediaId = (id) => typeof id === 'string' && /^\d{1,15}$/.test(id);
 
 // Usages de chaque image : Map nom → [{ type: 'page', title, slug, locale } |
-// { type: 'post', title, slug, draft }]. Toutes les langues et tous les articles
-// (brouillons compris) : une image citée par un brouillon ne doit pas disparaître. Une URL
-// externe qui contient « /media/<nom> » compte aussi (faux positif prudent). Les entrées ne
-// sont jamais modifiées.
-function mediaUsage(names, pages, posts) {
+// { type: 'post', title, slug, draft } | { type: 'theme', title: 'Logo du site', slug: '' }].
+// Toutes les langues et tous les articles (brouillons compris) : une image citée par un
+// brouillon ne doit pas disparaître. `theme` (facultatif) : thème du site, dont le logo
+// compte comme un usage. Une URL externe qui contient « /media/<nom> » compte aussi (faux
+// positif prudent). Les entrées ne sont jamais modifiées.
+function mediaUsage(names, pages, posts, theme = null) {
   const usage = new Map();
   for (const name of names || []) usage.set(name, []);
   const add = (found, entry) => {
@@ -49,11 +50,15 @@ function mediaUsage(names, pages, posts) {
       draft: post.status !== 'published',
     });
   }
+  if (theme && typeof theme === 'object' && typeof theme.logo === 'string') {
+    add(collectMediaFilenames(theme.logo), { type: 'theme', title: 'Logo du site', slug: '' });
+  }
   return usage;
 }
 
-// Libellé d'un usage : page « Accueil » (EN), article « Noël » (brouillon).
+// Libellé d'un usage : page « Accueil » (EN), article « Noël » (brouillon), thème (logo).
 function usageLabel(u) {
+  if (u.type === 'theme') return 'thème (logo)';
   if (u.type === 'post') return `article « ${u.title} »${u.draft ? ' (brouillon)' : ''}`;
   const locale = u.locale || 'fr';
   return `page « ${u.title} »${locale !== 'fr' ? ` (${locale.toUpperCase()})` : ''}`;

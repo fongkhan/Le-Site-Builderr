@@ -2,6 +2,7 @@
 import Layout from '../layouts/Layout.astro';
 import { DEFAULT_LOCALE, localePath, localeRouteParam } from '../lib/i18n.mjs';
 import { getSiteContent, isDraftBuild } from '../lib/content';
+import { getLegalContent } from '../lib/legal-content';
 import type { Block, NavPage, PageDoc } from '../lib/content';
 import { localBusinessLd, faqPageLd } from '../lib/jsonld';
 import { safeHttpUrl, withBase } from '../lib/url';
@@ -63,9 +64,10 @@ interface Props {
 
 const { page, nav = [], locale = DEFAULT_LOCALE, locales = [], formPages = {} } = Astro.props;
 const layout: Block[] = page.layout || [];
-// Contenu partagé (lu une fois par build) : pages et articles générés (cibles des liens
-// de boutons), médiathèque (préchargement du fond du premier Hero).
+// Contenu partagé (lu une fois par build) : pages, articles et pages légales générés
+// (cibles des liens de boutons), médiathèque (préchargement du fond du premier Hero).
 const { pages: allPages, posts: allPosts, media } = await getSiteContent();
+const { legalRoutes } = await getLegalContent();
 
 // Mapping des types de blocs vers les composants Astro correspondants
 const blockMap: Record<string, any> = {
@@ -116,13 +118,14 @@ const ctaTarget = (label?: string): string | null =>
   pickForm(otherPage(formPages.contact, '#contact'), otherPage(formPages.appointment, '#rendez-vous'), label);
 
 // Lien saisi pour un bouton (champ ctaLink, règles de lib/links.mjs) : page générée du site
-// (le blog et ses articles compris), ancre d'un formulaire de CETTE page, adresse web
-// (nouvel onglet), téléphone ou email. Lien refusé ou cible absente : mode Automatique,
-// signalé une fois par valeur dans le journal de build.
+// (le blog, ses articles et les pages légales générées compris), ancre d'un formulaire de
+// CETTE page, adresse web (nouvel onglet), téléphone ou email. Lien refusé ou cible
+// absente : mode Automatique, signalé une fois par valeur dans le journal de build.
 const routeSet = new Set([
   ...allPages.map((p) => localePath(p.locale || DEFAULT_LOCALE, p.slug)),
   '/blog/',
   ...allPosts.map((p) => `/blog/${p.slug}/`),
+  ...legalRoutes.filter((r) => r.generated).map((r) => localePath(r.locale, r.slug)),
 ]);
 const anchorSet = new Set(anchorIds.filter((id): id is string => Boolean(id)));
 const warnedLinks = new Set<string>();

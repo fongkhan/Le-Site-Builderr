@@ -2,7 +2,7 @@
 // suppression contrôlée (refusée tant que l'image est citée) et manifeste du build.
 // Payload est la seule source : sans base (ou site absent de la base), médiathèque vide.
 const { getPayloadInstance } = require('../core/payload');
-const { findPayloadSiteId, readSitePages, readSitePosts } = require('./content');
+const { findPayloadSiteId, readSitePages, readSitePosts, readSiteTheme } = require('./content');
 const { mediaUsage, toLibraryItem, buildMediaManifest } = require('../lib/media-library');
 
 // Contexte Payload d'un site, ou null (pas de base, site inconnu).
@@ -14,10 +14,10 @@ async function siteContext(slug) {
 }
 
 // Usages des images `names` dans TOUT le contenu du site (pages de toutes les langues,
-// articles brouillons compris).
+// articles brouillons compris, logo du thème).
 async function usageFor(slug, names) {
-  const [pages, posts] = await Promise.all([readSitePages(slug), readSitePosts(slug)]);
-  return mediaUsage(names, (pages && pages.docs) || [], (posts && posts.docs) || []);
+  const [pages, posts, theme] = await Promise.all([readSitePages(slug), readSitePosts(slug), readSiteTheme(slug)]);
+  return mediaUsage(names, (pages && pages.docs) || [], (posts && posts.docs) || [], theme && theme.theme);
 }
 
 // Fiches média du site, les plus récentes d'abord.
@@ -65,9 +65,9 @@ async function updateSiteMediaAlt(slug, id, alt) {
   return toLibraryItem(updated, usage.get(updated.filename) || []);
 }
 
-// Suppression d'une image du site : refusée tant qu'un contenu la cite. Payload efface
-// aussi le fichier. → { status: 'not_found' } | { status: 'in_use', usedIn } |
-// { status: 'deleted', filename }.
+// Suppression d'une image du site : refusée tant qu'un contenu ou le logo du thème la
+// cite. Payload efface aussi le fichier. → { status: 'not_found' } |
+// { status: 'in_use', usedIn } | { status: 'deleted', filename }.
 async function deleteSiteMedia(slug, id) {
   const ctx = await siteContext(slug);
   if (!ctx) return { status: 'not_found' };

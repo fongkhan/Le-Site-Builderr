@@ -28,9 +28,10 @@ const {
   purgeSiteData,
   copySiteMedia,
 } = require('./sites');
-const { validateTheme } = require('../lib/theme');
+const { validateTheme, canonicalTheme, logoFilename } = require('../lib/theme');
+const { normalizeLegal } = require('../lib/legal');
 const { generateSlug, assertStrictlyInside } = require('../lib/paths');
-const { collectMediaFilenames, remapMediaFilenames } = require('../lib/media');
+const { collectMediaFilenames, encodeMediaName, remapMediaFilenames } = require('../lib/media');
 const { mediaMimeType, isPublishableMediaName } = require('../lib/media-policy');
 
 // Bornes : articles repris par import, taille d'une image restaurée.
@@ -44,6 +45,8 @@ const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 // Contenu importé → contenu sûr à écrire. Les éléments invalides sont écartés un par un
 // (comptés dans `skipped`) : une page au lien « javascript: » ou un thème hors liste ne
 // fait jamais échouer tout l'import. null = élément absent (l'existant est conservé).
+// Thème : couleurs, polices et rayon validés sans le logo, puis forme canonique (un logo
+// invalide est seul retiré, jamais tout le thème).
 function sanitizeSiteContent({ pages, posts, theme } = {}) {
   const skipped = { pages: 0, posts: 0, theme: false };
 
@@ -89,7 +92,8 @@ function sanitizeSiteContent({ pages, posts, theme } = {}) {
 
   let cleanTheme = null;
   if (theme) {
-    if (validateTheme(theme.theme).ok) cleanTheme = { theme: theme.theme };
+    const t = theme.theme && typeof theme.theme === 'object' && !Array.isArray(theme.theme) ? theme.theme : null;
+    if (t && validateTheme({ ...t, logo: '' }).ok) cleanTheme = { theme: canonicalTheme(t) };
     else skipped.theme = true;
   }
 
@@ -171,30 +175,33 @@ async function restoreMediaFiles(payloadInstance, targetSiteId, files, {
   return { map, restored, kept, ownedNames };
 }
 
-// Images du contenu d'un site : restaurées depuis l'archive, puis, pour celles qui
-// manquent encore, copiées depuis la médiathèque de `mediaSourceSlug` (duplication,
-// sauvegarde sans images). Sans base ou site inconnu de Payload : rien à faire.
+// Images du contenu d'un site (pages, articles et logo du thème) : restaurées depuis
+// l'archive, puis, pour celles qui manquent encore, copiées depuis la médiathèque de
+// `mediaSourceSlug` (duplication, sauvegarde sans images). Sans base ou site inconnu de
+// Payload : rien à faire. `owned` : fichiers que le site cible possède ensuite.
 async function restoreContentMedia(slug, content, { mediaFiles = [], mediaSourceSlug = null, keepOwned = false } = {}) {
-  const none = { map: {}, restored: 0, copied: 0, kept: 0, missing: [] };
+  const none = { map: {}, owned: new Set(), restored: 0, copied: 0, kept: 0, missing: [] };
   const payloadInstance = getPayloadInstance();
   if (!payloadInstance) return none;
   const targetId = await findPayloadSiteId(payloadInstance, slug);
   if (!targetId) return none;
 
   const r = await restoreMediaFiles(payloadInstance, targetId, mediaFiles, { keepOwned });
-  const cited = collectMediaFilenames([content.pages, content.posts]).filter(isPublishableMediaName);
+  const cited = collectMediaFilenames([content.pages, content.posts, content.theme]).filter(isPublishableMediaName);
   let missing = cited.filter((n) => !hasOwn(r.map, n) && !r.ownedNames.has(n));
   let copiedMap = {};
   if (missing.length > 0 && mediaSourceSlug) {
     try {
-      copiedMap = await copySiteMedia(mediaSourceSlug, targetId, missing.map((n) => `/media/${encodeURIComponent(n)}`));
+      copiedMap = await copySiteMedia(mediaSourceSlug, targetId, missing.map((n) => `/media/${encodeMediaName(n)}`));
     } catch (e) {
       console.error(`[Médias] Images de ${mediaSourceSlug} non copiées :`, e.message);
     }
     missing = missing.filter((n) => !hasOwn(copiedMap, n));
   }
+  const map = { ...copiedMap, ...r.map };
   return {
-    map: { ...copiedMap, ...r.map },
+    map,
+    owned: new Set([...r.ownedNames, ...Object.values(map)]),
     restored: r.restored,
     copied: Object.keys(copiedMap).length,
     kept: r.kept,
@@ -202,12 +209,22 @@ async function restoreContentMedia(slug, content, { mediaFiles = [], mediaSource
   };
 }
 
+// Thème écrit pour le site cible : logo remappé vers la copie du site cible (forme
+// canonique), retiré si ce site ne possède pas le fichier (logo d'un autre site, image
+// absente de la sauvegarde) : le build l'ignorerait et la page Design refuserait le thème.
+function themeForTarget(theme, media) {
+  const t = canonicalTheme(remapMediaFilenames(theme, media.map));
+  if (t.logo && !media.owned.has(logoFilename(t.logo))) delete t.logo;
+  return t;
+}
+
 // Crée un site brouillon (nouveau slug libre dérivé de baseSlug) et y écrit le contenu
 // nettoyé : fichiers JSON de repli, repris par le CMS puis persistés dans Payload au
-// premier enregistrement. afterCreate({ slug, documentRoot }) complète la création
-// (extraction d'un build…) ; son résultat est renvoyé dans `after`. Tout échec après la
-// création défait celle-ci (fiche, médias, données, dossier créé) puis est propagé.
-async function createSiteFromContent({ baseSlug, name, stack, content = {}, mediaFiles = [], mediaSourceSlug = null, afterCreate = null }) {
+// premier enregistrement. `legal` : informations légales reprises (normalisées).
+// afterCreate({ slug, documentRoot }) complète la création (extraction d'un build…) ; son
+// résultat est renvoyé dans `after`. Tout échec après la création défait celle-ci (fiche,
+// médias, données, dossier créé) puis est propagé.
+async function createSiteFromContent({ baseSlug, name, stack, legal = null, content = {}, mediaFiles = [], mediaSourceSlug = null, afterCreate = null }) {
   const slug = await uniqueSlug(baseSlug);
   const documentRoot = defaultDocumentRoot(slug);
   // uniqueSlug écarte les dossiers existants : en cas d'échec, on ne supprime que ce que
@@ -223,12 +240,13 @@ async function createSiteFromContent({ baseSlug, name, stack, content = {}, medi
     createdWithTool: true,
     status: 'draft',
     sslStatus: initialSslStatus(),
+    legal: normalizeLegal(legal),
   });
 
   try {
     const media = await restoreContentMedia(slug, content, { mediaFiles, mediaSourceSlug });
     if (content.pages) writeJsonFile(getSitePagesFile(slug), remapMediaFilenames(content.pages, media.map));
-    if (content.theme) writeJsonFile(getSiteThemeFile(slug), content.theme);
+    if (content.theme) writeJsonFile(getSiteThemeFile(slug), { theme: themeForTarget(content.theme.theme, media) });
     if (content.posts) writePostsFile(slug, remapMediaFilenames(content.posts, media.map));
     const after = afterCreate ? await afterCreate({ slug, documentRoot }) : undefined;
     const { restored, copied, kept, missing } = media;
@@ -272,7 +290,7 @@ async function replaceSiteContent(slug, content, { mediaFiles = [] } = {}) {
   }
 
   if (content.theme) {
-    await saveSiteTheme(slug, content.theme);
+    await saveSiteTheme(slug, { theme: themeForTarget(content.theme.theme, media) });
     theme = true;
   }
 
@@ -295,6 +313,7 @@ module.exports = {
   sanitizeSiteContent,
   parseSiteContent,
   restoreMediaFiles,
+  themeForTarget,
   createSiteFromContent,
   replaceSiteContent,
 };

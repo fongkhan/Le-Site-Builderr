@@ -723,9 +723,10 @@ router.post('/api/sites/import-archive',
     }
   });
 
-// Duplication d'un site (admin) : crée un jumeau (contenu + thème) sous un nouveau slug.
-// Images : le jumeau reçoit ses propres copies (supprimer l'un ne casse pas l'autre), et
-// son contenu cite les nouveaux noms de fichiers. Création défaite en cas d'échec.
+// Duplication d'un site (admin) : crée un jumeau (contenu, thème et informations
+// légales) sous un nouveau slug. Images (logo compris) : le jumeau reçoit ses propres
+// copies (supprimer l'un ne casse pas l'autre), et son contenu cite les nouveaux noms de
+// fichiers. Création défaite en cas d'échec.
 router.post('/api/sites/:slug/duplicate', auth.authenticate, auth.requireAdmin, async (req, res) => {
   try {
     const source = await sitesStore.getSiteBySlug(req.params.slug);
@@ -744,6 +745,7 @@ router.post('/api/sites/:slug/duplicate', auth.authenticate, auth.requireAdmin, 
       baseSlug: generateSlug(`${source.slug}-copie`) || `${source.slug}-copie`,
       name: `${source.name} (copie)`,
       stack: source.stack,
+      legal: source.legal,
       content,
       mediaSourceSlug: source.slug,
     });

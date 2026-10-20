@@ -1,5 +1,6 @@
 import type { Block, PageDoc } from '../../../types';
-import { DEFAULT_LOCALE, pageLocale } from './editorModel';
+import { GENERATED_LEGAL_PAGES } from '../../legal/legalModel';
+import { DEFAULT_LOCALE, HOME_SLUG, pageLocale } from './editorModel';
 import { isReservedPageSlug, pageAddress } from './pageSlug';
 
 // Lien des boutons d'action (bannière, formules, produits) : champ ctaLink.
@@ -21,7 +22,7 @@ export interface LinkTarget {
 }
 
 export interface LinkTargets {
-  /** Pages générées du site (adresses normalisées), plus l'index du blog */
+  /** Pages générées du site (adresses normalisées), plus l'index du blog et les pages légales générées */
   pages: LinkTarget[];
   /** Formulaires de la page courante (#contact, #rendez-vous) */
   anchors: LinkTarget[];
@@ -106,19 +107,34 @@ const hasForm = (page: LinkablePage) => page.layout.some((b) => isFormBlock(b.bl
 const isGenerated = (page: LinkablePage) => !(pageLocale(page) === DEFAULT_LOCALE && isReservedPageSlug(page.slug));
 
 // Cibles proposées pour les boutons de la page courante : pages générées (adresses
-// dédupliquées, pages réservées exclues comme au build), index du blog, formulaires de
-// la page, et disponibilité du mode Automatique dans la langue de la page.
+// dédupliquées, pages réservées exclues comme au build), index du blog, pages légales
+// générées, formulaires de la page, et disponibilité du mode Automatique dans la langue de
+// la page.
 export function linkTargetsFor(pages: readonly LinkablePage[], current: LinkablePage): LinkTargets {
   const seen = new Set<string>();
   const pageTargets: LinkTarget[] = [];
-  for (const page of pages) {
-    if (!isGenerated(page)) continue;
-    const href = pageAddress(page.slug, pageLocale(page));
-    if (seen.has(href)) continue;
+  const addTarget = (label: string, href: string) => {
+    if (seen.has(href)) return;
     seen.add(href);
-    pageTargets.push({ label: `${page.title || page.slug} (${href})`, href });
+    pageTargets.push({ label: `${label} (${href})`, href });
+  };
+  for (const page of pages) {
+    if (isGenerated(page)) addTarget(page.title || page.slug, pageAddress(page.slug, pageLocale(page)));
   }
-  if (!seen.has(BLOG_TARGET.href)) pageTargets.push(BLOG_TARGET);
+  if (!seen.has(BLOG_TARGET.href)) {
+    seen.add(BLOG_TARGET.href);
+    pageTargets.push(BLOG_TARGET);
+  }
+
+  // Pages légales générées au build (mentions légales, confidentialité) : langue par
+  // défaut et langues qui ont une page d'accueil, celles de la langue de la page en tête.
+  // Une page du CMS à la même adresse la remplace (déjà proposée sous son titre).
+  const locale = pageLocale(current);
+  const served = new Set([DEFAULT_LOCALE, ...pages.filter((p) => p.slug === HOME_SLUG).map(pageLocale)]);
+  const legalPages = GENERATED_LEGAL_PAGES.filter((g) => served.has(g.locale));
+  for (const legal of [...legalPages.filter((g) => g.locale === locale), ...legalPages.filter((g) => g.locale !== locale)]) {
+    addTarget(legal.label, pageAddress(legal.slug, legal.locale));
+  }
 
   // Ancres des formulaires de la page, comme au build : #contact, puis #contact-2…
   const counts: Record<string, number> = {};
@@ -129,7 +145,6 @@ export function linkTargetsFor(pages: readonly LinkablePage[], current: Linkable
     const n = (counts[block.blockType] = (counts[block.blockType] || 0) + 1);
     anchors.push(n === 1 ? base : { label: `${base.label} (${n})`, href: `${base.href}-${n}` });
   }
-  const locale = pageLocale(current);
   const autoHasForm = pages.some((p) => pageLocale(p) === locale && isGenerated(p) && hasForm(p));
   return { pages: pageTargets, anchors, autoHasForm };
 }

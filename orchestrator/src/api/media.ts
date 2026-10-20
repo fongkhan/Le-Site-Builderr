@@ -17,9 +17,10 @@ export async function uploadMedia(siteSlug: string, file: File): Promise<{ url: 
   return { url };
 }
 
-// Contenu qui cite une image (page de l'éditeur ou article du blog, brouillons compris).
+// Contenu qui cite une image (page de l'éditeur, article du blog, brouillons compris, ou
+// logo du thème).
 export interface MediaUsage {
-  type: 'page' | 'post';
+  type: 'page' | 'post' | 'theme';
   title: string;
   slug: string;
   /** Langue de la page (« fr » par défaut). */

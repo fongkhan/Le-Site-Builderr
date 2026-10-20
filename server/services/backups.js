@@ -17,6 +17,7 @@ const {
   BACKUP_MEDIA,
 } = require('../core/config');
 const { readSitePages, readSitePosts, readSiteTheme, findPayloadSiteId } = require('./content');
+const { isShuttingDown, trackBackground } = require('../core/shutdown');
 
 let backupInProgress = false;
 
@@ -53,7 +54,8 @@ async function createBackupArchive() {
     // Jamais le nom d'une archive existante (deux sauvegardes dans la même seconde)
     const filename = backup.nextFreeBackupName(new Date(), (n) => fs.existsSync(path.join(BACKUPS_DIR, n)));
     const dest = path.join(BACKUPS_DIR, filename);
-    const sites = await sitesStore.listSites();
+    // Tous les sites, sans la limite de la liste de l'interface
+    const sites = await sitesStore.listAllSites();
 
     // Écriture dans un fichier temporaire renommé à la fin : jamais d'archive tronquée
     // listée comme sauvegarde valide.
@@ -137,17 +139,20 @@ const BACKUP_DUE_TOLERANCE_MS = 10 * 60 * 1000;
 // périodique (au plus horaire) lance une sauvegarde quand la dernière date d'au moins un
 // intervalle, y compris au démarrage : un serveur redémarré plus souvent que
 // l'intervalle sauvegarde quand même, et une sauvegarde manuelle repousse la suivante.
+// Arrêt propre : aucune sauvegarde lancée pendant l'arrêt, celle en cours est attendue
+// (trackBackground) au lieu de laisser une archive .part.
 function scheduleBackups() {
   if (!BACKUP_ENABLED) return;
   const intervalMs = backup.backupIntervalMs(BACKUP_INTERVAL_HOURS);
   console.log(`💾 [Sauvegardes] Planifiées toutes les ${intervalMs / 3600000} h (rétention ${BACKUP_KEEP}).`);
   const runIfDue = () => {
+    if (isShuttingDown()) return;
     let latest = null;
     try { latest = listBackups()[0] || null; } catch { latest = null; }
     if (!backup.isBackupDue(latest && latest.createdAt, Date.now(), intervalMs, BACKUP_DUE_TOLERANCE_MS)) return;
-    createBackupArchive()
+    trackBackground(createBackupArchive()
       .then((name) => name && console.log(`💾 [Sauvegardes] Créée : ${name}`))
-      .catch((e) => console.error('💾 [Sauvegardes] Échec :', e.message));
+      .catch((e) => console.error('💾 [Sauvegardes] Échec :', e.message)));
   };
   setTimeout(runIfDue, 30 * 1000).unref?.(); // laisse le boot se terminer
   // Jamais l'intervalle lui-même : au-delà de ~24,8 jours, Node le ramènerait à 1 ms
@@ -213,7 +218,7 @@ async function describeBackup(name) {
   const entryNames = entryNamesOf(zip);
   const manifest = backup.parseBackupManifest(readEntryText(zip, 'manifest.json'));
   const { parseSiteContent } = require('./site-import');
-  const existing = new Set((await sitesStore.listSites()).map((s) => s.slug));
+  const existing = new Set((await sitesStore.listAllSites()).map((s) => s.slug));
   const sites = backup.listBackupSites(entryNames).map((slug) => {
     const read = (file) => readEntryText(zip, `sites/${slug}/${file}`);
     const content = parseSiteContent(read);
@@ -233,12 +238,15 @@ async function describeBackup(name) {
 
 let restoreInProgress = false;
 
-// Restaure un site depuis une sauvegarde.
+// Restaure un site depuis une sauvegarde (jamais pendant l'arrêt du serveur).
 // - copy : nouveau site en brouillon (« <slug>-restauration », ou le slug d'origine si le
-//   site a été supprimé depuis et que l'adresse est libre) ; rien d'existant n'est modifié.
-// - replace : contenu du site existant remplacé, sous le créneau de build et après une
-//   sauvegarde de sécurité de tous les sites.
+//   site a été supprimé depuis et que l'adresse est libre), informations légales
+//   comprises ; rien d'existant n'est modifié.
+// - replace : contenu du site existant remplacé, sous le créneau de build réservé pour ce
+//   site (une suppression attend la fin) et après une sauvegarde de sécurité de tous les
+//   sites ; refusé pendant la suppression du site.
 async function restoreSiteFromBackup({ name, slug, mode }) {
+  if (isShuttingDown()) throw new RestoreError(503, 'Le serveur redémarre : réessayez dans un instant.');
   if (restoreInProgress) throw new RestoreError(409, 'Une restauration est déjà en cours : réessayez dans un instant.');
   restoreInProgress = true;
   try {
@@ -251,7 +259,8 @@ async function restoreSiteFromBackup({ name, slug, mode }) {
     }
     const { parseSiteContent, createSiteFromContent, replaceSiteContent } = require('./site-import');
     const content = parseSiteContent((file) => readEntryText(zip, `sites/${slug}/${file}`));
-    const meta = backup.parseBackupSiteMeta(readEntryText(zip, `sites/${slug}/site.json`));
+    const siteJson = readEntryText(zip, `sites/${slug}/site.json`);
+    const meta = backup.parseBackupSiteMeta(siteJson);
     const mediaFiles = backup.backupMediaEntries(entryNames, slug).map(({ entryName, filename }) => {
       const entry = zip.getEntry(entryName);
       return { filename, size: Number(entry.header.size) || 0, read: () => entry.getData() };
@@ -267,6 +276,7 @@ async function restoreSiteFromBackup({ name, slug, mode }) {
         baseSlug,
         name: siteName,
         stack: meta.stack,
+        legal: backup.parseBackupSiteLegal(siteJson),
         content,
         mediaFiles,
         mediaSourceSlug: existing ? slug : null,
@@ -284,11 +294,19 @@ async function restoreSiteFromBackup({ name, slug, mode }) {
 
     if (!existing) throw new RestoreError(404, "Ce site n'existe plus : restaurez-le en copie.");
     const build = require('./build');
-    // Aucun build ni brouillon pendant le remplacement (il lirait un contenu à moitié écrit).
-    // Le slug est transmis pour que la réservation désigne ce site quand le créneau le gère.
-    if (!build.tryReserve(slug)) throw new RestoreError(409, 'Un build est en cours : réessayez quand il sera terminé.');
+    // Contrôle et réservation synchrones (aucun await entre les deux, comme la suppression
+    // entre isSiteBusy et markDeleting) : une suppression en cours refuse la restauration,
+    // une restauration en cours (isSiteBusy) refuse la suppression. Aucun build ni brouillon
+    // pendant le remplacement (il lirait un contenu à moitié écrit).
+    if (build.isSiteDeleting(slug)) throw new RestoreError(409, 'Ce site est en cours de suppression.');
+    if (!build.tryReserve(slug)) {
+      if (isShuttingDown()) throw new RestoreError(503, 'Le serveur redémarre : réessayez dans un instant.');
+      throw new RestoreError(409, 'Un build est en cours : réessayez quand il sera terminé.');
+    }
     let safetyBackup = null;
     try {
+      // Site supprimé entre sa lecture et la réservation : rien n'est écrit
+      if (!(await sitesStore.getSiteBySlug(slug))) throw new RestoreError(404, "Ce site n'existe plus : restaurez-le en copie.");
       safetyBackup = await createBackupArchive();
       if (!safetyBackup) throw new RestoreError(409, 'Une sauvegarde est déjà en cours : réessayez dans un instant.');
       const r = await replaceSiteContent(slug, content, { mediaFiles });
