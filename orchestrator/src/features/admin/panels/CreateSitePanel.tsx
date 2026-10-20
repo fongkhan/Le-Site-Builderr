@@ -1,8 +1,12 @@
 import { useState } from 'react';
 import { createSite } from '../../../api/sites';
 import { errorMessage } from '../../../api/client';
+import { FieldError } from '../../../components/ui/FieldError';
 import { useToast } from '../../../components/ui/ToastContext';
+import { focusField, invalidProps, validateSiteName } from '../../../lib/formValidation';
 import { StackSelect } from '../StackSelect';
+
+const NAME_ERROR_ID = 'new-site-name-erreur';
 
 export function CreateSitePanel({ onCreated }: { onCreated: () => void }) {
   const toast = useToast();
@@ -13,10 +17,14 @@ export function CreateSitePanel({ onCreated }: { onCreated: () => void }) {
   const [repositoryPath, setRepositoryPath] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [nameError, setNameError] = useState<string | undefined>();
 
   const handleCreate = async () => {
-    if (!name.trim()) {
-      toast.error('Le nom du site est requis.');
+    if (creating) return;
+    const error = validateSiteName(name);
+    setNameError(error);
+    if (error) {
+      focusField('new-site-name');
       return;
     }
     setCreating(true);
@@ -45,7 +53,15 @@ export function CreateSitePanel({ onCreated }: { onCreated: () => void }) {
   };
 
   return (
-    <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
+    <form
+      className="glass-panel"
+      style={{ display: 'flex', flexDirection: 'column', gap: 15 }}
+      noValidate
+      onSubmit={(e) => {
+        e.preventDefault();
+        handleCreate();
+      }}
+    >
       <h3 style={{ fontSize: '1.25rem', borderBottom: '1px solid var(--border-color)', paddingBottom: 10 }}>
         🆕 Enregistrer un nouveau site
       </h3>
@@ -54,8 +70,19 @@ export function CreateSitePanel({ onCreated }: { onCreated: () => void }) {
       </p>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
         <div>
-          <label className="field-label" htmlFor="new-site-name">Nom du site</label>
-          <input id="new-site-name" type="text" className="input-text" style={{ padding: 8, fontSize: '0.875rem' }} value={name} onChange={(e) => setName(e.target.value)} placeholder="Coiffeur Lyon" />
+          <label className="field-label" htmlFor="new-site-name">Nom du site *</label>
+          <input
+            id="new-site-name"
+            type="text"
+            className="input-text"
+            style={{ padding: 8, fontSize: '0.875rem' }}
+            required
+            value={name}
+            onChange={(e) => { setName(e.target.value); setNameError(undefined); }}
+            placeholder="Coiffeur Lyon"
+            {...invalidProps(NAME_ERROR_ID, nameError)}
+          />
+          <FieldError id={NAME_ERROR_ID} message={nameError} />
         </div>
         <div>
           <label className="field-label" htmlFor="new-site-domain">Domaine (optionnel)</label>
@@ -63,8 +90,8 @@ export function CreateSitePanel({ onCreated }: { onCreated: () => void }) {
         </div>
       </div>
       <div>
-        <label className="field-label">Stack technique</label>
-        <StackSelect value={stack} onChange={setStack} compact />
+        <label className="field-label" htmlFor="new-site-stack">Stack technique</label>
+        <StackSelect id="new-site-stack" value={stack} onChange={setStack} compact />
       </div>
 
       <button
@@ -89,9 +116,9 @@ export function CreateSitePanel({ onCreated }: { onCreated: () => void }) {
         </div>
       )}
 
-      <button className="btn btn-primary" style={{ width: '100%', marginTop: 'auto' }} onClick={handleCreate} disabled={creating}>
+      <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: 'auto' }} disabled={creating}>
         {creating ? 'Création…' : 'Initialiser et enregistrer'}
       </button>
-    </div>
+    </form>
   );
 }

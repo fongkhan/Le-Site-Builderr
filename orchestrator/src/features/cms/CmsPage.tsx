@@ -35,6 +35,7 @@ import {
   type EditorPage,
 } from './lib/editorModel';
 import { derivePageSlug, pageAddress } from './lib/pageSlug';
+import { linkTargetsFor } from './lib/ctaLink';
 import { hasNativeUndo } from './lib/shortcuts';
 import { PageSelector } from './components/PageSelector';
 import { PageSettings } from './components/PageSettings';
@@ -153,6 +154,8 @@ function CmsEditor({ site }: { site: Site }) {
   }
 
   const activePage = pages.find((p) => p.id === selectedPageId) ?? pages[0];
+  // Cibles du lien des boutons : pages du site et formulaires de la page affichée
+  const linkTargets = activePage ? linkTargetsFor(pages, activePage) : undefined;
 
   const selectPage = (pageId: string | null) => {
     setSelectedPageId(pageId);
@@ -353,6 +356,7 @@ function CmsEditor({ site }: { site: Site }) {
               onRemove={setBlockToRemove}
               onDuplicate={duplicateSection}
               updateBlock={updateBlockById}
+              linkTargets={linkTargets}
             />
           ) : (
             <EmptyState icon="🧱" title="Page vide" description="Ajoutez une première section avec les boutons ci-dessous." />

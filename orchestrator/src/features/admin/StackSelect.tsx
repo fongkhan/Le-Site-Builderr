@@ -1,11 +1,13 @@
 import { STACK_OPTIONS } from './constants';
 
 // Sélecteur de stack : une valeur inconnue (site ancien, import) reste affichée et
-// sélectionnée telle quelle au lieu d'être silencieusement remplacée.
-export function StackSelect({ value, onChange, compact = false }: { value: string; onChange: (v: string) => void; compact?: boolean }) {
+// sélectionnée telle quelle au lieu d'être silencieusement remplacée. `id` : relié au
+// libellé du formulaire (htmlFor).
+export function StackSelect({ id, value, onChange, compact = false }: { id?: string; value: string; onChange: (v: string) => void; compact?: boolean }) {
   const known = STACK_OPTIONS.some((o) => o.value === value);
   return (
     <select
+      id={id}
       className="select-dark"
       value={value}
       onChange={(e) => onChange(e.target.value)}

@@ -63,11 +63,10 @@ export function PostEditor({ site, post, onChange, onSave, onCancel, saving }: {
       </div>
 
       <label className="field-label" htmlFor="post-title">Titre *</label>
-      <input id="post-title" type="text" className="input-text" value={post.title} onChange={(e) => set('title', e.target.value)} />
+      <input id="post-title" type="text" className="input-text" required value={post.title} onChange={(e) => set('title', e.target.value)} />
       <label className="field-label" htmlFor="post-excerpt">Extrait (résumé affiché dans la liste)</label>
       <textarea id="post-excerpt" className="input-text" style={{ padding: 8 }} rows={2} value={post.excerpt || ''} onChange={(e) => set('excerpt', e.target.value)} />
-      <label className="field-label">Image de couverture</label>
-      <ImageField siteSlug={site.slug} value={post.coverImage || ''} placeholder="URL ou téléversement…" onChange={(v) => set('coverImage', v)} />
+      <ImageField label="Image de couverture" siteSlug={site.slug} value={post.coverImage || ''} placeholder="URL ou téléversement…" onChange={(v) => set('coverImage', v)} />
       <label className="field-label" htmlFor="post-tags">Étiquettes (séparées par des virgules)</label>
       <input id="post-tags" type="text" className="input-text" placeholder="pain, bio, saison" value={post.tags || ''} onChange={(e) => set('tags', e.target.value)} />
       <label className="field-label" htmlFor="post-body">Contenu — mise en forme légère : **gras**, *italique*, # Titre, - liste, [lien](https://…)</label>

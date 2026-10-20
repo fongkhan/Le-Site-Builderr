@@ -44,15 +44,14 @@ const noindex = (req, res, next) => {
   next();
 };
 
-// Fichiers statiques (/preview, /draft) : les formats interprétables par le navigateur
-// (SVG, XML, XSL) peuvent porter du script ; ils sont servis dans un bac à sable sans
-// script ni ressource externe.
-const SANDBOXED_EXT = /\.(svgz?|xml|xsl)$/i;
+// Fichiers statiques (/preview, /draft) : CSP selon le type (lib/static-csp.js) — bac à
+// sable sans script pour SVG, XML et XSL (formats interprétables pouvant porter du
+// script) ; pages HTML sans plugin, sans <base> externe, jamais encadrées par un autre site.
+const { staticCspFor } = require('./lib/static-csp');
 const staticOptions = {
   setHeaders(res, filePath) {
-    if (SANDBOXED_EXT.test(filePath)) {
-      res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
-    }
+    const csp = staticCspFor(filePath);
+    if (csp) res.setHeader('Content-Security-Policy', csp);
   },
 };
 

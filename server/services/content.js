@@ -199,17 +199,16 @@ async function fallbackPages(siteSlug) {
   return starterPages(site ? site.name : siteSlug);
 }
 
-// Schémas d'URL exécutables : jamais acceptés dans un champ d'URL de bloc (image, avatar,
-// lien Google, réseaux sociaux), qui finit en href/src sur le site publié. Les champs de
-// texte ne sont pas concernés : « JavaScript & TypeScript » est un intitulé légitime.
-const DANGEROUS_URL = /^(?:javascript|vbscript)\s*:|^data\s*:\s*text\/html/i;
+// Schémas d'URL exécutables (javascript:, vbscript:, data:text/html) : jamais acceptés dans
+// un champ d'URL de bloc (image, avatar, lien Google, réseaux sociaux, lien des boutons),
+// qui finit en href/src sur le site publié. Les champs de texte ne sont pas concernés :
+// « JavaScript & TypeScript » est un intitulé légitime. Règle partagée avec Payload
+// (lib/url-safety.js), qui l'applique aussi au lien des boutons (ctaLink).
+const { isDangerousUrl } = require('../lib/url-safety');
 const URL_FIELDS = new Set([
   'backgroundImage', 'image', 'images', 'url', 'avatar', 'googleBusinessUrl',
-  'socials', 'facebook', 'instagram', 'linkedin', 'x',
+  'socials', 'facebook', 'instagram', 'linkedin', 'x', 'ctaLink',
 ]);
-
-// Les navigateurs ignorent blancs et caractères de contrôle dans un schéma (« java\tscript: »).
-const isDangerousUrl = (value) => DANGEROUS_URL.test(value.replace(/[\u0000-\u0020]/g, ''));
 
 function findDangerousUrl(value, inUrlField = false) {
   if (typeof value === 'string') return inUrlField && isDangerousUrl(value) ? value : null;

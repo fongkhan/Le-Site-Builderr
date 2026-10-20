@@ -88,6 +88,24 @@ const siteRelationField = (extra: Record<string, unknown> = {}): any => ({
   ...extra,
 })
 
+// Lien d'un bouton d'action (bannière, formule, produit). Les schémas exécutables
+// (javascript:, vbscript:, data:text/html) sont refusés ici aussi : l'API REST de Payload
+// n'accepte pas ce que le CMS refuse. Le reste (saisie en cours, page supprimée…) est
+// toléré : le template ignore un lien invalide et revient au formulaire du site.
+// Un validate personnalisé remplace celui du type text : ce dernier (longueur maximale…)
+// est donc appelé ensuite. Module CommonJS du serveur : import par défaut (interop tsx et Next).
+import urlSafety from './lib/url-safety.js'
+import { validations } from 'payload'
+const ctaLinkField = (): any => ({
+  name: 'ctaLink',
+  type: 'text',
+  validate: (value: unknown, options: any) => {
+    const safe = urlSafety.validateSafeUrl(value)
+    return safe === true ? validations.text(value as any, options) : safe
+  },
+  admin: { description: 'Lien du bouton : vide = formulaire du site ; /page/, #contact, https://…, tel:… ou mailto:…' },
+})
+
 const frontendOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:5173')
   .split(',')
   .map((o) => o.trim())
@@ -653,6 +671,7 @@ export default buildConfig({
                 { name: 'title', type: 'text' },
                 { name: 'subtitle', type: 'text' },
                 { name: 'ctaText', type: 'text' },
+                ctaLinkField(),
                 { name: 'backgroundImage', type: 'text' },
               ],
             },
@@ -681,6 +700,7 @@ export default buildConfig({
                     { name: 'name', type: 'text' },
                     { name: 'price', type: 'text' },
                     { name: 'image', type: 'text' },
+                    ctaLinkField(),
                   ],
                 },
               ],
@@ -749,6 +769,7 @@ export default buildConfig({
                       ],
                     },
                     { name: 'ctaText', type: 'text' },
+                    ctaLinkField(),
                     { name: 'isPopular', type: 'checkbox' },
                   ],
                 },

@@ -1,9 +1,15 @@
 import { useState } from 'react';
 import { createClient } from '../../api/users';
 import { errorMessage } from '../../api/client';
+import { FieldError } from '../../components/ui/FieldError';
 import { Modal } from '../../components/ui/Modal';
 import { useToast } from '../../components/ui/ToastContext';
+import { firstInvalid, focusField, invalidProps, validateClientAccount, type FieldErrors } from '../../lib/formValidation';
 import type { Site } from '../../types';
+
+type Field = 'email' | 'password' | 'quota';
+const FIELD_IDS: Record<Field, string> = { email: 'cc-email', password: 'cc-password', quota: 'cc-quota' };
+const errorId = (field: Field) => `${FIELD_IDS[field]}-erreur`;
 
 // Création d'un compte client depuis le panel admin (POST REST Payload /api/users).
 export function CreateClientModal({ sites, onClose, onCreated }: { sites: Site[]; onClose: () => void; onCreated: () => void }) {
@@ -14,29 +20,24 @@ export function CreateClientModal({ sites, onClose, onCreated }: { sites: Site[]
   const [quotaEnabled, setQuotaEnabled] = useState(false);
   const [quota, setQuota] = useState('10');
   const [saving, setSaving] = useState(false);
+  const [errors, setErrors] = useState<FieldErrors<Field>>({});
+
+  const clearError = (field: Field) => setErrors((prev) => (prev[field] ? { ...prev, [field]: undefined } : prev));
 
   const toggleSite = (slug: string) => {
     setSiteSlugs((prev) => (prev.includes(slug) ? prev.filter((s) => s !== slug) : [...prev, slug]));
   };
 
   const handleCreate = async () => {
-    if (!email.trim() || !/.+@.+\..+/.test(email)) {
-      toast.error('Un email valide est requis.');
+    if (saving) return;
+    const found = validateClientAccount({ email, password, quotaEnabled, quota });
+    setErrors(found);
+    const first = firstInvalid<Field>(['email', 'password', 'quota'], found);
+    if (first) {
+      focusField(FIELD_IDS[first]);
       return;
     }
-    if (password.length < 12) {
-      toast.error('Le mot de passe doit contenir au moins 12 caractères.');
-      return;
-    }
-    let aiDailyQuota: number | null = null;
-    if (quotaEnabled) {
-      const n = Number(quota.trim());
-      if (quota.trim() === '' || !Number.isInteger(n) || n < 0) {
-        toast.error('Le quota IA doit être un entier positif ou nul.');
-        return;
-      }
-      aiDailyQuota = n;
-    }
+    const aiDailyQuota = quotaEnabled ? Number(quota.trim()) : null;
     setSaving(true);
     try {
       await createClient({ email: email.trim(), password, siteSlugs, aiDailyQuota });
@@ -55,25 +56,47 @@ export function CreateClientModal({ sites, onClose, onCreated }: { sites: Site[]
       title="👤 Créer un compte client"
       subtitle="Le client accèdera uniquement aux sites sélectionnés et à l'onboarding."
       onClose={onClose}
+      onSubmit={handleCreate}
       footer={
         <>
-          <button className="btn btn-secondary" onClick={onClose} disabled={saving}>Annuler</button>
-          <button className="btn btn-primary" onClick={handleCreate} disabled={saving}>
+          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={saving}>Annuler</button>
+          <button type="submit" className="btn btn-primary" disabled={saving}>
             {saving ? 'Création…' : 'Créer le compte'}
           </button>
         </>
       }
     >
       <div>
-        <label className="field-label" htmlFor="cc-email">Email *</label>
-        <input id="cc-email" type="email" className="input-text" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="client@exemple.com" />
+        <label className="field-label" htmlFor={FIELD_IDS.email}>Email *</label>
+        <input
+          id={FIELD_IDS.email}
+          type="email"
+          className="input-text"
+          required
+          value={email}
+          onChange={(e) => { setEmail(e.target.value); clearError('email'); }}
+          placeholder="client@exemple.com"
+          {...invalidProps(errorId('email'), errors.email)}
+        />
+        <FieldError id={errorId('email')} message={errors.email} />
       </div>
       <div>
-        <label className="field-label" htmlFor="cc-password">Mot de passe * (12 caractères min.)</label>
-        <input id="cc-password" type="password" className="input-text" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
+        <label className="field-label" htmlFor={FIELD_IDS.password}>Mot de passe * (12 caractères min.)</label>
+        <input
+          id={FIELD_IDS.password}
+          type="password"
+          className="input-text"
+          required
+          minLength={12}
+          value={password}
+          onChange={(e) => { setPassword(e.target.value); clearError('password'); }}
+          autoComplete="new-password"
+          {...invalidProps(errorId('password'), errors.password)}
+        />
+        <FieldError id={errorId('password')} message={errors.password} />
       </div>
-      <div>
-        <label className="field-label">Sites accessibles</label>
+      <fieldset className="field-group">
+        <legend className="field-label">Sites accessibles</legend>
         {sites.length === 0 ? (
           <p style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Aucun site disponible. Créez d'abord un site.</p>
         ) : (
@@ -86,15 +109,30 @@ export function CreateClientModal({ sites, onClose, onCreated }: { sites: Site[]
             ))}
           </div>
         )}
-      </div>
+      </fieldset>
       <div>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem', cursor: 'pointer' }}>
-          <input type="checkbox" checked={quotaEnabled} onChange={(e) => setQuotaEnabled(e.target.checked)} />
+          <input
+            type="checkbox"
+            checked={quotaEnabled}
+            onChange={(e) => { setQuotaEnabled(e.target.checked); clearError('quota'); }}
+          />
           <span>Quota IA journalier personnalisé</span>
         </label>
-        {quotaEnabled && (
-          <input type="number" min={0} className="input-text" style={{ marginTop: 6 }} value={quota} onChange={(e) => setQuota(e.target.value)} placeholder="ex : 10 (0 = bloqué)" />
-        )}
+        {/* Toujours affiché (désactivé tant que la case n'est pas cochée) : le libellé reste visible */}
+        <label className="field-label" htmlFor={FIELD_IDS.quota} style={{ marginTop: 6 }}>Générations IA par jour (0 = bloqué)</label>
+        <input
+          id={FIELD_IDS.quota}
+          type="number"
+          min={0}
+          step={1}
+          className="input-text"
+          disabled={!quotaEnabled}
+          value={quota}
+          onChange={(e) => { setQuota(e.target.value); clearError('quota'); }}
+          {...invalidProps(errorId('quota'), errors.quota)}
+        />
+        <FieldError id={errorId('quota')} message={errors.quota} />
       </div>
     </Modal>
   );

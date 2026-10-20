@@ -39,9 +39,11 @@ export interface Block {
   title?: string;
   subtitle?: string;
   ctaText?: string;
+  /** Lien du bouton : vide = formulaire du site ; #ancre, /page/, https://…, tel:… ou mailto:… (null possible à la lecture) */
+  ctaLink?: string;
   backgroundImage?: string;
   items?: { title?: string; description?: string; question?: string; answer?: string }[];
-  products?: { name: string; price: string; image: string }[];
+  products?: { name: string; price: string; image: string; ctaLink?: string }[];
   images?: string[];
   testimonials?: { quote: string; author: string; role: string; avatar: string; rating?: number }[];
   plans?: {
@@ -50,6 +52,7 @@ export interface Block {
     description: string;
     features: { feature: string }[];
     ctaText: string;
+    ctaLink?: string;
     isPopular: boolean;
   }[];
   // Bloc appointment (demande de rendez-vous)
