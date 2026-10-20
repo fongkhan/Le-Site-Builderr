@@ -150,3 +150,39 @@ test('isForgotPasswordPath — chemin canonique, quelle que soit sa forme', () =
     assert.equal(isForgotPasswordPath(p), false, p);
   }
 });
+
+test('bodyReceived — corps complet, annoncé trop gros, reçu plus tard, connexion fermée', async () => {
+  const { bodyReceived } = require('../../core/http.js');
+  const req = (over = {}) => ({ headers: {}, complete: false, readableLength: 0, socket: { destroyed: false }, ...over });
+  assert.equal(await bodyReceived(req({ complete: true }), 100), true);
+  assert.equal(await bodyReceived(req({ headers: { 'content-length': '101' } }), 100), false);
+  const later = req({ headers: { 'content-length': '10' } });
+  const pending = bodyReceived(later, 100, 5);
+  setTimeout(() => { later.complete = true; }, 20);
+  assert.equal(await pending, true);
+  const closed = req();
+  const waiting = bodyReceived(closed, 100, 5);
+  setTimeout(() => { closed.socket.destroyed = true; }, 20);
+  assert.equal(await waiting, false);
+  const chunked = req();
+  const growing = bodyReceived(chunked, 100, 5);
+  setTimeout(() => { chunked.readableLength = 101; }, 20);
+  assert.equal(await growing, false, 'corps sans longueur annoncée dépassant la limite');
+});
+
+test('runForgotPassword — corps trop gros : 413 sans traitement', async () => {
+  const { runForgotPassword } = require('../../core/http.js');
+  const sent = {};
+  const res = {
+    headersSent: false,
+    status(code) { sent.status = code; return this; },
+    set(name, value) { sent[name] = value; return this; },
+    json(body) { sent.body = body; return this; },
+  };
+  let ran = false;
+  await runForgotPassword({ headers: { 'content-length': String(64 * 1024) }, socket: { destroyed: false } }, res, () => { ran = true; });
+  assert.equal(ran, false);
+  assert.equal(sent.status, 413);
+  assert.equal(sent.Connection, 'close');
+  assert.equal(await runForgotPassword({ headers: {}, complete: true, socket: { destroyed: false } }, res, () => 'traité'), 'traité');
+});

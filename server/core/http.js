@@ -155,16 +155,52 @@ function concurrencyGate(limit) {
   });
 }
 
+// Corps de la requête entièrement reçu, sans le lire (Next le lira ensuite) : vrai une
+// fois le message complet, faux si la connexion se ferme avant ou si le corps dépasse
+// maxBytes (annoncé ou déjà reçu). L'analyseur HTTP lit le socket sans événement JS :
+// l'état est relevé toutes les `pollMs`.
+function bodyReceived(req, maxBytes, pollMs = 25) {
+  const declared = Number(req.headers['content-length']);
+  if (Number.isFinite(declared) && declared > maxBytes) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let timer = null;
+    const check = () => {
+      let result = null;
+      if (req.complete) result = true;
+      else if (!req.socket || req.socket.destroyed || req.readableLength > maxBytes) result = false;
+      if (result === null) return false;
+      clearInterval(timer);
+      resolve(result);
+      return true;
+    };
+    if (!check()) timer = setInterval(check, pollMs);
+  });
+}
+
 // Mot de passe oublié (Payload) : la transaction de la requête reste ouverte pendant une
 // écriture hors transaction (seconde connexion du pool) puis pendant l'envoi SMTP.
-// Exécutées deux à la fois au plus (express-app.js, avant Next) : des demandes
-// simultanées (anonymes) ne peuvent ni bloquer le pool ni l'occuper le temps des envois.
+// Exécutées deux à la fois au plus, et seulement une fois le corps reçu (un envoi au
+// compte-gouttes ne garde aucune place) : des demandes simultanées (anonymes) ne peuvent
+// ni bloquer le pool ni l'occuper le temps des envois.
 const FORGOT_PASSWORD_PATH = '/api/users/forgot-password';
+const FORGOT_PASSWORD_MAX_BODY = 8 * 1024;
 const forgotPasswordGate = concurrencyGate(2);
 const isForgotPasswordPath = (rawPath) => {
   const p = canonicalApiPath(rawPath);
   return p === FORGOT_PASSWORD_PATH || p.startsWith(FORGOT_PASSWORD_PATH + '/');
 };
+
+// Traitement d'une demande de mot de passe oublié (run : gestionnaire Next) derrière la
+// file d'attente. Corps trop gros : 413 ; connexion fermée avant la fin du corps : rien.
+async function runForgotPassword(req, res, run) {
+  if (!(await bodyReceived(req, FORGOT_PASSWORD_MAX_BODY))) {
+    if (!req.socket?.destroyed && !res.headersSent) {
+      res.status(413).set('Connection', 'close').json({ error: 'Requête trop volumineuse.' });
+    }
+    return;
+  }
+  return forgotPasswordGate(req, run);
+}
 
 // Middleware unique : mêmes instances de limiteurs (donc même compteur par IP) quelle que
 // soit la forme du chemin.
@@ -297,8 +333,9 @@ module.exports = {
   mountRateLimits,
   authLimiterFor,
   concurrencyGate,
-  forgotPasswordGate,
+  bodyReceived,
   isForgotPasswordPath,
+  runForgotPassword,
   EXPRESS_ROUTE_PREFIXES,
   isExpressRoute,
   isPublicRoute,

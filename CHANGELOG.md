@@ -35,7 +35,7 @@ Toutes les modifications notables apportées à ce projet sont documentées dans
 
 ### Vérification
 
-- Matrice de sécurité : 422 contrôles en développement, 429 en production avec l'interface servie (228 auparavant), organisés en modules par thème, dont des rafales d'écritures simultanées. 603 tests unitaires serveur, 362 tests Vitest, fixture du template étendue (14 pages, CSP, médias, identité, légal, parité du sitemap).
+- Matrice de sécurité : 422 contrôles en développement, 429 en production avec l'interface servie (228 auparavant), organisés en modules par thème, dont des rafales d'écritures simultanées. 605 tests unitaires serveur, 362 tests Vitest, fixture du template étendue (14 pages, CSP, médias, identité, légal, parité du sitemap).
 - Nouveaux contrôles : inventaire automatique des gardes de toutes les routes Express, lint ESLint et typecheck TypeScript du serveur, cohérence de la documentation, jobs CI de production (build, migrations, démarrage, arrêt propre) et Docker.
 
 ## [2.3.0] - 2026-10-02

@@ -7,7 +7,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const config = require('./core/config');
 const { FRONTEND_ORIGINS, PUBLIC_HTML_DIR, DRAFTS_DIR, IS_PRODUCTION } = config;
-const { mountRateLimits, jsonBodyForExpressRoutes, jsonErrorHandler, isPublicRoute, trustProxySetting, sendSignInPage, forgotPasswordGate, isForgotPasswordPath } = require('./core/http');
+const { mountRateLimits, jsonBodyForExpressRoutes, jsonErrorHandler, isPublicRoute, trustProxySetting, sendSignInPage, isForgotPasswordPath, runForgotPassword } = require('./core/http');
 const auth = require('./auth');
 const { isValidSlug } = require('./lib/paths');
 const { isSwapDirRequest } = require('./lib/fs-swap');
@@ -204,7 +204,7 @@ function createApp({ nextHandler }) {
   // oublié : file d'attente bornée (core/http.js), tenue jusqu'à la fin du traitement.
   app.all('*', (req, res, next) => {
     if (!isForgotPasswordPath(req.path)) return nextHandler(req, res);
-    forgotPasswordGate(req, () => nextHandler(req, res)).catch(next);
+    runForgotPassword(req, res, () => nextHandler(req, res)).catch(next);
   });
 
   app.use(jsonErrorHandler);
