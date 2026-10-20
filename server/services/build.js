@@ -947,4 +947,6 @@ module.exports = {
   unmarkDeleting,
   isSiteDeleting,
   buildHistoryExcerpt,
+  // Exporté pour les tests
+  writeSeoFiles,
 };
