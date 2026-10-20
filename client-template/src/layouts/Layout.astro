@@ -7,6 +7,8 @@ import 'virtual:theme-fonts.css';
 // Identité du site : couleur primaire du thème (barre du navigateur mobile)
 import themeCss from '../styles/theme.css?raw';
 import { themeCssColor } from '../lib/monogram.mjs';
+import { getSiteContent } from '../lib/content';
+import { widthAtHeight } from '../lib/media-images.mjs';
 import { localePath, normalizeLocale, LOCALE_LABELS, DEFAULT_LOCALE } from '../lib/i18n.mjs';
 import { withBase, stripBase, absoluteUrl } from '../lib/url';
 import { jsonLdString } from '../lib/jsonld';
@@ -83,6 +85,11 @@ const themeColor = themeCssColor(themeCss, 'primary');
 const rawLogo = process.env.PUBLIC_SITE_LOGO || '';
 const logoPath = /^\/media\/(?!\.)[A-Za-z0-9._~%-]+$/.test(rawLogo) ? rawLogo : '';
 const logoSrc = logoPath ? withBase(logoPath) : '';
+// Logo affiché sur 40 px de haut ; largeur déduite de ses dimensions dans la médiathèque
+// (aucun décalage de l'en-tête au chargement). Inconnues : hauteur seule.
+const LOGO_HEIGHT = 40;
+const { media } = await getSiteContent();
+const logoWidth = logoPath ? widthAtHeight(logoPath, LOGO_HEIGHT, { media, mediaPrefix: '/media/' }) : null;
 // La marque mène à l'accueil de la langue de la page (sinon à celui de la langue par défaut)
 const brandHref = withBase(localePath(locales.includes(pageLocale) ? pageLocale : DEFAULT_LOCALE, 'home'));
 
@@ -172,7 +179,7 @@ const jsonLdScripts = (jsonLd || []).filter(Boolean).map((d) => jsonLdString(d))
 			{/* Marque : logo (texte alternatif = nom du site) ou nom du site ; jamais de h1 ici */}
 			<a class="site-brand" href={brandHref}>
 				{logoSrc
-					? <img class="site-brand-logo" src={logoSrc} alt={siteName} height="40" decoding="async" />
+					? <img class="site-brand-logo" src={logoSrc} alt={siteName} width={logoWidth ?? undefined} height={LOGO_HEIGHT} decoding="async" />
 					: <span class="site-brand-name">{siteName}</span>}
 			</a>
 			{(pages.length > 1 || otherLocales.length > 0) && (

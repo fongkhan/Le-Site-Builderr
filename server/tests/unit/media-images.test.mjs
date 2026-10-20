@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { indexMedia, mediaNameFromUrl, variantUrl, imageAttrs } from '../../../client-template/src/lib/media-images.mjs';
+import { indexMedia, mediaNameFromUrl, variantUrl, imageAttrs, widthAtHeight } from '../../../client-template/src/lib/media-images.mjs';
 
 const require = createRequire(import.meta.url);
 const { variantRelPath } = require('../../lib/media-variants.js');
@@ -71,6 +71,20 @@ test('variantUrl — variante annoncée seulement', () => {
   assert.equal(variantUrl(`${PREFIX}mon%20image.png`, 1600, { media, mediaPrefix: PREFIX }), `${PREFIX}w1600/mon%20image.png`);
   assert.equal(variantUrl(`${PREFIX}four.jpg`, 1600, { media, mediaPrefix: PREFIX }), `${PREFIX}four.jpg`);
   assert.equal(variantUrl('https://images.example/x.jpg', 1600, { media, mediaPrefix: PREFIX }), 'https://images.example/x.jpg');
+});
+
+test('widthAtHeight — largeur du logo à hauteur fixe d’après la médiathèque, null si inconnue', () => {
+  assert.equal(widthAtHeight(`${PREFIX}four.jpg`, 40, { media, mediaPrefix: PREFIX }), 60); // 1600 × 40 / 1067
+  assert.equal(widthAtHeight(`${PREFIX}mon%20image.png`, 40, { media, mediaPrefix: PREFIX }), 60);
+  assert.equal(widthAtHeight(`${PREFIX}tasse.jpg`, 40, { media, mediaPrefix: PREFIX }), 40);
+  // Dimensions inconnues, image hors médiathèque, hauteur invalide
+  for (const [src, h] of [[`${PREFIX}sans-largeur.png`, 40], [`${PREFIX}absente.png`, 40], ['https://images.example/x.jpg', 40], [`${PREFIX}four.jpg`, 0], [`${PREFIX}four.jpg`, NaN]]) {
+    assert.equal(widthAtHeight(src, h, { media, mediaPrefix: PREFIX }), null, `${src} ${h}`);
+  }
+  assert.equal(widthAtHeight(`${PREFIX}four.jpg`, 40, { media: {}, mediaPrefix: PREFIX }), null);
+  // Très large et très plat : au moins 1 px
+  const flat = indexMedia([{ filename: 'trait.png', width: 1, height: 1000 }]);
+  assert.equal(widthAtHeight(`${PREFIX}trait.png`, 40, { media: flat, mediaPrefix: PREFIX }), 1);
 });
 
 test('cohérence avec le serveur — manifeste et chemins des variantes publiées', () => {

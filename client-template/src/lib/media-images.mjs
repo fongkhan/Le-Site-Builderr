@@ -81,3 +81,14 @@ export function imageAttrs(src, { media, mediaPrefix, fallbackAlt = '', sizes } 
   }
   return attrs;
 }
+
+/**
+ * Largeur d'affichage d'une image de la médiathèque rendue à `height` px de haut (logo de
+ * l'en-tête), d'après ses dimensions intrinsèques : place réservée avant le chargement.
+ * null si elles sont inconnues (image hors médiathèque ou manifeste absent).
+ */
+export function widthAtHeight(src, height, { media, mediaPrefix } = {}) {
+  const info = lookup(media, mediaNameFromUrl(src, mediaPrefix));
+  if (!info || !info.width || !info.height || !(Number.isFinite(height) && height > 0)) return null;
+  return Math.max(1, Math.round((info.width * height) / info.height));
+}

@@ -23,9 +23,10 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run build
+      # Code de l'interface seulement : les tests citent des charges hostiles (« javascript:alert(1) »)
       - name: Aucun alert()/confirm()/prompt() natif
         run: |
-          if grep -rnE "\b(alert|confirm|prompt)\(" src --include='*.ts' --include='*.tsx' | grep -v '^\s*//' | grep -vE '(//|\*).*\b(alert|confirm|prompt)\('; then
+          if grep -rnE "\b(alert|confirm|prompt)\(" src --include='*.ts' --include='*.tsx' --exclude='*.test.ts' --exclude='*.test.tsx' | grep -v '^\s*//' | grep -vE '(//|\*).*\b(alert|confirm|prompt)\('; then
             echo "::error::Des appels natifs alert()/confirm()/prompt() subsistent — utiliser les toasts/modales."
             exit 1
           fi
