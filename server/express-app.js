@@ -7,7 +7,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const config = require('./core/config');
 const { FRONTEND_ORIGINS, PUBLIC_HTML_DIR, DRAFTS_DIR, IS_PRODUCTION } = config;
-const { mountRateLimits, jsonBodyForExpressRoutes, jsonErrorHandler, isPublicRoute, trustProxySetting, sendSignInPage } = require('./core/http');
+const { mountRateLimits, jsonBodyForExpressRoutes, jsonErrorHandler, isPublicRoute, trustProxySetting, sendSignInPage, forgotPasswordGate, isForgotPasswordPath } = require('./core/http');
 const auth = require('./auth');
 const { isValidSlug } = require('./lib/paths');
 const { isSwapDirRequest } = require('./lib/fs-swap');
@@ -200,8 +200,12 @@ function createApp({ nextHandler }) {
   // l'optimiseur AVIF, SSRF) : 404 JSON. Couvre aussi le proxy /_next de Vite en dev.
   app.all('/_next/image', (req, res) => res.status(404).json({ error: 'Ressource introuvable.' }));
 
-  // Tout le reste : Next.js (admin Payload, API REST Payload, login…)
-  app.all('*', (req, res) => nextHandler(req, res));
+  // Tout le reste : Next.js (admin Payload, API REST Payload, login…). Mot de passe
+  // oublié : file d'attente bornée (core/http.js), tenue jusqu'à la fin du traitement.
+  app.all('*', (req, res, next) => {
+    if (!isForgotPasswordPath(req.path)) return nextHandler(req, res);
+    forgotPasswordGate(req, () => nextHandler(req, res)).catch(next);
+  });
 
   app.use(jsonErrorHandler);
 

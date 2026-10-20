@@ -74,37 +74,71 @@ test('authLimiterFor — limiteurs de login et de réinitialisation, quelle que 
   }
 });
 
-test('concurrencyGate — au plus N requêtes à la fois, place libérée en fin de réponse', () => {
-  const { EventEmitter } = require('node:events');
+// Traitement contrôlé de l'extérieur (fin de l'opération Payload simulée)
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
+}
+const tick = () => new Promise((r) => setImmediate(r));
+const fakeReq = () => ({ socket: { destroyed: false } });
+
+test('concurrencyGate — au plus N traitements à la fois, place tenue jusqu’à leur fin', async () => {
   const { concurrencyGate } = require('../../core/http.js');
   const gate = concurrencyGate(2);
   const started = [];
-  const responses = Array.from({ length: 4 }, () => new EventEmitter());
-  responses.forEach((res, i) => gate({}, res, () => started.push(i)));
+  const tasks = Array.from({ length: 4 }, () => deferred());
+  const results = tasks.map((d, i) => gate(fakeReq(), () => { started.push(i); return d.promise; }));
+  await tick();
   assert.deepEqual(started, [0, 1]);
-  responses[0].emit('finish');
-  responses[0].emit('close');
-  assert.deepEqual(started, [0, 1, 2], 'une seule place libérée par réponse (finish puis close)');
-  responses[1].emit('close');
-  assert.deepEqual(started, [0, 1, 2, 3]);
+  tasks[0].resolve('a');
+  assert.equal(await results[0], 'a', 'résultat du traitement renvoyé');
+  await tick();
+  assert.deepEqual(started, [0, 1, 2]);
+  tasks[1].reject(new Error('échec'));
+  await assert.rejects(results[1], /échec/);
+  await tick();
+  assert.deepEqual(started, [0, 1, 2, 3], 'un échec libère aussi sa place');
+  tasks[2].resolve();
+  tasks[3].resolve();
+  await Promise.all([results[2], results[3]]);
 });
 
-test('concurrencyGate — une requête fermée pendant l’attente quitte la file', () => {
-  const { EventEmitter } = require('node:events');
+test('concurrencyGate — client parti : place conservée tant que le traitement continue', async () => {
   const { concurrencyGate } = require('../../core/http.js');
   const gate = concurrencyGate(1);
   const started = [];
-  const [a, b, c] = [new EventEmitter(), new EventEmitter(), new EventEmitter()];
-  gate({}, a, () => started.push('a'));
-  gate({}, b, () => started.push('b'));
-  gate({}, c, () => started.push('c'));
-  b.emit('close');
-  a.emit('finish');
-  assert.deepEqual(started, ['a', 'c']);
-  c.emit('close');
-  const d = new EventEmitter();
-  gate({}, d, () => started.push('d'));
-  assert.deepEqual(started, ['a', 'c', 'd'], 'aucune place perdue');
+  const first = deferred();
+  const req = fakeReq();
+  const done = gate(req, () => { started.push('a'); return first.promise; });
+  gate(fakeReq(), () => { started.push('b'); });
+  req.socket.destroyed = true; // déconnexion : l'opération Payload, elle, se poursuit
+  await tick();
+  assert.deepEqual(started, ['a'], 'aucune seconde opération lancée pendant la première');
+  first.resolve();
+  await done;
+  await tick();
+  assert.deepEqual(started, ['a', 'b']);
+});
+
+test('concurrencyGate — requête fermée pendant l’attente : jamais lancée, aucune place perdue', async () => {
+  const { concurrencyGate } = require('../../core/http.js');
+  const gate = concurrencyGate(1);
+  const started = [];
+  const first = deferred();
+  gate(fakeReq(), () => { started.push('a'); return first.promise; });
+  const gone = fakeReq();
+  const skipped = gate(gone, () => { started.push('b'); });
+  gate(fakeReq(), () => { started.push('c'); throw new Error('synchrone'); }).catch(() => started.push('c rejetée'));
+  gone.socket.destroyed = true;
+  first.resolve();
+  await skipped;
+  await tick();
+  await tick();
+  assert.deepEqual(started, ['a', 'c', 'c rejetée']);
+  const last = gate(fakeReq(), () => 'd');
+  assert.equal(await last, 'd', 'place libérée après une exception synchrone');
 });
 
 test('isForgotPasswordPath — chemin canonique, quelle que soit sa forme', () => {

@@ -121,43 +121,44 @@ function authLimiterFor(rawPath) {
   return hit ? hit[1] : null;
 }
 
-// Au plus `limit` requêtes traitées à la fois, les suivantes attendent leur tour. Place
-// libérée à la fin de la réponse ou à la fermeture de la connexion ; une requête dont la
-// connexion se ferme pendant l'attente quitte la file.
+// Au plus `limit` traitements à la fois, les suivants attendent leur tour. La place est
+// tenue jusqu'à la fin du traitement lui-même, jamais jusqu'à un événement de la réponse :
+// Payload poursuit l'opération quand le client se déconnecte, et la réponse d'une requête
+// pipelinée dont la connexion se ferme n'émet ni « finish » ni « close ». Une requête dont
+// la connexion s'est fermée pendant l'attente n'est pas lancée. Renvoie le résultat du
+// traitement.
 function concurrencyGate(limit) {
   let active = 0;
   const waiting = [];
   const release = () => {
     active -= 1;
-    const resume = waiting.shift();
-    if (resume) resume();
+    while (waiting.length > 0 && active < limit) {
+      const entry = waiting.shift();
+      if (entry.req.socket?.destroyed) entry.resolve();
+      else start(entry);
+    }
   };
-  return (req, res, next) => {
-    const run = () => {
-      active += 1;
-      let released = false;
-      const done = () => {
-        if (released) return;
-        released = true;
-        release();
-      };
-      res.once('finish', done);
-      res.once('close', done);
-      next();
-    };
-    if (active < limit) return run();
-    waiting.push(run);
-    res.once('close', () => {
-      const i = waiting.indexOf(run);
-      if (i !== -1) waiting.splice(i, 1);
-    });
+  const start = ({ task, resolve, reject }) => {
+    active += 1;
+    let result;
+    try {
+      result = Promise.resolve(task());
+    } catch (err) {
+      result = Promise.reject(err);
+    }
+    result.then(resolve, reject).finally(release);
   };
+  return (req, task) => new Promise((resolve, reject) => {
+    const entry = { req, task, resolve, reject };
+    if (active < limit) start(entry);
+    else waiting.push(entry);
+  });
 }
 
 // Mot de passe oublié (Payload) : la transaction de la requête reste ouverte pendant une
 // écriture hors transaction (seconde connexion du pool) puis pendant l'envoi SMTP.
-// Exécutées deux à la fois au plus : des demandes simultanées (anonymes) ne peuvent ni
-// bloquer le pool ni l'occuper le temps des envois.
+// Exécutées deux à la fois au plus (express-app.js, avant Next) : des demandes
+// simultanées (anonymes) ne peuvent ni bloquer le pool ni l'occuper le temps des envois.
 const FORGOT_PASSWORD_PATH = '/api/users/forgot-password';
 const forgotPasswordGate = concurrencyGate(2);
 const isForgotPasswordPath = (rawPath) => {
@@ -169,9 +170,8 @@ const isForgotPasswordPath = (rawPath) => {
 // soit la forme du chemin.
 function authRateLimits(req, res, next) {
   const name = authLimiterFor(req.path);
-  if (!name) return next();
-  if (!isForgotPasswordPath(req.path)) return limiters[name](req, res, next);
-  limiters[name](req, res, (err) => (err ? next(err) : forgotPasswordGate(req, res, next)));
+  if (name) return limiters[name](req, res, next);
+  next();
 }
 
 // Limiteurs montés par préfixe de chemin (le login est servi par Next : le limiter
@@ -297,6 +297,7 @@ module.exports = {
   mountRateLimits,
   authLimiterFor,
   concurrencyGate,
+  forgotPasswordGate,
   isForgotPasswordPath,
   EXPRESS_ROUTE_PREFIXES,
   isExpressRoute,
