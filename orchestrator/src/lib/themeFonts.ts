@@ -38,7 +38,9 @@ export function fontStack(family: string, generic: string): string {
 /**
  * Chargeur de familles : chaque famille connue n'est demandée qu'une fois (doublons de
  * l'entrée compris) ; une famille inconnue est ignorée. Ne rejette jamais : en cas
- * d'échec (réseau), la famille est oubliée pour être retentée au prochain appel.
+ * d'échec (réseau), la famille garde sa police de repli jusqu'au rechargement de la
+ * page. Aucun nouvel essai : le préchargement de Vite ne redemande jamais une feuille
+ * déjà demandée (un second import() serait résolu sans rien charger).
  */
 export function createFontLoader(loaders: Readonly<Record<string, FontLoader>>) {
   const requested = new Set<string>();
@@ -49,7 +51,7 @@ export function createFontLoader(loaders: Readonly<Record<string, FontLoader>>) 
       requested.add(family);
       // Appel synchrone (une exception devient un rejet), échec absorbé
       const loading = new Promise<unknown>((resolve) => resolve(loaders[family]()));
-      pending.push(loading.then(() => undefined, () => { requested.delete(family); }));
+      pending.push(loading.then(() => undefined, () => undefined));
     }
     return Promise.all(pending).then(() => undefined);
   };

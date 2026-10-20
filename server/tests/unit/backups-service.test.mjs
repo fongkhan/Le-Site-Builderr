@@ -41,8 +41,9 @@ const { purgeSiteData } = require('../../services/sites.js');
 const RUN = `${process.pid}-${Date.now()}`;
 const SLUG = `zz-unit-sauvegarde-${RUN}`;
 const COPY_SLUG = `${SLUG}-restauration`;
+const GONE_SLUG = `zz-unit-publie-${RUN}`;
 after(() => {
-  for (const slug of [SLUG, COPY_SLUG]) {
+  for (const slug of [SLUG, COPY_SLUG, GONE_SLUG, `${GONE_SLUG}-2`]) {
     for (const file of [getSitePagesFile(slug), getSiteThemeFile(slug), getSitePostsFile(slug)]) fs.rmSync(file, { force: true });
   }
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -121,7 +122,7 @@ test('describeBackup — sites contenus et comptes ; noms hostiles, absents ou i
   assert.equal(d.name, latest.name);
   assert.equal(d.format, 2);
   const site = d.sites.find((s) => s.slug === SLUG);
-  assert.deepEqual(site, { slug: SLUG, name: 'Sauvegarde unitaire', pages: 2, posts: 1, media: 0, theme: true, exists: true });
+  assert.deepEqual(site, { slug: SLUG, name: 'Sauvegarde unitaire', pages: 2, posts: 1, media: 0, theme: true, exists: true, slugFree: false });
 
   await assert.rejects(backups.describeBackup('../etc/passwd'), (e) => e instanceof backups.RestoreError && e.status === 400);
   await assert.rejects(backups.describeBackup('backup-1999-01-01T00-00-00.zip'), (e) => e.status === 404);
@@ -166,7 +167,7 @@ test('restoreSiteFromBackup — remplacement : sauvegarde de sécurité puis con
   const r = await backups.restoreSiteFromBackup({ name: latest.name, slug: SLUG, mode: 'replace' });
   assert.equal(r.mode, 'replace');
   assert.equal(r.site.slug, SLUG);
-  assert.match(r.safetyBackup, /^backup-.*\.zip$/);
+  assert.match(r.safetyBackup, /^backup-.*-securite\.zip$/);
   assert.notEqual(r.safetyBackup, latest.name);
   assert.equal(backups.listBackups().length, before + 1);
   assert.deepEqual([r.pages, r.posts, r.theme], [2, 1, true]);
@@ -178,6 +179,31 @@ test('restoreSiteFromBackup — remplacement : sauvegarde de sécurité puis con
   // La sauvegarde de sécurité contient l'état d'avant la restauration
   const safety = new AdmZip(path.join(config.BACKUPS_DIR, r.safetyBackup));
   assert.deepEqual(JSON.parse(safety.readAsText(`sites/${SLUG}/pages.json`)).docs.map((p) => p.slug), ['autre']);
+});
+
+test('restoreSiteFromBackup — remplacement : sauvegarde de sécurité non restaurable (> 1 Go) retirée, rien de remplacé (409)', async () => {
+  const latest = { name: archiveName };
+  fs.writeFileSync(getSitePagesFile(SLUG), JSON.stringify({ docs: [page('modifiee', 'Modifiée')] }));
+  const before = backups.listBackups().map((b) => b.name);
+  // Taille lue par le service : toute sauvegarde de sécurité dépasse la borne de 1 Go
+  const realStat = fs.statSync;
+  fs.statSync = function statSync(p, ...rest) {
+    const st = realStat.call(this, p, ...rest);
+    if (/-securite\.zip$/.test(String(p))) Object.defineProperty(st, 'size', { value: backups.RESTORE_MAX_ARCHIVE_BYTES + 1 });
+    return st;
+  };
+  try {
+    await assert.rejects(
+      backups.restoreSiteFromBackup({ name: latest.name, slug: SLUG, mode: 'replace' }),
+      (e) => e instanceof backups.RestoreError && e.status === 409 && /trop volumineuse/.test(e.message) && !e.safetyBackup,
+    );
+  } finally {
+    fs.statSync = realStat;
+  }
+  assert.deepEqual(backups.listBackups().map((b) => b.name), before, 'sauvegarde de sécurité inutilisable conservée');
+  assert.deepEqual(readJson(getSitePagesFile(SLUG)).docs.map((p) => p.slug), ['modifiee'], 'contenu remplacé malgré le refus');
+  assert.ok(build.tryReserve(), 'créneau non libéré');
+  build.release();
 });
 
 test('restoreSiteFromBackup — site supprimé : remplacement refusé, copie sous le slug d’origine', async () => {
@@ -204,4 +230,25 @@ test('restoreSiteFromBackup — une seule restauration à la fois', async () => 
   // Verrou libéré après la restauration, même en cas d'erreur
   await assert.rejects(backups.restoreSiteFromBackup({ name: 'backup-1999-01-01T00-00-00.zip', slug: SLUG, mode: 'copy' }), (e) => e.status === 404);
   await assert.rejects(backups.restoreSiteFromBackup({ name: latest.name, slug: 'zz-absent', mode: 'copy' }), (e) => e.status === 404);
+});
+
+test('describeBackup — site supprimé : slug d’origine libre, ou occupé par son dossier publié conservé', async () => {
+  await sitesStore.createSite({ slug: GONE_SLUG, name: 'Site publié', status: 'active' });
+  fs.writeFileSync(getSitePagesFile(GONE_SLUG), JSON.stringify({ docs: [page('home', 'Accueil')] }));
+  const name = await backups.createBackupArchive();
+  const entryOf = async () => (await backups.describeBackup(name)).sites.find((s) => s.slug === GONE_SLUG);
+  assert.equal((await entryOf()).slugFree, false, 'site existant');
+
+  // Supprimé avec les options par défaut : fiche et données retirées…
+  await sitesStore.deleteSite(GONE_SLUG);
+  purgeSiteData(GONE_SLUG);
+  assert.deepEqual([(await entryOf()).exists, (await entryOf()).slugFree], [false, true]);
+  // … mais dossier publié conservé (« Supprimer aussi les fichiers publiés » décochée)
+  const documentRoot = path.join(config.PUBLIC_HTML_DIR, GONE_SLUG);
+  fs.mkdirSync(documentRoot, { recursive: true });
+  fs.writeFileSync(path.join(documentRoot, 'index.html'), '<h1>ancien site</h1>');
+  assert.equal((await entryOf()).slugFree, false, 'adresse d’origine annoncée alors que le dossier publié l’occupe');
+  const r = await backups.restoreSiteFromBackup({ name, slug: GONE_SLUG, mode: 'copy' });
+  assert.equal(r.site.slug, `${GONE_SLUG}-2`);
+  assert.equal(fs.readFileSync(path.join(documentRoot, 'index.html'), 'utf-8'), '<h1>ancien site</h1>');
 });

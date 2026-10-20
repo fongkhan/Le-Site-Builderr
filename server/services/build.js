@@ -37,6 +37,7 @@ const {
 const { applySiteThemeCss, findPayloadSiteId, readSitePages, readSitePosts } = require('./content');
 const { getSiteOwners, updateSiteStatus } = require('./sites');
 const { legalBuildData } = require('../lib/legal');
+const { validateAnalytics } = require('../lib/analytics');
 const { SUBMISSION_RETENTION } = require('../lib/submissions');
 
 const BUILD_TIMEOUT_MS = envInt('BUILD_TIMEOUT_MS', 10 * 60 * 1000);
@@ -344,19 +345,32 @@ function drainQueue() {
 // tiers) : base de données (DATABASE_URI/URL, POSTGRES_*, PG*, DB_*), secrets, clés
 // d'API, identifiants SMTP/cPanel.
 const SECRET_ENV = /(SECRET|PASSWORD|PASSWD|PASS$|TOKEN|API_KEY|_KEY$|DATABASE_UR[IL]|^POSTGRES_|^PG|^DB_|^CPANEL_|^SMTP_|^SEED_)/i;
+// Jamais hérités non plus : noms réservés d'Astro et de Vite (un BASE_URL du serveur
+// remplacerait le chemin de base lu par withBase() : liens internes du site cassés) et
+// réglages du template posés seulement par buildEnvFor (contenu de test, brouillon).
+const RESERVED_BUILD_ENV = new Set(['BASE_URL', 'SITE', 'MODE', 'DEV', 'PROD', 'SSR', 'ASSETS_PREFIX', 'TEMPLATE_FIXTURE', 'PUBLIC_IS_DRAFT']);
 
 function sanitizedEnv(env = process.env) {
   const out = {};
   for (const [key, value] of Object.entries(env)) {
-    if (!SECRET_ENV.test(key)) out[key] = value;
+    if (!SECRET_ENV.test(key) && !RESERVED_BUILD_ENV.has(key.toUpperCase())) out[key] = value;
   }
   return out;
+}
+
+// Mesure d'audience sous la forme normalisée par le serveur : une valeur écrite par l'admin
+// Payload (« Stats.Exemple.fr/ ») n'est pas validée à l'écriture. Invalide : aucune.
+function buildAnalytics(site) {
+  const s = site || {};
+  const r = validateAnalytics({ provider: s.analyticsProvider, id: s.analyticsId, host: s.analyticsHost });
+  return r.ok ? r.value : { analyticsProvider: '', analyticsId: '', analyticsHost: '' };
 }
 
 // Environnement du process de build : site actif, jeton d'accès interne, métadonnées
 // publiques (Open Graph, JSON-LD) et mesure d'audience. Un brouillon n'a ni URL
 // publique (pas de canonique vers la prod) ni mesure d'audience ni beacon de stats.
 function buildEnvFor(site, siteSlug, { draft = false, logo = null } = {}) {
+  const analytics = buildAnalytics(site);
   return {
     ...sanitizedEnv(),
     ACTIVE_SITE_SLUG: siteSlug,
@@ -369,13 +383,13 @@ function buildEnvFor(site, siteSlug, { draft = false, logo = null } = {}) {
     PUBLIC_SITE_NAME: (site && site.name) || siteSlug,
     PUBLIC_SITE_URL: !draft && site && site.domain ? `https://${site.domain}` : '',
     PUBLIC_SITE_LOGO: logo ? logo.staticPath : '', // logo vérifié (resolveSiteLogo), jamais hérité de l'environnement
-    // Mesure d'audience (validée à l'écriture) : chargée après consentement RGPD
-    PUBLIC_ANALYTICS_PROVIDER: (!draft && site && site.analyticsProvider) || '',
-    PUBLIC_ANALYTICS_ID: (!draft && site && site.analyticsId) || '',
-    PUBLIC_ANALYTICS_HOST: (!draft && site && site.analyticsHost) || '',
+    // Mesure d'audience (normalisée) : chargée après consentement RGPD
+    PUBLIC_ANALYTICS_PROVIDER: draft ? '' : analytics.analyticsProvider,
+    PUBLIC_ANALYTICS_ID: draft ? '' : analytics.analyticsId,
+    PUBLIC_ANALYTICS_HOST: draft ? '' : analytics.analyticsHost,
     // Mentions légales et politique de confidentialité (brouillons compris : le texte
     // décrit le site publié, mesure d'audience comprise)
-    PUBLIC_LEGAL_JSON: JSON.stringify(legalBuildData(site || { name: siteSlug }, { env: process.env, retentionDays: SUBMISSION_RETENTION.retentionDays })),
+    PUBLIC_LEGAL_JSON: JSON.stringify(legalBuildData(site ? { ...site, ...analytics } : { name: siteSlug }, { env: process.env, retentionDays: SUBMISSION_RETENTION.retentionDays })),
     ...(draft ? { PUBLIC_IS_DRAFT: '1' } : {}),
   };
 }

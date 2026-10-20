@@ -71,6 +71,22 @@ test('mediaUsage — logo du thème : usage « Logo du site » (nom encodé), th
   }
 });
 
+test('mediaUsage — noms avec ( ) ou \' sous l’ancienne forme (doc.url de Payload, logo saisi par PATCH REST) : usages vus', () => {
+  const names = ['photo (1).png', "l'atelier.png", 'logo (2).png', 'smiley :).png', 'libre.png'];
+  const pages = [{ title: 'Accueil', slug: 'home', locale: 'fr', layout: [
+    { blockType: 'hero', backgroundImage: '/api/media/file/photo%20(1).png' },
+    { blockType: 'product-grid', products: [{ image: "/api/media/file/l'atelier.png" }] },
+  ] }];
+  const posts = [{ title: 'Noël', slug: 'noel', status: 'draft', body: '![x](/api/media/file/smiley%20%3A).png)' }];
+  const usage = mediaUsage(names, pages, posts, { logo: '/api/media/file/logo%20(2).png' });
+  const page = { type: 'page', title: 'Accueil', slug: 'home', locale: 'fr' };
+  assert.deepEqual(usage.get('photo (1).png'), [page]);
+  assert.deepEqual(usage.get("l'atelier.png"), [page]);
+  assert.deepEqual(usage.get('smiley :).png'), [{ type: 'post', title: 'Noël', slug: 'noel', draft: true }]);
+  assert.deepEqual(usage.get('logo (2).png'), [{ type: 'theme', title: 'Logo du site', slug: '' }]);
+  assert.deepEqual(usage.get('libre.png'), []);
+});
+
 test('usageLabel / usageMessage — libellés et troncature à 5 usages', () => {
   assert.equal(usageLabel({ type: 'theme', title: 'Logo du site', slug: '' }), 'thème (logo)');
   assert.equal(usageMessage([{ type: 'theme', title: 'Logo du site', slug: '' }]), 'Image utilisée dans : thème (logo). Retirez-la de ces contenus avant de la supprimer.');
@@ -110,6 +126,10 @@ test('toLibraryItem — URL encodée et valeurs par défaut', () => {
     createdAt: '2026-10-01T00:00:00.000Z',
     usedIn: [{ type: 'page' }],
   });
+  // Forme canonique : ( ) ' encodés, nom relu en entier par l'usage et la publication
+  const paren = toLibraryItem({ id: 13, filename: "photo (1) l'atelier.png" });
+  assert.equal(paren.url, '/api/media/file/photo%20%281%29%20l%27atelier.png');
+  assert.deepEqual(mediaUsage([paren.filename], [{ title: 'Accueil', slug: 'home', layout: [{ backgroundImage: paren.url }] }], []).get(paren.filename).length, 1);
   const bare = toLibraryItem({ id: 3, filename: 'x.gif', alt: null, width: 0, height: 1.5, filesize: -1 });
   assert.deepEqual(
     { alt: bare.alt, width: bare.width, height: bare.height, filesize: bare.filesize, mimeType: bare.mimeType, createdAt: bare.createdAt, usedIn: bare.usedIn },

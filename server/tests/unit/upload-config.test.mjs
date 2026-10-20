@@ -37,4 +37,14 @@ test('payload.config — médiathèque : texte alternatif borné, suppression RE
   assert.match(mediaBlock, /\{\s*name:\s*'alt',\s*type:\s*'text',\s*maxLength:\s*200\s*\}/);
   assert.match(mediaBlock, /\bdelete:\s*isAdmin\b/);
   assert.doesNotMatch(mediaBlock, /\bdelete:\s*isAdminOrSiteClient\b/);
+  // Remplacement du fichier par PATCH REST : il effacerait l'ancien, encore cité
+  assert.match(mediaBlock, /\bupdate:\s*isAdmin\b/);
+  assert.doesNotMatch(mediaBlock, /\bupdate:\s*isAdminOrSiteClient\b/);
+});
+
+test('payload.config — thème : logo ramené à sa forme canonique avant validation (panel, PATCH REST)', () => {
+  const start = configSource.indexOf("slug: 'themes'");
+  assert.ok(start > 0, 'collection themes trouvée');
+  const logo = configSource.slice(configSource.indexOf("name: 'logo'", start), configSource.indexOf("slug: 'audit_logs'"));
+  assert.match(logo, /hooks:\s*\{\s*beforeValidate:\s*\[\s*\(\{ value \}: any\) => \{\s*const logo = themeLib\.normalizeLogo\(value\)/);
 });

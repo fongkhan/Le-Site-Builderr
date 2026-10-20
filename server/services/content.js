@@ -16,6 +16,7 @@ const {
 } = require('../core/config');
 const { DEFAULT_PAGES, DEFAULT_THEME, starterPages } = require('./defaults');
 const { sortPages } = require('../lib/page-order');
+const { canonicalMediaUrls } = require('../lib/media');
 
 const SEED_SITE_SLUG = 'boulangerie-artisanale';
 
@@ -72,6 +73,8 @@ function seedDefaultData() {
 
 // Synchronise un thème JSON vers le fichier CSS global du template Astro (couleurs du
 // thème et couleurs dérivées : texte lisible sur primaire et secondaire, surfaces…).
+// Fichier généré, ignoré par git (thème par défaut commité : theme.default.css) : une
+// mise à jour par « git pull » ne bute jamais sur lui.
 // Renvoie le thème appliqué (logo compris), ou le thème par défaut.
 function writeThemeCss(themeData) {
   // Défense en profondeur : un siteThemeFile corrompu ou légué (antérieur à la
@@ -388,9 +391,10 @@ function planPageWrites(existingDocs, inputDocs, deletedKeys) {
 // utilisateur. Une erreur de base est propagée (l'appelant répond 500, rien n'est perdu
 // en silence). Miroir JSON des pages reçues ensuite, s'il y a eu une écriture.
 // Renvoie les clés (langue:slug) des pages créées et supprimées (journal d'audit ;
-// doublons purgés non comptés) ; listes vides en mode sans base.
+// doublons purgés non comptés) ; listes vides en mode sans base. URL des médias enregistrées
+// sous leur forme canonique (canonicalMediaUrls).
 async function saveSitePages(siteSlug, body) {
-  const docs = body.docs;
+  const docs = canonicalMediaUrls(body.docs);
   const sentKeys = new Set(docs.map((p) => pageKey(p.slug, p.locale)));
   const deletedKeys = new Set((body.deleted || []).map((ref) => pageKey(ref.slug, ref.locale)).filter((k) => !sentKeys.has(k)));
 
@@ -553,8 +557,10 @@ async function adoptJsonPosts(payloadInstance, siteDoc, siteSlug) {
   }
 }
 
-// Crée ou met à jour un article (identifié par son slug au sein du site).
-async function upsertPost(siteSlug, post) {
+// Crée ou met à jour un article (identifié par son slug au sein du site). URL des médias
+// enregistrées sous leur forme canonique (canonicalMediaUrls).
+async function upsertPost(siteSlug, input) {
+  const post = canonicalMediaUrls(input);
   const payloadInstance = getPayloadInstance();
   if (payloadInstance) {
     const siteDoc = await sitesStore.getOrCreatePayloadDoc(siteSlug);

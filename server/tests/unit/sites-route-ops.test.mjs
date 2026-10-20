@@ -13,6 +13,11 @@ const require = createRequire(import.meta.url);
 // écriture des fichiers de contenu neutralisée — tout est remplacé AVANT de charger les routes.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sites-ops-'));
 const config = require('../../core/config.js');
+// Fichiers de données des sites de test : dossier data/ réel (articles importés), créé
+// d'emblée et jamais supprimé ; sauvegardes dans le dossier temporaire
+fs.mkdirSync(config.DATA_DIR, { recursive: true });
+config.BACKUPS_DIR = path.join(tmp, 'backups');
+config.BACKUP_KEEP = 50;
 config.PUBLIC_HTML_DIR = path.join(tmp, 'public_html');
 config.REPOSITORIES_DIR = path.join(tmp, 'repositories');
 config.RELEASES_DIR = path.join(tmp, 'releases');
@@ -134,6 +139,119 @@ test('suppression : copie du modèle créée par l’outil retirée, dépôt imp
   assert.equal((await call(router, 'delete', '/api/sites/:slug', { params: { slug: 'galerie-ops-2' }, query: { deleteFiles: 'true' } })).status, 200);
   assert.ok(fs.existsSync(path.join(imported, 'package.json')), 'dépôt sans marqueur conservé');
   assert.equal(build.isSiteDeleting('neuf-ops'), false, 'marque de suppression retirée');
+});
+
+test('suppression : dépôt et dossier publié d’un autre site imbriqués dans ceux du site supprimé conservés', async () => {
+  const sitesService = require('../../services/sites.js');
+  const parentRepo = path.join(config.REPOSITORIES_DIR, 'rv-parent');
+  const childRepo = path.join(parentRepo, 'child');
+  const parentRoot = path.join(config.PUBLIC_HTML_DIR, 'rv-parent');
+  const childRoot = path.join(parentRoot, 'child');
+  // Deux copies du modèle créées par l'outil (marquées), la seconde dans la première
+  for (const dir of [parentRepo, childRepo]) {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, sitesService.PROVISIONED_MARKER), 'x');
+  }
+  fs.writeFileSync(path.join(childRepo, 'personnalise.astro'), 'code du client');
+  fs.mkdirSync(childRoot, { recursive: true });
+  fs.writeFileSync(path.join(parentRoot, 'index.html'), 'parent');
+  fs.writeFileSync(path.join(childRoot, 'index.html'), 'enfant');
+  fs.writeFileSync(sitesFile, JSON.stringify([
+    ...readSites(),
+    { slug: 'rv-parent', name: 'RV Parent', repositoryPath: parentRepo, documentRoot: parentRoot, status: 'active' },
+    { slug: 'rv-child', name: 'RV Child', repositoryPath: childRepo, documentRoot: childRoot, status: 'active' },
+  ]));
+
+  const del = await call(router, 'delete', '/api/sites/:slug', { params: { slug: 'rv-parent' }, query: { deleteFiles: 'true' } });
+  assert.equal(del.status, 200, JSON.stringify(del.body));
+  assert.ok(!readSites().some((s) => s.slug === 'rv-parent'), 'site supprimé');
+  assert.equal(fs.readFileSync(path.join(childRepo, 'personnalise.astro'), 'utf-8'), 'code du client', 'dépôt de rv-child supprimé');
+  assert.equal(fs.readFileSync(path.join(childRoot, 'index.html'), 'utf-8'), 'enfant', 'dossier publié de rv-child supprimé');
+
+  // Plus aucun site dans le dépôt : la copie marquée d'un site est bien supprimée avec lui
+  const lone = path.join(config.REPOSITORIES_DIR, 'rv-seul');
+  fs.mkdirSync(lone, { recursive: true });
+  fs.writeFileSync(path.join(lone, sitesService.PROVISIONED_MARKER), 'x');
+  fs.writeFileSync(sitesFile, JSON.stringify([...readSites(), { slug: 'rv-seul', name: 'RV Seul', repositoryPath: lone, status: 'draft' }]));
+  assert.equal((await call(router, 'delete', '/api/sites/:slug', { params: { slug: 'rv-seul' } })).status, 200);
+  assert.equal(fs.existsSync(lone), false);
+});
+
+test('suppression avec sauvegarde préalable : sauvegarde de sécurité ; non restaurable (> 1 Go) : 409, rien supprimé', async () => {
+  const backups = require('../../services/backups.js');
+  fs.writeFileSync(sitesFile, JSON.stringify([...readSites(), { slug: 'sauve-ops', name: 'Sauve Ops', status: 'draft' }, { slug: 'lourd-ops', name: 'Lourd Ops', status: 'draft' }]));
+
+  const ok = await call(router, 'delete', '/api/sites/:slug', { params: { slug: 'sauve-ops' }, query: { backup: 'true' } });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.match(ok.body.backup, /^backup-[\dT-]+-securite\.zip$/);
+  assert.ok(fs.existsSync(path.join(config.BACKUPS_DIR, ok.body.backup)));
+
+  // Archive de plus de 1 Go (fichier creux) : restauration impossible depuis l'interface
+  const realCreate = backups.createBackupArchive;
+  const huge = 'backup-2026-01-01T00-00-00-securite.zip';
+  backups.createBackupArchive = async () => {
+    const file = path.join(config.BACKUPS_DIR, huge);
+    fs.writeFileSync(file, '');
+    fs.truncateSync(file, backups.RESTORE_MAX_ARCHIVE_BYTES + 1);
+    return huge;
+  };
+  let refused;
+  try {
+    refused = await call(router, 'delete', '/api/sites/:slug', { params: { slug: 'lourd-ops' }, query: { backup: 'true', deleteFiles: 'true' } });
+  } finally {
+    backups.createBackupArchive = realCreate;
+  }
+  assert.equal(refused.status, 409, JSON.stringify(refused.body));
+  assert.match(refused.body.error, /trop volumineuse.*n'a pas été supprimé/);
+  assert.ok(readSites().some((s) => s.slug === 'lourd-ops'), 'site supprimé malgré une sauvegarde non restaurable');
+  assert.equal(fs.existsSync(path.join(config.BACKUPS_DIR, huge)), false, 'archive inutilisable conservée');
+  assert.equal(build.isSiteDeleting('lourd-ops'), false);
+});
+
+test('export puis import d’archive : informations légales reprises (normalisées)', async () => {
+  const { PassThrough } = await import('node:stream');
+  const AdmZip = require('adm-zip');
+  const { purgeSiteData } = require('../../services/sites.js');
+  const slug = `zz-legal-ops-${process.pid}`;
+  const legal = { companyName: 'Atelier Légal', address: '1 rue X\n69000 Lyon', phone: '04 78 00 00 00', email: 'contact@atelier.example', publisherName: 'Camille' };
+  await sitesStore.createSite({ slug, name: 'Légal Ops', status: 'draft', legal });
+
+  // Export : réponse streamée (archiver) dans un flux
+  const layer = router.stack.find((l) => l.route && l.route.path === '/api/sites/:slug/export' && l.route.methods.get);
+  const handlers = layer.route.stack.map((s) => s.handle);
+  const res = new PassThrough();
+  const chunks = [];
+  res.on('data', (c) => chunks.push(c));
+  const ended = new Promise((resolve, reject) => { res.on('end', resolve); res.on('error', reject); });
+  res.setHeader = () => {};
+  res.status = function status(code) { this.statusCode = code; return this; };
+  res.json = function json(payload) { this.payload = payload; this.end(); return this; };
+  await handlers[handlers.length - 1]({ method: 'GET', params: { slug }, query: {}, body: {}, user: ADMIN, headers: {}, ip: '127.0.0.1' }, res, () => {});
+  await ended;
+  assert.equal(res.payload, undefined, JSON.stringify(res.payload));
+  const zip = Buffer.concat(chunks);
+  const meta = JSON.parse(new AdmZip(zip).readAsText('meta.json'));
+  assert.equal(meta.legal.companyName, 'Atelier Légal');
+  assert.equal(meta.legal.address, '1 rue X\n69000 Lyon');
+
+  // Import : informations légales normalisées (11 clés), champ inconnu écarté
+  const tampered = new AdmZip(zip);
+  tampered.updateFile('meta.json', Buffer.from(JSON.stringify({ ...meta, legal: { ...meta.legal, inconnu: 'x', phone: 42 } })));
+  const imp = await call(router, 'post', '/api/sites/import-archive', { body: tampered.toBuffer() });
+  const importedSlug = imp.body?.site?.slug;
+  try {
+    assert.equal(imp.status, 200, JSON.stringify(imp.body));
+    assert.equal(importedSlug, `${slug}-2`);
+    const stored = (await sitesStore.getSiteBySlug(importedSlug)).legal;
+    assert.equal(Object.keys(stored).length, 11);
+    assert.equal(stored.companyName, 'Atelier Légal');
+    assert.equal(stored.publisherName, 'Camille');
+    assert.equal(stored.address, '1 rue X\n69000 Lyon');
+    assert.equal(stored.phone, '');
+    assert.equal(stored.inconnu, undefined);
+  } finally {
+    for (const s of [slug, importedSlug].filter(Boolean)) purgeSiteData(s);
+  }
 });
 
 test('arrêt du serveur en cours : rollback et prévisualisation 503, sonde de disponibilité 503', async () => {

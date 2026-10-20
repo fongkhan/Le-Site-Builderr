@@ -16,19 +16,28 @@ const DEFAULT_SEED_PASSWORD = 'password123';
 
 // Comptes initiaux. Hors production : admin + client de démonstration (mots de passe
 // surchargeables, utilisés par la CI). En production : seul l'admin est créé, et
-// uniquement avec un SEED_ADMIN_PASSWORD explicite et robuste — jamais « password123 ».
-async function seedUsers(payload) {
+// uniquement avec un SEED_ADMIN_PASSWORD explicite et robuste — jamais « password123 » —,
+// et seulement si AUCUN administrateur n'existe : un compte SEED_ADMIN_EMAIL supprimé ou
+// renommé par l'exploitant ne réapparaît jamais au redémarrage.
+async function seedUsers(payload, { production = IS_PRODUCTION } = {}) {
   try {
     // 1. Super Admin (email : SEED_ADMIN_EMAIL, obligatoire en production)
     const adminEmail = resolveSeedAdmin(process.env);
-    const adminRes = adminEmail
-      ? await payload.find({ collection: 'users', where: { email: { equals: adminEmail } } })
-      : null;
+    let createAdmin = adminEmail
+      ? (await payload.find({ collection: 'users', where: { email: { equals: adminEmail } } })).docs.length === 0
+      : false;
+    if (createAdmin && production) {
+      const admins = await payload.find({ collection: 'users', where: { roles: { in: ['admin'] } }, limit: 1, depth: 0, overrideAccess: true });
+      if (admins.docs.length > 0) {
+        createAdmin = false;
+        console.log(`ℹ️ [Seeding] ${adminEmail} absent mais un administrateur existe : compte non recréé (SEED_ADMIN_PASSWORD peut être retiré du .env).`);
+      }
+    }
     // Production sans SEED_ADMIN_EMAIL : aucun admin créé ici (jamais admin@admin.com) ;
     // le démarrage s'arrête ensuite s'il n'en existe aucun (missingAdminMessage).
-    if (adminEmail && adminRes.docs.length === 0) {
-      const adminPassword = process.env.SEED_ADMIN_PASSWORD || (IS_PRODUCTION ? '' : DEFAULT_SEED_PASSWORD);
-      if (IS_PRODUCTION && (adminPassword.length < 12 || adminPassword === DEFAULT_SEED_PASSWORD)) {
+    if (createAdmin) {
+      const adminPassword = process.env.SEED_ADMIN_PASSWORD || (production ? '' : DEFAULT_SEED_PASSWORD);
+      if (production && (adminPassword.length < 12 || adminPassword === DEFAULT_SEED_PASSWORD)) {
         console.error(`❌ [Seeding] Aucun administrateur : définissez SEED_ADMIN_PASSWORD (12 caractères minimum) dans le .env puis redémarrez pour créer ${adminEmail}.`);
       } else {
         await payload.create({
@@ -44,7 +53,7 @@ async function seedUsers(payload) {
     }
 
     // 2. Client de démonstration (hors production), rattaché au site seedé par slug
-    if (IS_PRODUCTION && process.env.SEED_DEMO_CLIENT !== 'true') return;
+    if (production && process.env.SEED_DEMO_CLIENT !== 'true') return;
     const clientRes = await payload.find({
       collection: 'users',
       where: { email: { equals: 'client@client.com' } }
@@ -116,4 +125,4 @@ async function initPayload() {
   }
 }
 
-module.exports = { getPayloadInstance, initPayload, applyProductionMigrations };
+module.exports = { getPayloadInstance, initPayload, applyProductionMigrations, seedUsers };

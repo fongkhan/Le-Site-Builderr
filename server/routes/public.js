@@ -32,29 +32,21 @@ function composeAppointmentMessage(body) {
   return lines.join('\n');
 }
 
-// Email aux propriétaires du site. Sans propriétaire rattaché, le message est écrit
-// dans les logs du serveur ; un échec d'envoi est remonté à l'appelant.
+// Email aux propriétaires du site. Renvoie false sans propriétaire rattaché (rien
+// d'envoyé) ; un échec d'envoi est remonté à l'appelant. Le contenu du message n'est
+// jamais écrit dans les logs du serveur, qui échappent à la rétention de 12 mois annoncée
+// par la politique de confidentialité des sites : seule la boîte de réception le garde.
 async function notifySiteOwners(site, { name, email, message, isAppointment }) {
   const recipients = await getSiteOwners(site.slug);
+  if (recipients.length === 0) return false;
   const subject = `${isAppointment ? '📅 Demande de rendez-vous' : '📬 Nouveau message'} via ${site.name}`;
   const text =
     `Nouveau message reçu depuis le site « ${site.name} » (${site.domain}) :\n\n` +
     `Nom : ${name.trim()}\nEmail : ${email.trim()}\n\n${message.trim()}\n\n` +
     `— Envoyé par le formulaire de contact Meta-Builder`;
-
-  if (recipients.length > 0) {
-    try {
-      // Répondre au mail répond directement au visiteur
-      await sendMail(recipients, subject, text, { replyTo: email.trim() });
-    } catch (mailErr) {
-      // Le message n'est jamais perdu : il reste dans les logs du serveur
-      console.log(`📬 [Contact] Message pour « ${site.slug} » non distribué par email :\n${text}`);
-      throw mailErr;
-    }
-  } else {
-    // Aucun compte rattaché : ne pas perdre le message pour autant
-    console.log(`📬 [Contact] Message pour « ${site.slug} » (aucun propriétaire rattaché) :\n${text}`);
-  }
+  // Répondre au mail répond directement au visiteur
+  await sendMail(recipients, subject, text, { replyTo: email.trim() });
+  return true;
 }
 
 // Erreurs : code stable (lib/contact.js) dans le JSON, traduit par le script du site ;
@@ -100,11 +92,18 @@ router.post('/api/contact/:slug', cors(), async (req, res) => {
       console.error(`❌ [Contact] Message pour « ${site.slug} » non enregistré —`, (storeErr && storeErr.message) || storeErr);
     }
 
+    let noOwner = false;
     try {
-      await notifySiteOwners(site, { name, email, message, isAppointment });
+      noOwner = !(await notifySiteOwners(site, { name, email, message, isAppointment }));
     } catch (mailErr) {
       if (!stored) throw mailErr;
       console.error(`❌ [Contact] Email pour « ${site.slug} » non envoyé (message conservé dans la boîte de réception) —`, (mailErr && mailErr.message) || mailErr);
+    }
+    if (noOwner) {
+      // Aucun propriétaire rattaché : message conservé dans la seule boîte de réception
+      // (journal : site et heure uniquement, jamais le contenu)
+      if (!stored) throw new Error(`message pour « ${site.slug} » ni enregistré ni envoyé (aucun propriétaire rattaché)`);
+      console.log(`📬 [Contact] Message pour « ${site.slug} » reçu le ${new Date().toISOString()} (aucun propriétaire rattaché) : conservé dans la boîte de réception.`);
     }
     // Sans l'email du visiteur : le journal d'audit ne stocke pas de données personnelles
     logAudit(req, 'contact.recu', site.slug, isAppointment ? 'demande de rendez-vous' : 'formulaire de contact');

@@ -1,6 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
+import http from 'node:http';
 
 // Processus dédié (node --test isole chaque fichier) : compteurs des limiteurs neufs.
 // Valeurs par défaut des plafonds : 8 échecs de login, 10 demandes de réinitialisation.
@@ -48,6 +49,36 @@ test('mot de passe oublié : chemin encodé limité (11e demande refusée)', asy
   assert.equal(await post('/api/users/RESET-PASSWORD'), 429);
 });
 
+// Chemin envoyé tel quel (node:http, option path) : fetch résoudrait « . » et « .. »
+// avant l'envoi, alors qu'un client brut les transmet et que Next les résout ensuite.
+const rawPost = (rawPath) => new Promise((resolve, reject) => {
+  const { port } = server.address();
+  const r = http.request({ host: '127.0.0.1', port, path: rawPath, method: 'POST', agent: false }, (res) => {
+    res.resume();
+    res.on('end', () => resolve({ status: res.statusCode, policy: res.headers['ratelimit-policy'] }));
+  });
+  r.on('error', reject);
+  r.end();
+});
+
 test('routes non concernées : jamais limitées par ces compteurs', async () => {
   assert.equal(await post('/api/users/me'), 401);
+  const raw = await rawPost('/api/users/x/../me');
+  assert.equal(raw.status, 401);
+  assert.equal(raw.policy, undefined, 'aucun limiteur sur /api/users/me');
+});
+
+// Compteurs déjà épuisés par les tests précédents : chaque forme non canonique doit être
+// limitée (en-tête RateLimit-Policy, 429), jamais servie sans limiteur.
+test('segments « . » et « .. » (même encodés, chemin brut) : mêmes limiteurs, mêmes compteurs', async () => {
+  for (const p of ['/api/users/./login', '/api/users/%2e/login', '/api/users/%2E%2E/users/login', '/api/users/x/../login', '/api/users/x/.%2e/login']) {
+    const r = await rawPost(p);
+    assert.match(String(r.policy), /^8;/, `${p} : limiteur de login`);
+    assert.equal(r.status, 429, p);
+  }
+  for (const p of ['/api/users/%2e/forgot-password', '/api/users/x/../forgot-password', '/api/users/./reset-password']) {
+    const r = await rawPost(p);
+    assert.match(String(r.policy), /^10;/, `${p} : limiteur de réinitialisation`);
+    assert.equal(r.status, 429, p);
+  }
 });

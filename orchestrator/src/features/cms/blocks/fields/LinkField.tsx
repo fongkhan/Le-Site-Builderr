@@ -1,6 +1,6 @@
 import { useId } from 'react';
 import type { UpdateOptions } from '../types';
-import { linkHint, linkMode, normalizePagePath, type LinkTargets } from '../../lib/ctaLink';
+import { isBlogArticlePath, linkHint, linkMode, normalizePagePath, type LinkTargets } from '../../lib/ctaLink';
 import { COMPACT_INPUT_STYLE, HINT_STYLE, INPUT_STYLE } from './styles';
 
 interface LinkFieldProps {
@@ -37,6 +37,7 @@ export function LinkField({ label, value, onChange, targets, compact }: LinkFiel
 
   let selected = '';
   let unknown: string | null = null;
+  let unknownLabel = '';
   if (mode === 'web') selected = WEB;
   else if (mode === 'tel') selected = TEL;
   else if (mode === 'email') selected = EMAIL;
@@ -45,7 +46,12 @@ export function LinkField({ label, value, onChange, targets, compact }: LinkFiel
     const normalized = mode === 'page' ? normalizePagePath(raw) : raw;
     const known = [...anchors, ...pages].find((t) => t.href === normalized);
     selected = known ? known.href : raw;
-    if (!known) unknown = raw;
+    if (!known) {
+      unknown = raw;
+      // Article du blog : lien valide, jamais proposé dans les cibles (pas d'avertissement)
+      if (mode === 'page' && isBlogArticlePath(raw)) unknownLabel = `Article du blog : ${raw}`;
+      else unknownLabel = targets ? `⚠️ Lien introuvable : ${raw}` : `Lien : ${raw}`;
+    }
   }
 
   const hint = linkHint(current, targets);
@@ -84,7 +90,7 @@ export function LinkField({ label, value, onChange, targets, compact }: LinkFiel
           </optgroup>
         )}
         {unknown !== null && (
-          <option value={unknown}>{targets ? `⚠️ Lien introuvable : ${unknown}` : `Lien : ${unknown}`}</option>
+          <option value={unknown}>{unknownLabel}</option>
         )}
         <optgroup label="Autre lien">
           <option value={WEB}>Adresse web (https://…)</option>

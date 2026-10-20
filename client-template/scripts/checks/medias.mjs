@@ -2,6 +2,7 @@
 // alternatif, dimensions, variantes (srcset) préfixées par le chemin de base, couverture
 // d'article prioritaire et préchargement du fond du Hero en tête de page (même URL que
 // son image img.hero-bg).
+import { autoFitSizes } from '../../src/lib/grid-sizes.mjs';
 
 // Balises ouvrantes <name …> d'une page.
 const tagsOf = (html, name) => [...html.matchAll(new RegExp(`<${name}\\b[^>]*>`, 'gi'))].map((m) => m[0]);
@@ -47,10 +48,14 @@ export default async function ({ dist, base, htmlFiles, readDist, check }) {
     check(srcset.includes(`${mediaPrefix}w480/four.jpg 480w`), `index.html : variante 480 de four.jpg absente du srcset (${srcset})`);
     check(srcset.includes(`${mediaPrefix}four.jpg 1600w`), `index.html : original de four.jpg absent du srcset (${srcset})`);
     check(Boolean(attr(four, 'sizes')), 'index.html : srcset de four.jpg sans attribut sizes');
+    // Galerie de 3 images rendues (l'URL javascript: est écartée) : sizes selon ce nombre
+    check(attr(four, 'sizes') === autoFitSizes(3, { minWidth: 250, gap: 20 }), `index.html : sizes de four.jpg (${attr(four, 'sizes')})`);
     check(attr(four, 'loading') === 'lazy', 'index.html : four.jpg non différée (loading="lazy")');
   }
   const tasse = homeImgs.find((t) => attr(t, 'src') === `${mediaPrefix}tasse.jpg`);
   check(Boolean(tasse) && attr(tasse, 'alt') === 'Tasse expresso', `index.html : texte alternatif de repli de tasse.jpg (${tasse && attr(tasse, 'alt')})`);
+  // Trois fiches produit rendues (celle à l'image refusée garde sa place dans la grille)
+  check(Boolean(tasse) && attr(tasse, 'sizes') === autoFitSizes(3, { minWidth: 280, gap: 30 }), `index.html : sizes de tasse.jpg (${tasse && attr(tasse, 'sizes')})`);
   const unsplash = homeImgs.find((t) => (attr(t, 'src') || '').startsWith('https://images.unsplash.com/photo-1493106641515'));
   check(Boolean(unsplash) && attr(unsplash, 'alt') === "Photo 1 – L'atelier en images", `index.html : texte de repli de la galerie (${unsplash && attr(unsplash, 'alt')})`);
   check(Boolean(unsplash) && attr(unsplash, 'srcset') === null, 'index.html : srcset sur une image externe');

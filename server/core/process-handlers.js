@@ -34,5 +34,6 @@ process.on('exit', () => {
 });
 
 // Chargé à la demande : ce module est requis avant tout le reste au démarrage. Les
-// écouteurs ne sont jamais retirés (tsx tue l'enfant qui ne signale pas un signal relayé).
+// écouteurs ne sont jamais retirés : un second signal pendant l'arrêt reste géré (et un
+// éventuel lanceur relais, comme la CLI tsx, voit le signal pris en charge).
 for (const s of ['SIGINT', 'SIGTERM']) process.on(s, () => require('./shutdown').handleSignal(s));

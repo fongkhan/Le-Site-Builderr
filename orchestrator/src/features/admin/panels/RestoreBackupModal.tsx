@@ -64,7 +64,9 @@ export function RestoreChoices({ contents, selectedSlug, mode, disabled = false,
               <span style={helpStyle}>
                 {exists
                   ? `Nouveau site en brouillon « ${selected.name} (restauration) » ; le site actuel n'est pas modifié.`
-                  : `Le site est recréé en brouillon sous son adresse d'origine (${selected.slug}).`}
+                  : selected.slugFree
+                    ? `Le site est recréé en brouillon sous son adresse d'origine (${selected.slug}).`
+                    : `Le site est recréé en brouillon sous une nouvelle adresse (${selected.slug}-2 ou suivante) : des fichiers de l'ancien site (dossier publié…) occupent encore ${selected.slug} sur le serveur.`}
               </span>
             </span>
           </label>

@@ -218,3 +218,53 @@ test('(I) base — deletePost supprime l\'article et réécrit le miroir', async
   assert.equal(mirror.source, 'payload');
   assert.deepEqual(slugsOf(mirror.docs), ['garde']);
 });
+
+// Forme de doc.url de Payload (encodeURIComponent) : ( ) ' en clair
+const OLD_URL = "/api/media/file/photo%20(1)%20l'atelier.png";
+const CANONICAL_URL = '/api/media/file/photo%20%281%29%20l%27atelier.png';
+
+test('(J) base et sans base — URL de médias des pages enregistrées sous la forme canonique, une seule fois', async () => {
+  const mem = memoryPayload();
+  current = mem;
+  const site = mem.insert('payload_sites', { slug: 'base-j', name: 'Base J' });
+  // Page déjà enregistrée sous l'ancienne forme : réécrite au prochain enregistrement
+  mem.insert('pages', { ...content.toPageData(page('home', 'Accueil', { layout: [{ blockType: 'hero', title: 'A', backgroundImage: OLD_URL }] }), 0), site: site.id });
+  const body = {
+    docs: [
+      page('home', 'Accueil', { layout: [{ blockType: 'hero', title: 'A', backgroundImage: OLD_URL }] }),
+      page('galerie', 'Galerie', { layout: [{ blockType: 'gallery', images: [OLD_URL, 'https://cdn.example/api/media/file/x(1).png'] }] }),
+    ],
+  };
+  const snapshot = JSON.stringify(body);
+  await content.saveSitePages('base-j', body);
+  assert.equal(JSON.stringify(body), snapshot, 'corps reçu non modifié');
+  const stored = Object.fromEntries(sitePages(mem, site.id).map((p) => [p.slug, p]));
+  assert.equal(stored.home.layout[0].backgroundImage, CANONICAL_URL);
+  // Galerie : chaînes converties en { url } ; une URL d'un autre domaine n'est jamais touchée
+  assert.deepEqual(stored.galerie.layout[0].images, [{ url: CANONICAL_URL }, { url: 'https://cdn.example/api/media/file/x(1).png' }]);
+  assert.equal(readJson(config.getSitePagesFile('base-j')).docs[0].layout[0].backgroundImage, CANONICAL_URL);
+  // Le même corps (ancienne forme) renvoyé par l'éditeur : aucune écriture
+  mem.journal.length = 0;
+  await content.saveSitePages('base-j', body);
+  assert.deepEqual(mem.writes(), []);
+
+  current = null;
+  await content.saveSitePages('sans-base-j', { docs: [page('home', 'Accueil', { layout: [{ blockType: 'hero', title: 'A', backgroundImage: OLD_URL }] })] });
+  assert.equal(readJson(config.getSitePagesFile('sans-base-j')).docs[0].layout[0].backgroundImage, CANONICAL_URL);
+});
+
+test('(K) base et sans base — upsertPost : couverture et images du corps sous la forme canonique', async () => {
+  const mem = memoryPayload();
+  current = mem;
+  const site = mem.insert('payload_sites', { slug: 'base-k', name: 'Base K' });
+  const input = post('noel', { coverImage: OLD_URL, body: `Texte ![four](${OLD_URL}) fin` });
+  await content.upsertPost('base-k', input);
+  const [stored] = sitePosts(mem, site.id);
+  assert.equal(stored.coverImage, CANONICAL_URL);
+  assert.equal(stored.body, `Texte ![four](${CANONICAL_URL}) fin`);
+  assert.equal(input.coverImage, OLD_URL, 'entrée non modifiée');
+
+  current = null;
+  await content.upsertPost('sans-base-k', input);
+  assert.equal(readJson(config.getSitePostsFile('sans-base-k')).docs[0].coverImage, CANONICAL_URL);
+});

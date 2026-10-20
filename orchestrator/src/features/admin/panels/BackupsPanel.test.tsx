@@ -17,8 +17,9 @@ const CONTENTS: BackupContents = {
   createdAt: BACKUP.createdAt,
   format: 2,
   sites: [
-    { slug: 'actuel', name: 'Site actuel', pages: 3, posts: 1, media: 2, theme: true, exists: true },
-    { slug: 'ancien', name: 'Ancien site', pages: 1, posts: 0, media: 0, theme: true, exists: false },
+    { slug: 'actuel', name: 'Site actuel', pages: 3, posts: 1, media: 2, theme: true, exists: true, slugFree: false },
+    { slug: 'ancien', name: 'Ancien site', pages: 1, posts: 0, media: 0, theme: true, exists: false, slugFree: true },
+    { slug: 'publie', name: 'Site publié', pages: 1, posts: 0, media: 0, theme: true, exists: false, slugFree: false },
   ],
 };
 
@@ -44,10 +45,17 @@ describe('choix de restauration', () => {
     const html = text(renderToString(<RestoreChoices contents={CONTENTS} selectedSlug="ancien" mode="copy" onSelect={noop} onModeChange={noop} />));
     expect(html).toContain('supprimé depuis');
     expect(replaceRadio(html)).toContain('disabled=""');
-    expect(html).toContain('recréé en brouillon');
-    expect(html).toContain('(ancien)');
+    expect(html).toContain('recréé en brouillon sous son adresse d&#x27;origine (ancien)');
     expect(html).toContain('Indisponible : ce site n&#x27;existe plus.');
     expect(html).not.toContain('Sauvegarde sans images');
+  });
+
+  it('site supprimé dont l’adresse est encore occupée (dossier publié conservé) : nouvelle adresse annoncée', () => {
+    const html = text(renderToString(<RestoreChoices contents={CONTENTS} selectedSlug="publie" mode="copy" onSelect={noop} onModeChange={noop} />));
+    expect(html).toContain('sous une nouvelle adresse (publie-2 ou suivante)');
+    expect(html).toContain('occupent encore publie sur le serveur');
+    expect(html).not.toContain('adresse d&#x27;origine');
+    expect(replaceRadio(html)).toContain('disabled=""');
   });
 
   it('site existant : remplacement possible, copie « (restauration) » proposée', () => {

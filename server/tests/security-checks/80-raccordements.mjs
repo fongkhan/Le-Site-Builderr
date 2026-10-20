@@ -1,16 +1,19 @@
 // Raccordements entre fonctions (lot 8) : le logo du thème suit le site dans la
 // duplication et la restauration en copie (copie de l'image et URL remappée, informations
-// légales reprises), et il ne peut pas être supprimé de la médiathèque tant qu'il est le
-// logo du site. Aucune connexion ni envoi de formulaire ; tout ce qui est créé (sites,
-// archives) est supprimé à la fin.
+// légales reprises), l'export et l'import d'archive reprennent les informations légales,
+// et le logo ne peut pas être supprimé de la médiathèque tant qu'il est le logo du site.
+// Aucune connexion ni envoi de formulaire ; tout ce qui est créé (sites, archives) est
+// supprimé à la fin, les archives existantes du serveur testé sont mises à l'abri.
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { BACKUP_NAME, shelterBackups } from './30-restauration.mjs';
 
+const AdmZip = createRequire(import.meta.url)('adm-zip');
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
 const SERVER_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BACKUPS_DIR = path.join(path.dirname(SERVER_DIR), 'backups');
-const BACKUP_NAME = /^backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.zip$/;
 const THEME = {
   colors: { primary: '#8B5A2B', secondary: '#F5E6CC', background: '#FAFAFA', text: '#2D241E' },
   fonts: { heading: 'Playfair Display', body: 'Inter' },
@@ -48,9 +51,10 @@ export default async function ({ BASE, ORIGIN, req, check, admin }) {
 
   const createdSites = new Set();
   const createdArchives = new Set();
+  let restoreShelter = null;
   try {
     // Restes d'une exécution interrompue
-    for (const leftover of ['raccordements-sc', 'raccordements-sc-copie', 'raccordements-sc-restauration']) {
+    for (const leftover of ['raccordements-sc', 'raccordements-sc-2', 'raccordements-sc-copie', 'raccordements-sc-restauration']) {
       await req(`/api/sites/${leftover}?deleteFiles=true`, { method: 'DELETE', token });
     }
 
@@ -93,25 +97,49 @@ export default async function ({ BASE, ORIGIN, req, check, admin }) {
     const sourceTheme = await themeOf(slug);
     check('Duplication : logo de la source inchangé', sourceTheme?.logo === up.doc.url, `${sourceTheme?.logo} (attendu ${up.doc.url})`);
 
-    // ---- Restauration en copie : logo remappé vers l'image restaurée ----
-    const made = await req('/api/admin/backups', { method: 'POST', token });
-    const archive = made.json?.filename;
-    if (archive) createdArchives.add(archive);
-    if (!(made.status === 200 && BACKUP_NAME.test(archive || ''))) {
-      check('Restauration en copie : logo remappé', false, `sauvegarde HTTP ${made.status} ${archive}`);
-      return;
+    // ---- Export puis import d'archive : informations légales reprises ----
+    const exp = await fetch(`${BASE}/api/sites/${slug}/export`, { headers: { Origin: ORIGIN, Cookie: `payload-token=${token}` } });
+    const zipBuf = exp.status === 200 ? Buffer.from(await exp.arrayBuffer()) : null;
+    let exportedLegal = null;
+    try { exportedLegal = zipBuf ? JSON.parse(new AdmZip(zipBuf).readAsText('meta.json')).legal : null; } catch { /* archive illisible */ }
+    check('Export : meta.json porte les informations légales', exportedLegal?.companyName === LEGAL.companyName && exportedLegal?.address === LEGAL.address, `HTTP ${exp.status} ${JSON.stringify(exportedLegal)}`);
+    if (zipBuf) {
+      const imp = await fetch(`${BASE}/api/sites/import-archive`, {
+        method: 'POST',
+        headers: { Origin: ORIGIN, Cookie: `payload-token=${token}`, 'Content-Type': 'application/zip' },
+        body: zipBuf,
+      });
+      const imported = (await imp.json().catch(() => null))?.site?.slug;
+      if (imported) createdSites.add(imported);
+      const importedLegal = imported ? await legalOf(imported) : null;
+      check('Import d’archive : informations légales reprises', imp.status === 200 && importedLegal?.companyName === LEGAL.companyName && importedLegal?.publisherName === LEGAL.publisherName, `HTTP ${imp.status} ${imported} ${JSON.stringify(importedLegal)}`);
     }
-    const copy = await req('/api/admin/backups/restore', { method: 'POST', body: { name: archive, slug, mode: 'copy' }, token });
-    const copySlug = copy.json?.site?.slug;
-    if (copySlug) createdSites.add(copySlug);
-    if (copy.status === 200 && copySlug) {
-      const copyMedia = await siteMedia(copySlug);
-      const copyTheme = await themeOf(copySlug);
-      check('Restauration en copie : logo remappé', logoIsOwnCopy(copyTheme, copyMedia, original), `${copyMedia.length} média(s) ${copyMedia.map((m) => m.filename).join(',')} logo=${copyTheme?.logo}`);
-      const copyLegal = await legalOf(copySlug);
-      check('Restauration en copie : informations légales reprises', copyLegal?.companyName === LEGAL.companyName && copyLegal?.publisherName === LEGAL.publisherName, JSON.stringify(copyLegal));
+
+    // ---- Restauration en copie : logo remappé vers l'image restaurée ----
+    // Une archive créée (sauvegarde manuelle) : celles du serveur testé à l'abri
+    restoreShelter = await shelterBackups(req, token, 1);
+    if (!restoreShelter) {
+      check('Restauration en copie : scénario ignoré (archives du serveur testé hors de portée, la rétention en supprimerait)', true);
     } else {
-      check('Restauration en copie : logo remappé', false, `HTTP ${copy.status} ${JSON.stringify(copy.json)}`);
+      const made = await req('/api/admin/backups', { method: 'POST', token });
+      const archive = made.json?.filename;
+      if (archive) createdArchives.add(archive);
+      if (!(made.status === 200 && BACKUP_NAME.test(archive || ''))) {
+        check('Restauration en copie : logo remappé', false, `sauvegarde HTTP ${made.status} ${archive}`);
+        return;
+      }
+      const copy = await req('/api/admin/backups/restore', { method: 'POST', body: { name: archive, slug, mode: 'copy' }, token });
+      const copySlug = copy.json?.site?.slug;
+      if (copySlug) createdSites.add(copySlug);
+      if (copy.status === 200 && copySlug) {
+        const copyMedia = await siteMedia(copySlug);
+        const copyTheme = await themeOf(copySlug);
+        check('Restauration en copie : logo remappé', logoIsOwnCopy(copyTheme, copyMedia, original), `${copyMedia.length} média(s) ${copyMedia.map((m) => m.filename).join(',')} logo=${copyTheme?.logo}`);
+        const copyLegal = await legalOf(copySlug);
+        check('Restauration en copie : informations légales reprises', copyLegal?.companyName === LEGAL.companyName && copyLegal?.publisherName === LEGAL.publisherName, JSON.stringify(copyLegal));
+      } else {
+        check('Restauration en copie : logo remappé', false, `HTTP ${copy.status} ${JSON.stringify(copy.json)}`);
+      }
     }
 
     // ---- Logo retiré du thème : l'image se supprime, une seule entrée d'audit ----
@@ -138,5 +166,7 @@ export default async function ({ BASE, ORIGIN, req, check, admin }) {
     for (const name of createdArchives) {
       if (BACKUP_NAME.test(name)) fs.rmSync(path.join(BACKUPS_DIR, name), { force: true });
     }
+    // Après le retrait des archives de la matrice : celles de l'exploitant reviennent
+    if (restoreShelter) restoreShelter();
   }
 }

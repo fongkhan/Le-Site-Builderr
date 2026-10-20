@@ -98,8 +98,10 @@ function provisionRepository(repoPath) {
 // statistiques), versions conservées et brouillon. Un site recréé plus tard sous le même
 // slug repart ainsi de zéro (pas de rollback possible vers le contenu de l'ancien site).
 // La copie du modèle (REPOSITORIES_DIR/<slug>) n'est supprimée que si c'est bien le dépôt
-// du site ET que l'outil l'a créée (marqueur) : un dépôt importé ou préexistant est conservé.
-function purgeSiteData(slug, { repositoryPath } = {}) {
+// du site, que l'outil l'a créée (marqueur) ET qu'elle ne contient le dépôt ni le dossier
+// publié d'aucun autre site (otherSitePaths : chemins des autres sites enregistrés,
+// obligatoire pour supprimer le dépôt). Un dépôt importé ou préexistant est conservé.
+function purgeSiteData(slug, { repositoryPath, otherSitePaths } = {}) {
   if (!isValidSlug(slug)) return;
   for (const file of [getSitePagesFile(slug), getSiteThemeFile(slug), getSitePostsFile(slug), getSiteStatsFile(slug)]) {
     try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch (e) { console.error(`Suppression de ${file} impossible :`, e.message); }
@@ -113,11 +115,20 @@ function purgeSiteData(slug, { repositoryPath } = {}) {
       console.error(`Nettoyage de ${base}/${slug} impossible :`, e.message);
     }
   }
-  if (repositoryPath) {
+  if (repositoryPath && Array.isArray(otherSitePaths)) {
     try {
       const ownRepo = path.resolve(REPOSITORIES_DIR, slug);
       if (path.resolve(String(repositoryPath)) === ownRepo && isProvisionedRepository(ownRepo)) {
-        fs.rmSync(assertStrictlyInside(ownRepo, REPOSITORIES_DIR), { recursive: true, force: true });
+        // Dossier d'un autre site dans ce dépôt, ou ce dépôt lui-même (chemin partagé)
+        const holdsOtherSite = otherSitePaths.some((p) => {
+          const rel = path.relative(ownRepo, path.resolve(String(p)));
+          return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+        });
+        if (holdsOtherSite) {
+          console.error(`⚠️ [Sites] Dépôt de ${slug} conservé : il contient le dépôt ou le dossier publié d'un autre site.`);
+        } else {
+          fs.rmSync(assertStrictlyInside(ownRepo, REPOSITORIES_DIR), { recursive: true, force: true });
+        }
       }
     } catch (e) {
       console.error(`Nettoyage du dépôt de ${slug} impossible :`, e.message);
@@ -165,9 +176,10 @@ async function uniqueSlug(base) {
   return slug;
 }
 
-// Statut de site mis à jour en tâche de fond (jamais bloquant pour l'appelant).
+// Statut de site mis à jour en tâche de fond (jamais bloquant pour l'appelant), attendue
+// par l'arrêt propre (statut final d'un build ou d'un retour arrière).
 function updateSiteStatus(slug, status) {
-  sitesStore.updateSiteStatus(slug, status).catch((e) => {
+  require('../core/shutdown').trackBackground(sitesStore.updateSiteStatus(slug, status)).catch((e) => {
     console.error("Erreur mise à jour statut site", e.message);
   });
 }

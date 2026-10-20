@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PageDoc } from '../../../types';
-import { isValidEmail, isValidTel, isValidWebUrl, linkHint, linkMode, linkTargetsFor, normalizePagePath, type LinkTargets } from './ctaLink';
+import { isBlogArticlePath, isValidEmail, isValidTel, isValidWebUrl, linkHint, linkMode, linkTargetsFor, normalizePagePath, type LinkTargets } from './ctaLink';
 
 const page = (slug: string, locale: string, blockTypes: string[] = [], title = slug): PageDoc => ({
   title,
@@ -40,6 +40,13 @@ describe('syntaxe des liens (mêmes règles que le template)', () => {
     expect(normalizePagePath(' /en/about/ ')).toBe('/en/about/');
     for (const bad of ['//evil.com', '/\\evil', '/cours/../x', '/cours?x=1', '/cours/#contact', '/a//b/', 'cours']) {
       expect(normalizePagePath(bad), bad).toBeNull();
+    }
+  });
+
+  it('article du blog : /blog/<slug>/ (barre finale facultative), ni l’index ni plus profond', () => {
+    for (const ok of ['/blog/mon-article/', '/blog/mon-article', ' /blog/a_1/ ']) expect(isBlogArticlePath(ok), ok).toBe(true);
+    for (const bad of ['/blog/', '/blog', '/blog/a/b/', '/en/blog/a/', '/blog/a?x=1', '/blogs/a/', null, undefined]) {
+      expect(isBlogArticlePath(bad), String(bad)).toBe(false);
     }
   });
 

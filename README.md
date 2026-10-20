@@ -63,7 +63,7 @@ Le panneau d'administration (« 🧾 Journal d'audit ») liste les actions sensi
 
 Aucun secret, jeton, mot de passe ni adresse IP n'y est écrit. Le panneau filtre par catégorie et par cible exacte (slug d'un site ou email) et charge les entrées par pages (« Charger plus »). Les entrées ne sont ni modifiables ni supprimables, ni par l'API ni par le panel Payload : seule la purge de rétention du serveur les retire, une fois par jour, au-delà de `AUDIT_RETENTION_DAYS` jours (365 par défaut, `0` = jamais) ; chaque purge est elle-même tracée (`journal.purge`). L'historique des builds suit la même règle avec `BUILDS_RETENTION_DAYS`.
 
-Les limiteurs de connexion et de réinitialisation de mot de passe s'appliquent quelle que soit la forme du chemin (casse, caractères encodés, `/` final), comme le message d'échec unifié. L'API GraphQL de Payload est désactivée (l'orchestrateur et le panel n'utilisent que l'API REST). En CI, `npx tsx tests/auth-empty-db-check.mjs` vérifie sur une base vide temporaire qu'aucun premier compte ne peut être créé anonymement.
+Les limiteurs de connexion et de réinitialisation de mot de passe s'appliquent quelle que soit la forme du chemin (casse, caractères encodés, segments `.` et `..` même encodés, `/` répétés ou final), comme le message d'échec unifié. L'API GraphQL de Payload est désactivée (l'orchestrateur et le panel n'utilisent que l'API REST). En CI, `npx tsx tests/auth-empty-db-check.mjs` vérifie sur une base vide temporaire qu'aucun premier compte ne peut être créé anonymement.
 
 ---
 
@@ -178,7 +178,7 @@ TRUST_PROXY=1                                     # derrière un reverse-proxy (
 (cd server && npm run build)         # build Next (admin Payload) → server/.next ; lit server/.env, sans connexion à la base
 ```
 
-**4. Lancement** : `cd server && npm run start:prod` (mode production sur toutes les plateformes, sans variable à poser). Au démarrage : migrations en attente appliquées, administrateur créé s'il n'en existe aucun, puis écoute du port. Sonde de disponibilité : `GET /api/health/ready`. Sous un superviseur, régler le délai d'arrêt **au-dessus** de `SHUTDOWN_GRACE_MS` (15 s par défaut en production) :
+**4. Lancement** : `cd server && npm run start:prod` (mode production sur toutes les plateformes, sans variable à poser). Au démarrage : migrations en attente appliquées, administrateur `SEED_ADMIN_EMAIL` créé seulement s'il n'existe encore aucun administrateur (supprimé ou renommé ensuite, il n'est jamais recréé ; `SEED_ADMIN_PASSWORD` peut alors être retiré du `.env`), puis écoute du port. Sonde de disponibilité : `GET /api/health/ready`. Sous un superviseur, régler le délai d'arrêt **au-dessus** de `SHUTDOWN_GRACE_MS` (15 s par défaut en production) :
 ```ini
 # /etc/systemd/system/meta-builder.service
 [Unit]
@@ -188,24 +188,24 @@ After=network.target postgresql.service
 [Service]
 User=metabuilder
 WorkingDirectory=/srv/meta-builder/server
-ExecStart=/usr/bin/node node_modules/tsx/dist/cli.mjs index.js --production
+ExecStart=/usr/bin/node --import tsx index.js --production
 Restart=on-failure
 TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
 ```
-Avec PM2, depuis `server/` : `pm2 start node_modules/tsx/dist/cli.mjs --name meta-builder --kill-timeout 30000 -- index.js --production`. Sous un superviseur, lancer cette commande directe plutôt que `npm run start:prod` : un signal d'arrêt adressé au seul process `npm` n'est pas relayé au serveur.
+Avec PM2, depuis `server/` : `pm2 start index.js --name meta-builder --node-args="--import tsx" --kill-timeout 30000 -- --production`. Sous un superviseur, lancer `node --import tsx` directement plutôt que `npm run start:prod` (un signal d'arrêt adressé au seul process `npm` n'est pas relayé au serveur) ou que la CLI `tsx` (elle tue le serveur par SIGKILL s'il est occupé au moment du signal, par exemple pendant la copie d'un déploiement).
 
 **5. Mise à jour** :
 1. **sauvegarde de la base** (`pg_dump -Fc <base> > avant-maj.dump`) et des dossiers de données (`server/uploads`, `server/data`, `backups`) ;
-2. `git pull` puis `npm ci` dans `server`, `orchestrator` et `client-template` ;
+2. `git pull` puis `npm ci` dans `server`, `orchestrator` et `client-template` (depuis une 2.3.0 qui a déjà publié un site, faire d'abord `git checkout -- client-template/src/styles/theme.css` : ce fichier est désormais généré au build et ignoré par git) ;
 3. builds (`orchestrator` puis `server`, étape 3) ;
 4. redémarrage : les nouvelles migrations s'appliquent au démarrage. Une migration en échec arrête le serveur (aucune requête servie) : restaurez la sauvegarde ou corrigez, puis relancez.
 
 **Base de développement existante** : démarrez-la une fois en développement avec **la même version** (`npm start` : schéma synchronisé), arrêtez, puis `cd server && npm run migrate:baseline`. La commande vérifie que la base correspond au schéma de cette version, marque les migrations comme appliquées et retire la marque du mode développement ; `npm run start:prod` l'accepte ensuite. Les comptes de démonstration éventuels (`admin@admin.com`, `client@client.com`) sont signalés : changez leurs mots de passe ou supprimez-les.
 
-**Règle** : toute modification d'une collection (`payload.config.ts`) exige sa migration, générée puis committée avec le code : `cd server && npm run migrate:create -- <nom>` (fichiers `.ts`, `.json` et `index.ts` de `server/migrations/`, jamais écrits à la main). La CI le vérifie (`npm run migrate:check`, sans base ni réseau). Autres commandes : `npm run migrate` (appliquer), `npm run migrate:status` (état).
+**Règle** : toute modification d'une collection (`payload.config.ts`) exige sa migration, générée puis committée avec le code : `cd server && npm run migrate:create -- <nom>` (fichiers `.ts`, `.json` et `index.ts` de `server/migrations/`, jamais écrits à la main). La CI le vérifie (`npm run migrate:check`, sans base ni réseau). Autres commandes : `npm run migrate` (appliquer), `npm run migrate:status` (état). Une colonne ou une table renommée fait poser une question par drizzle-kit : hors terminal interactif (CI, hook git), la commande échoue (code 1) au lieu d'attendre ; lancez alors `migrate:create` dans un terminal. Après une mise à jour de Payload ou l'ajout d'un composant d'administration, `cd server && npx tsx scripts/migrate.js importmap` régénère `app/(payload)/admin/importMap.js` (à committer ; `npm test` vérifie qu'il est à jour).
 
 | Symptôme | Cause | Solution |
 |---|---|---|
@@ -214,6 +214,7 @@ Avec PM2, depuis `server/` : `pm2 start node_modules/tsx/dist/cli.mjs --name met
 | `orchestrator/dist absent` au démarrage | Interface non construite | `cd orchestrator && npm run build`, ou `SERVE_ORCHESTRATOR=false` si elle est hébergée ailleurs |
 | Connexion acceptée puis 401/403 dans l'interface ou `/admin` | `FRONTEND_ORIGIN` ne contient pas l'adresse publique du serveur | Ajouter l'adresse (`https://…`, sans `/` final) puis redémarrer |
 | `Schéma modifié sans migration` (CI ou `migrate:check`) | Collection modifiée sans migration | `npm run migrate:create -- <nom>` et committer les fichiers générés |
+| `Question sans réponse` (`migrate:*` hors terminal) | Colonne ou table renommée : drizzle-kit demande s'il s'agit d'un renommage | `npm run migrate:create -- <nom>` dans un terminal interactif, répondre, committer |
 
 **Conteneur** (facultatif) : `docker compose --profile prod up -d --build` construit l'image du `Dockerfile` (dépendances, builds de l'orchestrateur et du serveur) et lance le serveur sur `http://127.0.0.1:4000` avec une base dédiée `metabuilder_prod` (créée et migrée au premier démarrage) ; réglages lus dans `server/.env` (étape 2), données dans des volumes nommés. `docker compose up -d` seul ne lance toujours que la base de développement.
 
@@ -279,12 +280,12 @@ Ce que fait le mode cPanel :
 ### Médiathèque du site
 * **Parcourir et réutiliser** : le bouton 🖼️ de chaque champ image ouvre la médiathèque du site (vignettes, dimensions, poids, recherche au-delà de 8 images) ; « Choisir » place l'image dans le champ, sans nouveau téléversement.
 * **Texte alternatif** par image (200 caractères au plus), repris par le site publié pour chaque usage (galerie, produits, couvertures d'articles) ; vide, le bloc garde son texte de repli (nom du produit, « Photo N – titre »).
-* **Suppression contrôlée** : refusée tant que l'image est citée par une page (toutes langues) ou un article, **brouillons compris** — la médiathèque nomme les contenus concernés. La suppression par l'API REST Payload (`DELETE /api/media/:id`) est réservée aux admins.
+* **Suppression contrôlée** : refusée tant que l'image est citée par une page (toutes langues) ou un article, **brouillons compris** — la médiathèque nomme les contenus concernés. La suppression (`DELETE /api/media/:id`) et le remplacement de fichier (`PATCH /api/media/:id`) par l'API REST Payload sont réservés aux admins.
 * Endpoints (admin ou propriétaire du site) : `GET /api/sites/:slug/media` (images et usages), `PATCH /api/sites/:slug/media/:id` (`{ alt }`), `DELETE /api/sites/:slug/media/:id` (409 si utilisée, journal d'audit `media.suppression`).
 * **Sites publiés** : le build lit le canal interne `/internal/site-media` (texte alternatif, dimensions, variantes) : chaque `<img>` de la médiathèque reçoit `width`/`height` (aucun décalage de mise en page) et un `srcset` de variantes 480, 960 et 1600 px (celles nettement plus petites que l'original) écrites au déploiement sous `/media/w<largeur>/` — seulement si `sharp` est disponible, sinon l'image d'origine seule (jamais de lien cassé). Couverture d'article prioritaire, fond du Hero en tête de page préchargé. Les noms des médias ignorés ou introuvables figurent dans le journal de build.
 
 ### Messages reçus
-* Chaque envoi du formulaire de contact ou de prise de rendez-vous d'un site publié est conservé (12 mois, 500 messages maximum par site) et consultable par son propriétaire dans l'onglet **Messages** : non lus, marquer comme lu, répondre par email, supprimer. Un email de notification en échec ne fait plus perdre le message.
+* Chaque envoi du formulaire de contact ou de prise de rendez-vous d'un site publié est conservé (12 mois, 500 messages maximum par site) et consultable par son propriétaire dans l'onglet **Messages** : non lus, marquer comme lu, répondre par email, supprimer. Un email de notification en échec ne fait plus perdre le message. Les messages de plus de 12 mois sont supprimés chaque jour par la purge de rétention, même si personne n'ouvre le site ; leur contenu n'est jamais écrit dans les journaux du serveur.
 
 ### Mentions légales et confidentialité des sites publiés
 * **Pages générées** pour chaque site : « Mentions légales » (`/mentions-legales/`) et « Politique de confidentialité » (`/confidentialite/`), plus `/en/legal-notice/` et `/en/privacy-policy/` quand le site a un accueil en anglais (une page d'une langue sans accueil renvoie aux pages françaises). Elles ne figurent ni dans le menu ni dans le sitemap ; des liens discrets en bas de chaque page (404 et blog compris) y mènent, avec « Gérer les cookies » quand une mesure d'audience est active (et un lien vers la politique dans la bannière de consentement).
@@ -323,13 +324,16 @@ Publics, sans authentification, sans secret, version ni chemin dans la réponse 
 * `GET /api/health/ready` — disponibilité : `200` (`ok` ou `degraded`) ou `503` (`down`) avec `{ "status", "checks": { "database", "storage", "build": { "inProgress", "queueLength" } } }`. `database` exécute un `select 1` borné à 2 s ; `storage` vérifie l'accès en écriture aux données, à la production et à la médiathèque ; `build` est informatif. Le résultat est mis en cache 2 s : une sonde fréquente ne sollicite jamais la base à chaque appel et ne reçoit jamais de 429. À utiliser pour une sonde de disponibilité, un `HEALTHCHECK` Docker ou l'attente de démarrage en CI (`curl -fsS http://localhost:4000/api/health/ready`).
 
 ### Sauvegardes et restauration
-* **Contenu sauvegardé** : fiches, pages, thèmes, articles et images téléversées de tous les sites, dans `backups/backup-<date>.zip` (une archive par sauvegarde, jamais écrasée même si deux sauvegardes tombent dans la même seconde).
-* **Réglages** : `BACKUP_ENABLED=true` active la planification (vérifiée au plus toutes les heures, quel que soit l'intervalle), `BACKUP_INTERVAL_HOURS` (24 par défaut), `BACKUP_KEEP` (14 archives conservées), `BACKUP_MEDIA=false` pour exclure les images (archives plus légères ; une restauration ne reprend alors que les images encore présentes). « Sauvegarder maintenant » reste disponible dans le panel d'administration.
+* **Contenu sauvegardé** : fiches (informations légales comprises), pages, thèmes, articles et images téléversées de tous les sites avec leur texte alternatif, dans `backups/backup-<date>.zip` (une archive par sauvegarde, jamais écrasée même si deux sauvegardes tombent dans la même seconde).
+* **Réglages** : `BACKUP_ENABLED=true` active la planification (vérifiée au plus toutes les heures, quel que soit l'intervalle), `BACKUP_INTERVAL_HOURS` (24 par défaut), `BACKUP_KEEP` (14 archives planifiées ou manuelles conservées), `BACKUP_MEDIA=false` pour exclure les images (archives plus légères ; une restauration ne reprend alors que les images encore présentes). « Sauvegarder maintenant » reste disponible dans le panel d'administration.
+* **Sauvegardes de sécurité** (avant un remplacement ou la suppression d'un site) : `backups/backup-<date>-securite.zip`, conservées à part (`BACKUP_KEEP_SAFETY`, `BACKUP_KEEP` par défaut) : une série de suppressions ou de restaurations n'efface jamais l'historique planifié, et ne repousse pas la sauvegarde planifiée suivante.
 * **Restaurer…** (panel d'administration, « Sauvegardes du contenu ») : choisir un site de la sauvegarde, puis
-  * **copie** (recommandé) : nouveau site en brouillon « <nom> (restauration) » ; un site supprimé depuis est recréé sous son slug d'origine s'il est libre. Le site actuel n'est pas modifié ; la copie n'est rattachée à aucun compte client (ni domaine personnalisé ni mesure d'audience restaurés) ;
+  * **copie** (recommandé) : nouveau site en brouillon « <nom> (restauration) » ; un site supprimé depuis est recréé sous son slug d'origine s'il est libre, sinon (dossier publié de l'ancien site conservé…) sous un slug suffixé (`mon-site-2`), annoncé avant la restauration. Le site actuel n'est pas modifié ; la copie n'est rattachée à aucun compte client (ni domaine personnalisé ni mesure d'audience restaurés) ;
   * **remplacement** : pages, articles et thème du site existant remplacés, images manquantes restaurées, après une **sauvegarde de sécurité** de tous les sites et sous le créneau de build. Le site en ligne ne change qu'à la prochaine publication.
 * **Suppression d'un site** : une sauvegarde préalable de tous les sites est proposée (cochée par défaut) ; le site supprimé reste ainsi restaurable en copie.
-* Endpoints (admin) : `GET /api/admin/backups/sites?name=<archive>` (sites contenus, pages, articles, images) et `POST /api/admin/backups/restore` `{ name, slug, mode: "copy" | "replace" }`. Les archives de plus de 1 Go ne sont pas restaurables depuis l'interface.
+* Endpoints (admin) : `GET /api/admin/backups/sites?name=<archive>` (sites contenus, pages, articles, images) et `POST /api/admin/backups/restore` `{ name, slug, mode: "copy" | "replace" }`. Les archives de plus de 1 Go ne sont pas restaurables depuis l'interface : une sauvegarde de sécurité de cette taille est retirée, et la suppression ou le remplacement qu'elle devait protéger est refusé (`409`, rien n'est modifié).
+* **Export d'un site** (`GET /api/sites/:slug/export`) : `meta.json` porte aussi les informations légales, reprises (normalisées) par l'import d'archive.
+* La matrice de sécurité met à l'abri les archives existantes du serveur testé (liens physiques dans `backups/`) et les remet en place à la fin : la rétention appliquée aux sauvegardes qu'elle crée n'en supprime aucune.
 
 ### 5. Payload CMS v3 multi-tenant
 * Collections `users` (auth, rôles, offre et quota IA), `payload_sites` (source de vérité des sites), `pages` (blocs), `posts` (articles), `themes`, `media` (médiathèque), `builds` (historique des publications), `audit_logs` (journal d'audit) et `submissions` (messages reçus), avec access control par rôle et ownership.

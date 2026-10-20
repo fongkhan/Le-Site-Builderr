@@ -111,6 +111,33 @@ test('derivedColors — thème par défaut et palette sombre', () => {
   }
 });
 
+test('derivedColors — fond sombre : texte des cartes lisible dès qu’il l’est sur le fond', () => {
+  const { derivedColors, contrastRatio } = themeLib;
+  // Texte gris à 4,74:1 sur le fond : la surface éclaircie de 6 % (#202020) le passait à 4,13:1
+  const grey = { primary: '#C9A227', secondary: '#000000', background: '#121212', text: '#808080' };
+  const d = derivedColors(grey);
+  assert.equal(d.surface, '#171717');
+  assert.ok(contrastRatio(grey.text, d.surface) >= 4.5);
+  assert.ok(contrastRatio(d.textMuted, d.surface) >= 4.5);
+  // Fonds sombres #RGB × textes gris #RGB : texte/fond ≥ 4,5 ⇒ texte et texte secondaire ≥ 4,5
+  // sur la surface (et jamais moins lisibles que sur le fond sinon)
+  for (let i = 0; i < 4096; i++) {
+    const background = `#${i.toString(16).padStart(3, '0')}`;
+    if (contrastRatio('#ffffff', background) < 4.5) continue;
+    for (let g = 0; g < 16; g++) {
+      const text = `#${g.toString(16).repeat(3)}`;
+      const out = derivedColors({ ...grey, background, text });
+      const onBg = contrastRatio(text, background);
+      const label = `${text} sur ${background} : surface ${out.surface}`;
+      assert.ok(contrastRatio(text, out.surface) >= Math.min(4.5, onBg), label);
+      if (onBg >= 4.5) {
+        assert.ok(contrastRatio(out.textMuted, out.surface) >= 4.5, label);
+        assert.ok(contrastRatio(out.textMuted, background) >= 4.5, label);
+      }
+    }
+  }
+});
+
 test('themeContrastWarnings — seuil 4,5:1, ratio arrondi vers le bas avec virgule', () => {
   const { themeContrastWarnings } = themeLib;
   assert.deepEqual(themeContrastWarnings(VALID), []);
@@ -127,11 +154,11 @@ test('themeContrastWarnings — seuil 4,5:1, ratio arrondi vers le bas avec virg
   assert.deepEqual(sec.map((w) => w.code), ['text-secondary']);
 });
 
-test('themeCss — identique au theme.css suivi du template (thème par défaut)', async () => {
+test('themeCss — identique au thème par défaut commité du template (theme.default.css)', async () => {
   const fs = await import('node:fs');
   const { DEFAULT_THEME } = require('../../services/defaults.js');
   const css = themeLib.themeCss(DEFAULT_THEME.theme);
-  const tracked = fs.readFileSync(new URL('../../../client-template/src/styles/theme.css', import.meta.url), 'utf-8');
+  const tracked = fs.readFileSync(new URL('../../../client-template/src/styles/theme.default.css', import.meta.url), 'utf-8');
   assert.equal(css, tracked);
   assert.ok(css.includes('--color-on-primary: #ffffff;'));
   assert.ok(css.includes('--color-primary-deep: #5a3b1c;'));
@@ -217,4 +244,36 @@ test('canonicalTheme — clés inconnues et logo invalide retirés', () => {
   assert.deepEqual(out, { colors: VALID.colors, fonts: VALID.fonts, radius: '12px' });
   assert.ok(!('logo' in canonicalTheme({ ...VALID, logo: '' })));
   assert.equal(canonicalTheme({ ...VALID, logo: '/api/media/file/a(b).png' }).logo, '/api/media/file/a%28b%29.png');
+});
+
+// --- theme.css du template : fichier généré, jamais suivi par git ---
+
+test('writeThemeCss — écrit src/styles/theme.css du template, chemin ignoré par git', async () => {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const config = require('../../core/config.js');
+  // Chemin réel, relatif à la racine du dépôt : ignoré par .gitignore (une mise à jour par
+  // « git pull » ne bute plus sur le thème du dernier build)
+  const repoRoot = path.dirname(config.ASTRO_PROJECT_DIR);
+  const target = path.relative(repoRoot, path.join(config.ASTRO_PROJECT_DIR, 'src', 'styles', 'theme.css')).split(path.sep).join('/');
+  const ignored = fs.readFileSync(path.join(repoRoot, '.gitignore'), 'utf-8').split(/\r?\n/).map((l) => l.trim()).filter((l) => !l.startsWith('#'));
+  assert.ok(ignored.includes(target), `${target} absent de .gitignore`);
+  assert.ok(!ignored.some((l) => l.includes('theme.default.css')), 'le thème par défaut doit rester suivi');
+  // Clone neuf ou CI : le template recrée theme.css depuis le défaut avant de compiler
+  assert.match(fs.readFileSync(path.join(config.ASTRO_PROJECT_DIR, 'astro.config.mjs'), 'utf-8'), /copyFileSync\(new URL\('\.\/src\/styles\/theme\.default\.css'/);
+
+  // Écriture dans un template temporaire (content.js chargé APRÈS le remplacement du chemin)
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'theme-css-'));
+  const saved = config.ASTRO_PROJECT_DIR;
+  config.ASTRO_PROJECT_DIR = tmp;
+  try {
+    const { writeThemeCss } = require('../../services/content.js');
+    const theme = { colors: DARK, fonts: { heading: 'Lora', body: 'Karla' }, radius: '4px' };
+    assert.deepEqual(writeThemeCss({ theme }), theme);
+    assert.equal(fs.readFileSync(path.join(tmp, 'src', 'styles', 'theme.css'), 'utf-8'), themeLib.themeCss(theme));
+  } finally {
+    config.ASTRO_PROJECT_DIR = saved;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });

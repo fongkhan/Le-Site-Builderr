@@ -5,9 +5,9 @@
   "description": "Backend API & Webhook lockfile server for Meta-Builder",
   "main": "index.js",
   "scripts": {
-    "start": "tsx index.js",
+    "start": "node --import tsx index.js",
     "build": "next build",
-    "start:prod": "tsx index.js --production",
+    "start:prod": "node --import tsx index.js --production",
     "migrate": "tsx scripts/migrate.js migrate",
     "migrate:status": "tsx scripts/migrate.js status",
     "migrate:create": "tsx scripts/migrate.js create",

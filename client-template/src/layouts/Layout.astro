@@ -5,8 +5,10 @@ import '../styles/blocks.css';
 // Polices du thème auto-hébergées (voir integrations/theme-fonts.mjs)
 import 'virtual:theme-fonts.css';
 // Identité du site : couleur primaire du thème (barre du navigateur mobile)
+import { createHash } from 'node:crypto';
 import themeCss from '../styles/theme.css?raw';
-import { themeCssColor } from '../lib/monogram.mjs';
+import { monogramSvg, themeCssColor } from '../lib/monogram.mjs';
+import { analyticsScriptUrl } from '../lib/consent.mjs';
 import { getSiteContent } from '../lib/content';
 import { widthAtHeight } from '../lib/media-images.mjs';
 import { localePath, normalizeLocale, LOCALE_LABELS, DEFAULT_LOCALE } from '../lib/i18n.mjs';
@@ -92,15 +94,25 @@ const logoSrc = logoPath ? withBase(logoPath) : '';
 const LOGO_HEIGHT = 40;
 const { media } = await getSiteContent();
 const logoWidth = logoPath ? widthAtHeight(logoPath, LOGO_HEIGHT, { media, mediaPrefix: '/media/' }) : null;
+// Icônes générées : adresse versionnée par le contenu de favicon.svg (même calcul que
+// pages/favicon.svg.ts ; favicon.ico ne dépend que de la couleur primaire). Une nouvelle
+// couleur ou un nouveau nom est vu dès la publication, malgré le cache long des images.
+const iconSvg = monogramSvg({
+	name: process.env.PUBLIC_SITE_NAME || '',
+	background: themeColor,
+	foreground: themeCssColor(themeCss, 'on-primary') || '#ffffff',
+});
+const iconVersion = createHash('sha256').update(iconSvg).digest('hex').slice(0, 10);
 // La marque mène à l'accueil de la langue de la page (sinon à celui de la langue par défaut)
 const brandHref = withBase(localePath(locales.includes(pageLocale) ? pageLocale : DEFAULT_LOCALE, 'home'));
 
-// Mesure d'audience (GA4 ou Matomo) : valeurs validées côté serveur à l'écriture.
-// Le script n'est JAMAIS chargé avant le consentement (bannière RGPD ci-dessous).
+// Mesure d'audience (GA4 ou Matomo) : valeurs normalisées par le serveur de build.
+// Le script n'est JAMAIS chargé avant le consentement (bannière RGPD ci-dessous) ; sans
+// script chargeable (même règle que la CSP), ni bannière ni bouton « Cookies ».
 const analyticsProvider = process.env.PUBLIC_ANALYTICS_PROVIDER || '';
 const analyticsId = process.env.PUBLIC_ANALYTICS_ID || '';
 const analyticsHost = process.env.PUBLIC_ANALYTICS_HOST || '';
-const analyticsEnabled = Boolean(analyticsProvider && analyticsId);
+const analyticsEnabled = Boolean(analyticsScriptUrl({ provider: analyticsProvider, id: analyticsId, host: analyticsHost }));
 
 // Liens légaux en bas de chaque page (mentions légales, politique de confidentialité) :
 // page de la langue courante, sinon de la langue par défaut ; page générée ou page du CMS
@@ -144,8 +156,8 @@ const jsonLdScripts = (jsonLd || []).filter(Boolean).map((d) => jsonLdString(d))
 			</>
 		) : (
 			<>
-				<link rel="icon" type="image/svg+xml" href={withBase('/favicon.svg')} />
-				<link rel="icon" href={withBase('/favicon.ico')} sizes="32x32" />
+				<link rel="icon" type="image/svg+xml" href={`${withBase('/favicon.svg')}?v=${iconVersion}`} />
+				<link rel="icon" href={`${withBase('/favicon.ico')}?v=${iconVersion}`} sizes="32x32" />
 			</>
 		)}
 		{themeColor && <meta name="theme-color" content={themeColor} />}

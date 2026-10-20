@@ -1,6 +1,8 @@
 // Médiathèque d'un site (lot 4) : routes /api/sites/:slug/media (ownership), texte
-// alternatif nettoyé, suppression REST réservée aux admins, suppression contrôlée par
-// l'usage (pages et articles brouillons), canal interne du build fermé sans jeton.
+// alternatif nettoyé, suppression et remplacement de fichier REST réservés aux admins,
+// suppression contrôlée par l'usage (pages et articles brouillons), noms avec ( ) et '
+// (forme canonique des URL, usage, 409, publication au build), canal interne du build
+// fermé sans jeton.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +10,14 @@ import { fileURLToPath } from 'node:url';
 // PNG 1×1 valide (dimensions lues par Payload)
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
 const serverDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const THEME = {
+  colors: { primary: '#8B5A2B', secondary: '#F5E6CC', background: '#FAFAFA', text: '#2D241E' },
+  fonts: { heading: 'Playfair Display', body: 'Inter' },
+  radius: '12px',
+};
+// Forme canonique d'une URL de média (encodeMediaName de lib/media.js) : ( ) ' encodés
+const encodeName = (name) => encodeURIComponent(name).replace(/[!'()*]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
+const mediaUrl = (name) => `/api/media/file/${encodeName(name)}`;
 
 export default async function ({ BASE, ORIGIN, req, check, admin, client }) {
   const OWN = 'boulangerie-artisanale';
@@ -56,6 +66,16 @@ export default async function ({ BASE, ORIGIN, req, check, admin, client }) {
       const rest = await req(`/api/media/${id}`, { method: 'DELETE', token: client.token });
       check('Médiathèque : DELETE REST Payload par un client -> 403', rest.status === 403, `HTTP ${rest.status}`);
       check('Médiathèque : fiche conservée après le refus REST', (await req(`/api/media/${id}?depth=0`, { token: admin.token })).status === 200);
+
+      // Remplacement du fichier par PATCH REST multipart : il effacerait l'ancien, encore
+      // cité, sans contrôle d'usage
+      const replacement = new FormData();
+      replacement.append('file', new Blob([PNG], { type: 'image/png' }), 'mediatheque-sc-remplacement.png');
+      const replaced = await fetch(`${BASE}/api/media/${id}`, { method: 'PATCH', headers: { Origin: ORIGIN, Cookie: `payload-token=${client.token}` }, body: replacement });
+      const kept = (await req(`/api/media/${id}?depth=0`, { token: admin.token })).json;
+      check('Médiathèque : PATCH REST multipart (remplacement du fichier) par un client -> 403, fichier conservé',
+        replaced.status === 403 && kept?.filename === filename && fs.existsSync(path.join(serverDir, 'uploads', filename)),
+        `HTTP ${replaced.status} fichier=${kept?.filename}`);
 
       const del = await req(mediaPath(OWN, id), { method: 'DELETE', token: client.token });
       check('Médiathèque : DELETE par la médiathèque (image inutilisée) -> 200', del.status === 200 && del.json?.success === true, `HTTP ${del.status} ${JSON.stringify(del.json)}`);
@@ -106,6 +126,71 @@ export default async function ({ BASE, ORIGIN, req, check, admin, client }) {
     const resaved = await savePage(null);
     const freed = await req(mediaPath(slug, a.id), { method: 'DELETE', token: admin.token });
     check("Médiathèque : image retirée de la page -> suppression 200", resaved.status === 200 && freed.status === 200, `pages=${resaved.status} HTTP ${freed.status}`);
+
+    // ---- Noms avec ( ) et ' (« photo (1).png », « l'atelier.png ») ----
+    // Payload garde ces caractères en clair dans doc.url (encodeURIComponent) : la page est
+    // enregistrée avec cette ancienne forme, comme avant la forme canonique.
+    const photo = (await upload(admin.token, siteId, 'photo (1).png')).json?.doc;
+    const atelier = (await upload(admin.token, siteId, "l'atelier.png")).json?.doc;
+    const logo = (await upload(admin.token, siteId, 'logo (2).png')).json?.doc;
+    if (!photo || !atelier || !logo) {
+      check("Médiathèque : préparation des images aux noms avec ( ) et '", false, `photo=${photo?.filename} atelier=${atelier?.filename} logo=${logo?.filename}`);
+      return;
+    }
+    const library = (await req(mediaPath(slug), { token: admin.token })).json?.items || [];
+    const urlOf = (doc) => library.find((i) => String(i.id) === String(doc.id))?.url;
+    check("Médiathèque : URL canonique des noms avec ( ) et ' (encodés)",
+      urlOf(photo) === mediaUrl(photo.filename) && urlOf(atelier) === mediaUrl(atelier.filename) && !/[()']/.test(`${urlOf(photo)}${urlOf(atelier)}`),
+      `${urlOf(photo)} ${urlOf(atelier)}`);
+
+    const galerie = await req(`/api/site-pages?site=${slug}`, {
+      method: 'POST',
+      body: { docs: [{ title: 'Galerie', slug: 'galerie', layout: [
+        { blockType: 'gallery', title: 'Photos', images: [photo.url] },
+        { blockType: 'product-grid', title: 'Produits', products: [{ name: 'Atelier', price: '10 €', image: atelier.url }] },
+      ] }] },
+      token: admin.token,
+    });
+    const storedPage = ((await req(`/api/site-pages?site=${slug}`, { token: admin.token })).json?.docs || []).find((p) => p.slug === 'galerie');
+    const stored = JSON.stringify(storedPage || {});
+    check('Pages : URL des médias enregistrées sous la forme canonique',
+      galerie.status === 200 && stored.includes(mediaUrl(photo.filename)) && stored.includes(mediaUrl(atelier.filename)),
+      `HTTP ${galerie.status} doc.url=${photo.url} ${stored.slice(0, 300)}`);
+    const usage = (await req(mediaPath(slug), { token: admin.token })).json?.items || [];
+    const usedBy = (doc) => (usage.find((i) => String(i.id) === String(doc.id))?.usedIn || []).map((u) => u.title);
+    check("Médiathèque : « photo (1).png » et « l'atelier.png » citées par une page -> usage vu",
+      usedBy(photo).includes('Galerie') && usedBy(atelier).includes('Galerie'),
+      `${JSON.stringify(usedBy(photo))} ${JSON.stringify(usedBy(atelier))}`);
+    const delPhoto = await req(mediaPath(slug, photo.id), { method: 'DELETE', token: admin.token });
+    const delAtelier = await req(mediaPath(slug, atelier.id), { method: 'DELETE', token: admin.token });
+    check("Médiathèque : « photo (1).png » et « l'atelier.png » citées -> suppression refusée 409, fichiers conservés",
+      delPhoto.status === 409 && delAtelier.status === 409
+        && fs.existsSync(path.join(serverDir, 'uploads', photo.filename)) && fs.existsSync(path.join(serverDir, 'uploads', atelier.filename)),
+      `HTTP ${delPhoto.status} ${delAtelier.status}`);
+
+    // Logo saisi par PATCH REST (ou le panel) sous la forme doc.url : forme canonique, usage
+    const themed = await req(`/api/theme?site=${slug}`, { method: 'POST', body: { theme: THEME }, token: admin.token });
+    const themeDoc = (await req(`/api/themes?where[site][equals]=${siteId}&depth=0`, { token: admin.token })).json?.docs?.[0];
+    const patchedLogo = themeDoc ? await req(`/api/themes/${themeDoc.id}`, { method: 'PATCH', body: { logo: logo.url }, token: admin.token }) : { status: 0 };
+    const readLogo = (await req(`/api/theme?site=${slug}`, { token: admin.token })).json?.theme?.logo;
+    check('Thème : logo saisi par PATCH REST sous la forme doc.url -> enregistré sous la forme canonique',
+      themed.status === 200 && patchedLogo.status === 200 && readLogo === mediaUrl(logo.filename),
+      `thème=${themed.status} PATCH=${patchedLogo.status} logo=${readLogo}`);
+    const delLogo = await req(mediaPath(slug, logo.id), { method: 'DELETE', token: admin.token });
+    check('Médiathèque : « logo (2).png », logo du site -> suppression refusée 409 « thème (logo) »',
+      delLogo.status === 409 && /thème \(logo\)/.test(delLogo.json?.error || ''),
+      `HTTP ${delLogo.status} ${JSON.stringify(delLogo.json)}`);
+
+    // Brouillon compilé (même copie des médias que la publication) : images publiées
+    const preview = await req(`/api/sites/${slug}/preview-build`, { method: 'POST', token: admin.token });
+    const draftDir = path.join(serverDir, '..', 'drafts', slug);
+    const draftPage = path.join(draftDir, 'galerie', 'index.html');
+    const html = fs.existsSync(draftPage) ? fs.readFileSync(draftPage, 'utf-8') : '';
+    check("Build : « photo (1).png » et « l'atelier.png » publiées avec la page qui les cite",
+      preview.status === 200
+        && fs.existsSync(path.join(draftDir, 'media', photo.filename)) && fs.existsSync(path.join(draftDir, 'media', atelier.filename))
+        && html.includes(`/draft/${slug}/media/${encodeName(photo.filename)}`) && html.includes(`/draft/${slug}/media/${encodeName(atelier.filename)}`),
+      `brouillon=${preview.status} ${JSON.stringify(preview.json?.error || '')}`);
   } finally {
     if (slug) await req(`/api/sites/${slug}?deleteFiles=true`, { method: 'DELETE', token: admin.token });
   }

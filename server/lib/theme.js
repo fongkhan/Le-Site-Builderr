@@ -85,17 +85,27 @@ function mixHex(a, b, t) {
   return out;
 }
 
+// Fond des cartes : blanc sur un thème clair ; sur un thème sombre, fond éclairci au
+// plus de 6 % tant que le texte y reste lisible (4,5:1, ou son contraste sur le fond s'il
+// est moindre), sinon le fond lui-même.
+function surfaceColor(background, text) {
+  if (contrastRatio('#ffffff', background) < AA_RATIO) return '#ffffff';
+  const target = Math.min(AA_RATIO, contrastRatio(text, background));
+  const lighter = [0.06, 0.04, 0.02].map((t) => mixHex(background, '#ffffff', t));
+  return lighter.find((s) => contrastRatio(text, s) >= target) || mixHex(background, '#ffffff', 0);
+}
+
 // Couleurs dérivées du thème, publiées dans theme.css pour le template :
 // - onPrimary / onSecondary : texte des boutons et bandeaux posés sur ces couleurs ;
 // - primaryDeep : second ton du dégradé du Hero (même sens que le texte : plus lisible) ;
-// - surface : fond des cartes (blanc, ou fond légèrement éclairci sur un thème sombre) ;
+// - surface : fond des cartes (surfaceColor) ;
 // - textMuted : texte secondaire (descriptions, dates) lisible sur la surface et le fond.
 function derivedColors(colors) {
   const { primary, secondary, background, text } = colors || {};
   const onPrimary = readableOn(primary);
   const onSecondary = readableOn(secondary, [text, '#111111']);
   const primaryDeep = mixHex(primary, relativeLuminance(onPrimary) > 0.5 ? '#000000' : '#ffffff', 0.35);
-  const surface = contrastRatio('#ffffff', background) >= AA_RATIO ? mixHex(background, '#ffffff', 0.06) : '#ffffff';
+  const surface = surfaceColor(background, text);
   let textMuted = hex6(text) || '#000000';
   for (const t of [0.3, 0.2, 0.1]) {
     const muted = mixHex(text, surface, t);

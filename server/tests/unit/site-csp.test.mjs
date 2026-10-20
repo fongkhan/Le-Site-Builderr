@@ -161,6 +161,22 @@ test('isValidAnalyticsHost — même règle que validateAnalytics (server/lib/an
   assert.equal(isValidAnalyticsHost(42), false);
 });
 
+test('bannière de consentement seulement si un script de mesure est chargeable (règle de la CSP)', () => {
+  // Hôte non normalisé (saisie de l'admin Payload) : rien n'est autorisé ni chargé, donc
+  // ni bannière ni bouton « Cookies » (Layout.astro dérive analyticsEnabled du script)
+  const layout = fs.readFileSync(new URL('layouts/Layout.astro', TEMPLATE_SRC), 'utf-8');
+  assert.match(layout, /const analyticsEnabled = Boolean\(analyticsScriptUrl\(\{ provider: analyticsProvider, id: analyticsId, host: analyticsHost \}\)\);/);
+  const cases = [
+    ['matomo', '3', 'stats.exemple.fr'], ['matomo', '3', 'Stats.Exemple.fr'], ['matomo', '3', 'stats.exemple.fr/'],
+    ['matomo', '3', 'https://stats.exemple.fr'], ['matomo', '', 'stats.exemple.fr'], ['ga4', 'G-ABC123', ''], ['ga4', '', ''], ['', '3', 'stats.exemple.fr'],
+  ];
+  for (const [provider, id, host] of cases) {
+    const loads = Boolean(analyticsScriptUrl({ provider, id, host }));
+    const remote = sitePolicy({ analyticsProvider: provider, analyticsId: id, analyticsHost: host }).scriptDirective.resources.filter((s) => s !== "'self'");
+    assert.equal(loads, remote.length > 0, `${provider} ${id} ${host}`);
+  }
+});
+
 test('readConsentChoice — choix mémorisé, illisible ou expiré', () => {
   const now = Date.UTC(2026, 9, 20);
   const raw = (value, at) => JSON.stringify({ value, at });

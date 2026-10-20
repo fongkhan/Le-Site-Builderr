@@ -55,6 +55,7 @@ const app = createApp({ nextHandler: (q, r) => r.status(404).json({ error: 'next
 //  - auth : session seule (requireAuth) ;
 //  - site : session + accès au site visé (requireSiteAccess) ;
 //  - admin : administrateur (requireAdmin).
+// Une route router.all s'inventorie sous la clé « ALL <chemin> ».
 const EXPECTED = {
   'GET /api/health': 'public',
   'GET /api/health/ready': 'public',
@@ -121,21 +122,33 @@ const EXPECTED = {
 };
 const KINDS = new Set(['public', 'build', 'auth', 'site', 'admin']);
 
-// Routes montées : couches des routeurs de l'application (Express 4 : _router, 5 : router)
-const routerLayers = (app._router || app.router).stack.filter((l) => l.name === 'router');
-const unrouted = [];
-const routes = [];
-for (const router of routerLayers) {
-  for (const layer of router.handle.stack) {
-    if (!layer.route) {
-      unrouted.push(layer.name || '(anonyme)');
-      continue;
-    }
-    for (const method of Object.keys(layer.route.methods).filter((m) => m !== '_all')) {
-      routes.push({ method: method.toUpperCase(), path: layer.route.path, key: `${method.toUpperCase()} ${layer.route.path}` });
+// Routes déclarées par des routeurs Express. router.all (méthode « _all ») donne la clé
+// « ALL <chemin> », à inventorier comme les autres, et elle est appelée en GET et en POST.
+function inventoryRoutes(routers) {
+  const unrouted = [];
+  const routes = [];
+  for (const router of routers) {
+    for (const layer of router.stack) {
+      if (!layer.route) {
+        unrouted.push(layer.name || '(anonyme)');
+        continue;
+      }
+      const { path: routePath, methods } = layer.route;
+      for (const method of Object.keys(methods)) {
+        if (method === '_all') {
+          for (const called of ['GET', 'POST']) routes.push({ method: called, path: routePath, key: `ALL ${routePath}` });
+        } else {
+          routes.push({ method: method.toUpperCase(), path: routePath, key: `${method.toUpperCase()} ${routePath}` });
+        }
+      }
     }
   }
+  return { unrouted, routes };
 }
+
+// Routes montées : couches des routeurs de l'application (Express 4 : _router, 5 : router)
+const routerLayers = (app._router || app.router).stack.filter((l) => l.name === 'router');
+const { unrouted, routes } = inventoryRoutes(routerLayers.map((l) => l.handle));
 const WITH_BODY = new Set(['POST', 'PUT', 'PATCH']);
 
 // Chemin concret d'une route : :slug → le site visé, tout autre paramètre → x1
@@ -186,7 +199,30 @@ function callRoute(route, { slug = 'site-b', user, headers } = {}) {
 }
 
 const routesOf = (...kinds) => routes.filter((r) => kinds.includes(EXPECTED[r.key]));
-const describe = (r, res) => `${r.key} → ${res.status} ${res.json ? JSON.stringify(res.json) : res.text.slice(0, 80)}`;
+const describe = (r, res) => `${r.key}${r.key.startsWith('ALL ') ? ` (${r.method})` : ''} → ${res.status} ${res.json ? JSON.stringify(res.json) : res.text.slice(0, 80)}`;
+
+test('Inventaire — router.all, router.route et méthodes simples produisent chacun leur clé', () => {
+  const express = require('express');
+  const { createRouter } = require('../../core/http.js');
+  const handler = (req, res) => res.json({});
+  const router = createRouter();
+  router.all('/api/sites/:slug/fuite', handler);
+  router.get('/api/a', handler);
+  router.route('/api/b').get(handler).post(handler);
+  const plain = express.Router();
+  plain.all('/api/c', handler);
+  const { unrouted: none, routes: found } = inventoryRoutes([router, plain]);
+  assert.deepEqual(none, []);
+  assert.deepEqual(found.map((r) => `${r.key} [${r.method}]`), [
+    'ALL /api/sites/:slug/fuite [GET]',
+    'ALL /api/sites/:slug/fuite [POST]',
+    'GET /api/a [GET]',
+    'GET /api/b [GET]',
+    'POST /api/b [POST]',
+    'ALL /api/c [GET]',
+    'ALL /api/c [POST]',
+  ]);
+});
 
 test('Inventaire — chaque couche des routeurs est une route (aucun router.use non inventorié)', () => {
   assert.ok(routerLayers.length > 0, 'aucun routeur monté');

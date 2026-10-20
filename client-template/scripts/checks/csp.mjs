@@ -15,6 +15,9 @@ const attr = (tag, name) => {
 };
 const hashOf = (content) => `'sha256-${crypto.createHash('sha256').update(content, 'utf8').digest('base64')}'`;
 const isJsonLd = (attrs) => /\stype\s*=\s*["']?application\/ld\+json/i.test(attrs);
+// Hôte Matomo sous la forme normalisée par le serveur (validateAnalytics de
+// server/lib/analytics.js) : toute autre valeur ne charge rien (ni bannière ni source).
+const MATOMO_HOST = /^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
 // Directives d'une politique : nom → sources.
 function parsePolicy(policy) {
@@ -43,7 +46,7 @@ export default async function ({ dist, htmlFiles, readDist, check }) {
   const provider = env.PUBLIC_ANALYTICS_PROVIDER || '';
   const analyticsId = env.PUBLIC_ANALYTICS_ID || '';
   const analyticsHost = env.PUBLIC_ANALYTICS_HOST || '';
-  const matomo = provider === 'matomo' && Boolean(analyticsId) && Boolean(analyticsHost);
+  const matomo = provider === 'matomo' && Boolean(analyticsId) && MATOMO_HOST.test(analyticsHost);
   const ga4 = provider === 'ga4' && Boolean(analyticsId);
   const api = apiOrigin(env.PUBLIC_API_BASE);
   const statsSlug = env.PUBLIC_IS_DRAFT === '1' ? '' : env.ACTIVE_SITE_SLUG || '';

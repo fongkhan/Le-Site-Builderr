@@ -152,6 +152,9 @@ export default buildConfig({
   // qu'aucune seconde porte d'entrée (login, création de compte…) n'échappe aux
   // limiteurs Express. La dépendance graphql reste installée (requise par @payloadcms/next).
   graphQL: { disable: true },
+  // Avatar générique dans /admin : par défaut, Payload charge celui de gravatar.com (requête
+  // vers un tiers qui expose le hachage MD5 de l'email du compte connecté).
+  admin: { avatar: 'default' },
   // Sans SMTP_HOST, Payload écrit les emails dans la console (mode développement)
   ...(process.env.SMTP_HOST
     ? {
@@ -293,10 +296,11 @@ export default buildConfig({
           },
         ],
         beforeChange: [
-          // Changement de mot de passe : les autres sessions seront révoquées après écriture
-          ({ data, operation, context }: any) => {
+          // Changement de mot de passe : les autres sessions seront révoquées après écriture.
+          // Marque par compte (mise à jour groupée : comptes traités en parallèle).
+          ({ data, operation, context, originalDoc }: any) => {
             if (operation === 'update' && typeof data?.password === 'string' && data.password) {
-              context.passwordChanged = true
+              accountGuards.markPasswordChange(context, originalDoc?.id)
             }
             return data
           },
@@ -317,14 +321,15 @@ export default buildConfig({
           // Journal d'audit des comptes (création ; modification d'email, rôles, offre,
           // quota IA, sites, mot de passe — jamais sa valeur). Les comptes passent par l'API
           // REST Payload, hors des endpoints Express, d'où le hook. DOIT rester EN PREMIER :
-          // le hook suivant (révocation) remet context.passwordChanged à false (lu ici de
-          // façon synchrone). L'update interne de forgot-password (jeton) ne produit aucune
-          // entrée (diff vide). Écriture en arrière-plan : hook exécuté dans la transaction.
+          // le hook suivant (révocation) retire la marque de mot de passe de ce compte (lue
+          // ici de façon synchrone). L'update interne de forgot-password (jeton) ne produit
+          // aucune entrée (diff vide). Écriture en arrière-plan : hook exécuté dans la
+          // transaction.
           ({ req, doc, previousDoc, operation, context }: any) => {
             if (operation !== 'create' && operation !== 'update') return doc
             const payload = req?.payload
             const actor = auditEvents.auditActor(req)
-            const passwordChanged = Boolean(context?.passwordChanged)
+            const passwordChanged = accountGuards.hasPasswordChange(context, doc?.id)
             // Champs audités copiés maintenant (jamais password, hash, jeton, sessions)
             const pick = (d: any) => ({ email: d?.email, roles: d?.roles, plan: d?.plan, aiDailyQuota: d?.aiDailyQuota, sites: d?.sites })
             const before = pick(previousDoc)
@@ -349,8 +354,8 @@ export default buildConfig({
           // Mot de passe modifié : révoque les sessions ouvertes. Seule la session courante
           // est conservée quand l'utilisateur modifie son propre compte.
           async ({ req, doc, operation, context }: any) => {
-            if (operation !== 'update' || !context?.passwordChanged) return doc
-            context.passwordChanged = false
+            if (operation !== 'update' || !accountGuards.hasPasswordChange(context, doc?.id)) return doc
+            accountGuards.clearPasswordChange(context, doc?.id)
             try {
               const self = req?.user && String(req.user.id) === String(doc.id)
               const current = self && req.user._sid
@@ -906,6 +911,16 @@ export default buildConfig({
           type: 'text',
           validate: (value: unknown) =>
             value == null || value === '' || themeLib.normalizeLogo(value) !== null ? true : themeLib.LOGO_ERROR,
+          // Enregistré sous sa forme canonique (comme POST /api/theme), même saisi dans le
+          // panel ou par PATCH REST sous la forme de doc.url (« logo%20(1).png »)
+          hooks: {
+            beforeValidate: [
+              ({ value }: any) => {
+                const logo = themeLib.normalizeLogo(value)
+                return typeof logo === 'string' && logo !== '' ? logo : value
+              },
+            ],
+          },
           admin: {
             description: 'Logo du site : image de la médiathèque (/api/media/file/<nom>). Vide : nom du site affiché.',
           },
@@ -992,7 +1007,9 @@ export default buildConfig({
       access: {
         read: isAdminOrSiteClient,
         create: canCreateForOwnSite,
-        update: isAdminOrSiteClient,
+        // Client : texte alternatif via PATCH /api/sites/:slug/media/:id. Un PATCH REST avec
+        // un nouveau fichier effacerait l'ancien, encore cité, sans contrôle d'usage.
+        update: isAdmin,
         // Suppression client via DELETE /api/sites/:slug/media/:id (contrôle d'usage)
         delete: isAdmin,
       },

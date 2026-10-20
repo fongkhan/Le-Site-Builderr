@@ -4,6 +4,7 @@ import type { CtaLink } from '../../lib/url';
 import { t } from '../../lib/ui-strings.mjs';
 import { getSiteContent } from '../../lib/content';
 import { siteImage } from '../../lib/images';
+import { autoFitSizes } from '../../lib/grid-sizes.mjs';
 
 interface ProductItem {
   name?: string;
@@ -28,12 +29,16 @@ const { data, resolveCta, locale } = Astro.props;
 const { media } = await getSiteContent();
 // Bouton « Commander » : lien du produit s'il est valide, sinon formulaire de la page
 // (mode Automatique, cible choisie sur le libellé français ; seul le texte affiché est
-// traduit). Image : texte alternatif de la médiathèque, sinon le nom du produit.
-const products = (data.products || []).filter(Boolean).map((p) => {
+// traduit). Image : texte alternatif de la médiathèque, sinon le nom du produit ; sizes
+// selon le nombre de fiches rendues (grille auto-fit : un produit seul occupe toute la
+// largeur).
+const items = (data.products || []).filter(Boolean);
+const sizes = autoFitSizes(items.length, { minWidth: 280, gap: 30 });
+const products = items.map((p) => {
   const src = safeHttpUrl(p.image);
   return {
     ...p,
-    image: src ? siteImage(src, media, { fallbackAlt: p.name || '', sizes: '(max-width: 640px) calc(100vw - 40px), 380px' }) : null,
+    image: src ? siteImage(src, media, { fallbackAlt: p.name || '', sizes }) : null,
     cta: resolveCta ? resolveCta(p.ctaLink, 'Commander') : null,
   };
 });

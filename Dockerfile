@@ -36,5 +36,6 @@ EXPOSE 4000
 # Disponibilité (base comprise) : /api/health/ready
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
   CMD ["node", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || 4000) + '/api/health/ready').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
-# CLI de tsx lancée directement (sans npm) : SIGTERM parvient au serveur (arrêt propre)
-CMD ["node", "node_modules/tsx/dist/cli.mjs", "index.js", "--production"]
+# Node lancé directement (sans npm ni CLI tsx, qui tuerait le serveur occupé) : SIGTERM
+# parvient au serveur lui-même (arrêt propre)
+CMD ["node", "--import", "tsx", "index.js", "--production"]

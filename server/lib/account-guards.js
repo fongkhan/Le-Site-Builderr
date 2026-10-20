@@ -18,17 +18,26 @@ function isAnonymousHttpCreate({ operation, req }) {
   return operation === 'create' && !(req && req.user) && (!req || req.payloadAPI !== 'local');
 }
 
-// Chemin d'API canonique, tel que Next et Payload le résolvent : Next décode les segments
-// de la route catch-all (/api/users/%6Cogin → login) et Payload compare les chemins sans
-// tenir compte de la casse (/api/users/LOGIN). Sert aux limiteurs et au hook de login.
-// Encodage invalide : chaîne brute conservée (Next répondra 400).
+// Chemin d'API canonique, tel que Next et Payload le résolvent : Next résout les segments
+// « . » et « .. » (y compris %2e) comme l'URL WHATWG puis décode les segments de la route
+// catch-all (/api/users/%6Cogin → login) ; Payload compare les chemins sans tenir compte
+// de la casse (/api/users/LOGIN). Sert aux limiteurs et au hook de login.
+// Segment mal encodé : laissé brut (Next répondra 400).
 function canonicalApiPath(raw) {
   let p = String(raw ?? '').split('?')[0];
   try {
-    p = decodeURIComponent(p);
+    // Origine fixe devant le chemin : « //hôte/… » reste un chemin
+    p = new URL(`http://x${p.startsWith('/') ? '' : '/'}${p}`).pathname;
   } catch {
-    // encodage invalide : chemin laissé tel quel
+    // chemin non analysable : laissé tel quel
   }
+  p = p.split('/').map((segment) => {
+    try {
+      return decodeURIComponent(segment);
+    } catch {
+      return segment;
+    }
+  }).join('/');
   p = p.toLowerCase().replace(/\/{2,}/g, '/');
   if (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
   return p || '/';
@@ -44,4 +53,31 @@ function loginFailureReason(error, lockedMessage) {
   return lockedMessage && error && error.message === lockedMessage ? 'verrouille' : 'identifiants';
 }
 
-module.exports = { isLoginFailure, isAnonymousHttpCreate, canonicalApiPath, isLoginPath, loginFailureReason };
+// Changement de mot de passe noté PAR COMPTE dans le contexte de la requête (hooks
+// beforeChange → afterChange). Une mise à jour groupée (PATCH /api/users?where=…) traite
+// ses comptes en parallèle avec le même contexte : un drapeau unique, remis à zéro par le
+// premier compte traité, ferait perdre l'audit des suivants.
+function markPasswordChange(context, id) {
+  if (!context || id === undefined || id === null) return;
+  if (!(context.passwordChangedIds instanceof Set)) context.passwordChangedIds = new Set();
+  context.passwordChangedIds.add(String(id));
+}
+
+function hasPasswordChange(context, id) {
+  return Boolean(context && context.passwordChangedIds instanceof Set && context.passwordChangedIds.has(String(id)));
+}
+
+function clearPasswordChange(context, id) {
+  if (context && context.passwordChangedIds instanceof Set) context.passwordChangedIds.delete(String(id));
+}
+
+module.exports = {
+  isLoginFailure,
+  isAnonymousHttpCreate,
+  canonicalApiPath,
+  isLoginPath,
+  loginFailureReason,
+  markPasswordChange,
+  hasPasswordChange,
+  clearPasswordChange,
+};

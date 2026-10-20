@@ -73,6 +73,12 @@ export function normalizePagePath(value: string | null | undefined): string | nu
   return raw.endsWith('/') ? raw : `${raw}/`;
 }
 
+/** Article du blog (« /blog/mon-article/ ») : valide tant que l'article est publié, jamais proposé dans les cibles */
+export function isBlogArticlePath(value: string | null | undefined): boolean {
+  const path = normalizePagePath(value);
+  return path !== null && BLOG_ARTICLE_RE.test(path);
+}
+
 export function isValidWebUrl(value: string | null | undefined): boolean {
   const raw = text(value);
   if (!raw || raw.length > MAX_URL_LENGTH || hasControlChar(raw)) return false;
@@ -169,7 +175,7 @@ export function linkHint(value: string | null | undefined, targets?: LinkTargets
     case 'page': {
       const path = normalizePagePath(value);
       if (path === null) return unknown;
-      if (BLOG_ARTICLE_RE.test(path)) return { text: "Lien vers un article du blog : il fonctionne tant que l'article est publié.", warning: false };
+      if (isBlogArticlePath(path)) return { text: "Lien vers un article du blog : il fonctionne tant que l'article est publié.", warning: false };
       return !targets || targets.pages.some((p) => p.href === path) ? null : unknown;
     }
     case 'web':

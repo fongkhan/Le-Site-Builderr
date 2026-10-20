@@ -104,8 +104,9 @@ const limiters = {
 };
 
 // Routes d'authentification servies par Payload (via Next) : le limiteur s'applique au
-// chemin CANONIQUE (décodé, sans casse, « / » répétés ou final ignorés), car Next et
-// Payload servent aussi /api/users/LOGIN ou /api/users/%6Cogin.
+// chemin CANONIQUE (segments « . » et « .. » résolus, décodé, sans casse, « / » répétés ou
+// final ignorés), car Next et Payload servent aussi /api/users/LOGIN, /api/users/%6Cogin
+// ou /api/users/%2e/login. Express (req.path) reçoit le chemin brut.
 const { canonicalApiPath } = require('../lib/account-guards');
 const AUTH_LIMITED_PATHS = [
   ['/api/users/login', 'login'],

@@ -44,6 +44,31 @@ describe('derivedColors', () => {
     expect(contrastRatio(d.onPrimary, d.primaryDeep)).toBeGreaterThanOrEqual(contrastRatio(d.onPrimary, DARK.primary));
   });
 
+  it('fond sombre : texte des cartes lisible dès qu’il l’est sur le fond', () => {
+    // Texte gris à 4,74:1 sur le fond : la surface éclaircie de 6 % (#202020) le passait à 4,13:1
+    const grey = { primary: '#C9A227', secondary: '#000000', background: '#121212', text: '#808080' };
+    const d = derivedColors(grey);
+    expect(d.surface).toBe('#171717');
+    expect(contrastRatio(grey.text, d.surface)).toBeGreaterThanOrEqual(4.5);
+    expect(contrastRatio(d.textMuted, d.surface)).toBeGreaterThanOrEqual(4.5);
+    // Fonds sombres #RGB × textes gris #RGB : texte/fond ≥ 4,5 ⇒ texte et texte secondaire ≥ 4,5
+    // sur la surface (et jamais moins lisibles que sur le fond sinon)
+    const failures: string[] = [];
+    for (let i = 0; i < 4096; i++) {
+      const background = `#${i.toString(16).padStart(3, '0')}`;
+      if (contrastRatio('#ffffff', background) < 4.5) continue;
+      for (let g = 0; g < 16; g++) {
+        const text = `#${g.toString(16).repeat(3)}`;
+        const out = derivedColors({ ...grey, background, text });
+        const onBg = contrastRatio(text, background);
+        const ok = contrastRatio(text, out.surface) >= Math.min(4.5, onBg)
+          && (onBg < 4.5 || (contrastRatio(out.textMuted, out.surface) >= 4.5 && contrastRatio(out.textMuted, background) >= 4.5));
+        if (!ok) failures.push(`${text} sur ${background} : surface ${out.surface}`);
+      }
+    }
+    expect(failures.slice(0, 5)).toEqual([]);
+  });
+
   it('thème incomplet (couleur absente ou en cours de saisie) : jamais d’exception', () => {
     const partial = { primary: '#8B5A2B', secondary: undefined, background: ' #fafafa ', text: '#12' } as unknown as typeof DEFAULT_COLORS;
     const d = derivedColors(partial);

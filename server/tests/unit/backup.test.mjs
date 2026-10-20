@@ -156,3 +156,39 @@ test('parseRestoreRequest — mode par défaut, mode inconnu, nom et slug hostil
   assert.match(parseRestoreRequest({ name, slug: '../x' }).error, /Site invalide/);
   assert.ok(parseRestoreRequest(null).error);
 });
+
+// --- Sauvegardes de sécurité (famille à part) et textes alternatifs des images ---
+const { isSafetyBackupName, parseBackupMediaAlts } = require('../../lib/backup.js');
+
+test('sauvegarde de sécurité — nom suffixé « -securite », valide, reconnu ; suffixe inconnu refusé', () => {
+  const date = new Date('2026-07-22T11:30:05Z');
+  const name = backupFilename(date, { safety: true });
+  assert.equal(name, 'backup-2026-07-22T11-30-05-securite.zip');
+  assert.ok(isValidBackupName(name));
+  assert.ok(isSafetyBackupName(name));
+  assert.ok(!isSafetyBackupName('backup-2026-07-22T11-30-05.zip'));
+  assert.ok(!isValidBackupName('backup-2026-07-22T11-30-05-autre.zip'));
+  assert.ok(!isValidBackupName('backup-2026-07-22T11-30-05-securite.zip/../x'));
+  assert.ok(!isSafetyBackupName('../backup-2026-07-22T11-30-05-securite.zip'));
+  assert.equal(parseRestoreRequest({ name, slug: 'mon-site' }).name, name);
+  // Nom libre dans la même famille
+  assert.equal(nextFreeBackupName(date, (n) => n === name, { safety: true }), 'backup-2026-07-22T11-30-06-securite.zip');
+  assert.equal(nextFreeBackupName(date, (n) => n === 'backup-2026-07-22T11-30-05.zip', { safety: true }), name);
+});
+
+test('selectBackupsToDelete — les sauvegardes de sécurité n’évincent jamais l’historique planifié', () => {
+  const scheduled = ['backup-2026-07-10T10-00-00.zip', 'backup-2026-07-11T10-00-00.zip', 'backup-2026-07-12T10-00-00.zip'];
+  // 14 sauvegardes préalables à des suppressions, toutes plus récentes
+  const safety = Array.from({ length: 14 }, (_, i) => `backup-2026-07-20T10-${String(i).padStart(2, '0')}-00-securite.zip`);
+  const toDelete = selectBackupsToDelete([...scheduled, ...safety], 3, 10);
+  assert.ok(scheduled.every((n) => !toDelete.includes(n)), `historique planifié évincé : ${toDelete.join(', ')}`);
+  assert.deepEqual(toDelete, safety.slice(0, 4)); // les 4 sécurités les plus anciennes
+  // Rétention de sécurité par défaut = keep ; chaque famille bornée séparément
+  assert.deepEqual(selectBackupsToDelete([...scheduled, ...safety.slice(0, 2)], 2), [scheduled[0]]);
+});
+
+test('parseBackupMediaAlts — textes alternatifs des images publiables, valeurs non textuelles ignorées', () => {
+  const alts = parseBackupMediaAlts('{"four.jpg":"Four à céramique","vide.png":"   ","nombre.png":42,"logo.svg":"SVG","__proto__":"x"}');
+  assert.deepEqual([...alts], [['four.jpg', 'Four à céramique']]);
+  for (const text of [null, 'pas du json', '[1,2]']) assert.equal(parseBackupMediaAlts(text).size, 0);
+});

@@ -54,18 +54,16 @@ describe('createFontLoader', () => {
     expect(inter).not.toHaveBeenCalled();
   });
 
-  it('échec absorbé (rejet ou exception), puis famille retentée au prochain appel', async () => {
-    const lora = vi.fn()
-      .mockImplementationOnce(() => Promise.reject(new Error('réseau')))
-      .mockImplementationOnce(() => { throw new Error('module introuvable'); })
-      .mockImplementation(() => Promise.resolve());
-    const load = createFontLoader({ Lora: lora });
-    await expect(load(['Lora'])).resolves.toBeUndefined();
-    await expect(load(['Lora'])).resolves.toBeUndefined();
-    await expect(load(['Lora'])).resolves.toBeUndefined();
-    expect(lora).toHaveBeenCalledTimes(3);
-    await load(['Lora']);
-    expect(lora).toHaveBeenCalledTimes(3);
+  // Le préchargement de Vite ne redemande jamais une feuille en échec : un nouvel essai
+  // serait résolu sans rien charger. La famille reste sur sa police de repli.
+  it('échec absorbé (rejet ou exception), famille jamais redemandée', async () => {
+    const lora = vi.fn(() => Promise.reject(new Error('réseau')));
+    const karla = vi.fn(() => { throw new Error('module introuvable'); });
+    const load = createFontLoader({ Lora: lora, Karla: karla });
+    await expect(load(['Lora', 'Karla'])).resolves.toBeUndefined();
+    await expect(load(['Lora', 'Karla'])).resolves.toBeUndefined();
+    expect(lora).toHaveBeenCalledTimes(1);
+    expect(karla).toHaveBeenCalledTimes(1);
   });
 
   it('un échec n’empêche pas le chargement des autres familles', async () => {

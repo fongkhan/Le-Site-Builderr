@@ -89,3 +89,64 @@ test('remapMediaFilenames — nouveau nom avec parenthèses ou apostrophe : enco
   // Même encodage que le logo du thème (lib/theme.js le réexporte)
   assert.equal(require('../../lib/theme.js').encodeMediaName, encodeMediaName);
 });
+
+// Ancienne forme (encodeURIComponent, doc.url de Payload) : ( ) ' en clair dans le nom
+test('collectMediaFilenames — ancienne forme : parenthèses et apostrophe lues en entier, délimiteurs respectés', () => {
+  assert.deepEqual(collectMediaFilenames('/api/media/file/photo%20(1).png'), ['photo (1).png']);
+  assert.deepEqual(collectMediaFilenames("/api/media/file/l'atelier.png"), ["l'atelier.png"]);
+  assert.deepEqual(collectMediaFilenames("/media/Capture%20d'%C3%A9cran%20(2).jpg"), ["Capture d'écran (2).jpg"]);
+  assert.deepEqual(collectMediaFilenames('/api/media/file/photo%20%281%29.png'), ['photo (1).png']);
+  // Lien Markdown, attributs HTML, url('…'), texte entre parenthèses : le délimiteur reste dehors
+  assert.deepEqual(collectMediaFilenames('![Four](/api/media/file/photo%20(2).jpg) et (voir /media/c.png)').sort(), ['c.png', 'photo (2).jpg']);
+  assert.deepEqual(collectMediaFilenames("<img src='/media/a.png'> <div style=\"background:url('/media/b.png')\">").sort(), ['a.png', 'b.png']);
+  assert.deepEqual(collectMediaFilenames('[x](/media/l%27atelier.png)'), ["l'atelier.png"]);
+});
+
+test('remapMediaFilenames — ancienne forme : nom complet renommé (duplication, restauration)', () => {
+  const { remapMediaFilenames } = require('../../lib/media.js');
+  const out = remapMediaFilenames(
+    { hero: '/api/media/file/photo%20(1).png', md: "![x](/media/l'atelier.png)" },
+    { 'photo (1).png': 'photo (1)-1.png', "l'atelier.png": "l'atelier-1.png" },
+  );
+  assert.deepEqual(out, { hero: '/api/media/file/photo%20%281%29-1.png', md: '![x](/media/l%27atelier-1.png)' });
+});
+
+test('citedMediaNames — noms connus reconnus sous toutes les formes, même avec une parenthèse fermante seule', () => {
+  const { citedMediaNames } = require('../../lib/media.js');
+  const names = ['smiley :).png', 'photo (1).png', 'libre.png'];
+  const value = { a: '/api/media/file/smiley%20%3A).png', b: ['![x](/media/photo%20(1).png)'], c: 'https://cdn.example/x.png' };
+  assert.deepEqual([...citedMediaNames(value, names)].sort(), ['photo (1).png', 'smiley :).png']);
+  assert.deepEqual([...citedMediaNames(value, [])], []);
+  assert.deepEqual([...citedMediaNames(null, names)], []);
+  // L'extraction seule tronque ce nom : citedMediaNames le retrouve
+  assert.deepEqual(collectMediaFilenames(value.a), ['smiley :']);
+  // Contenu hostile (une URL suivie de 50 000 « ) ») : travail borné, réponse immédiate
+  const started = Date.now();
+  assert.deepEqual([...citedMediaNames({ a: `/media/x${')'.repeat(50000)}`, b: `/media/${"'".repeat(50000)}` }, names)], []);
+  assert.ok(Date.now() - started < 1000, `${Date.now() - started} ms`);
+});
+
+test('canonicalMediaUrls — URL relatives /api/media/file réencodées (encodeMediaName), le reste inchangé, sans muter l’entrée', () => {
+  const { canonicalMediaUrls } = require('../../lib/media.js');
+  const input = {
+    hero: '/api/media/file/photo%20(1).png',
+    body: "Texte ![Atelier](/api/media/file/l'atelier.png) et <img src=\"/api/media/file/caf%c3%a9.png\">",
+    images: [{ url: '/api/media/file/photo%20%281%29.png' }, 'https://cdn.example/api/media/file/x(1).png', '/media/y(1).png'],
+    invalid: '/api/media/file/100%.png',
+    n: 3,
+    nul: null,
+  };
+  const snapshot = JSON.stringify(input);
+  const out = canonicalMediaUrls(input);
+  assert.equal(JSON.stringify(input), snapshot);
+  assert.deepEqual(out, {
+    hero: '/api/media/file/photo%20%281%29.png',
+    body: 'Texte ![Atelier](/api/media/file/l%27atelier.png) et <img src="/api/media/file/caf%C3%A9.png">',
+    images: [{ url: '/api/media/file/photo%20%281%29.png' }, 'https://cdn.example/api/media/file/x(1).png', '/media/y(1).png'],
+    invalid: '/api/media/file/100%.png',
+    n: 3,
+    nul: null,
+  });
+  // Idempotent
+  assert.deepEqual(canonicalMediaUrls(out), out);
+});

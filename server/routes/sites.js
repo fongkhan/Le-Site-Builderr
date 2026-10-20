@@ -10,6 +10,7 @@ const releases = require('../lib/releases');
 const analytics = require('../lib/analytics');
 const { generateSlug, assertSafePath, assertStrictlyInside, previewPathFor } = require('../lib/paths');
 const { publicSiteView } = require('../lib/sites-view');
+const { normalizeLegal } = require('../lib/legal');
 const { replaceDirAtomically } = require('../lib/fs-swap');
 const { sendError, createRouter } = require('../core/http');
 const { logAudit } = require('../core/audit');
@@ -196,21 +197,32 @@ router.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (r
     // prévisualisation et publication de ce site sont refusés jusqu'à la fin.
     build.markDeleting(slug);
     try {
-      // Sauvegarde préalable de tous les sites (?backup=true) : le site reste restaurable
-      // depuis « Sauvegardes du contenu ». Si elle échoue, rien n'est supprimé.
+      // Sauvegarde préalable de tous les sites (?backup=true, sauvegarde de sécurité) : le
+      // site reste restaurable depuis « Sauvegardes du contenu ». Si elle échoue ou n'est
+      // pas restaurable depuis l'interface (plus de 1 Go), rien n'est supprimé.
       let safetyBackup = null;
       if (req.query.backup === 'true') {
         try {
-          safetyBackup = await backups.createBackupArchive();
+          safetyBackup = await backups.createBackupArchive({ safety: true });
         } catch (e) {
           return sendError(res, "Sauvegarde préalable impossible : le site n'a pas été supprimé.", e);
         }
         if (!safetyBackup) return res.status(409).json({ error: 'Une sauvegarde est déjà en cours : réessayez dans un instant.' });
+        if (backups.discardIfUnrestorable(safetyBackup)) {
+          return res.status(409).json({ error: "Sauvegarde préalable trop volumineuse pour être restaurée depuis l'interface (plus de 1 Go) : le site n'a pas été supprimé. Pour le supprimer quand même, décochez la sauvegarde préalable (suppression irréversible)." });
+        }
         // Un build a pu démarrer pendant la sauvegarde : revérification synchrone
         if (build.isSiteBusy(slug)) {
           return res.status(409).json({ error: "Un build ou une prévisualisation de ce site est en cours : réessayez quand il sera terminé." });
         }
       }
+
+      // Dossiers des AUTRES sites enregistrés (dépôts, dossiers publiés) : un dossier qui en
+      // contient un n'est jamais supprimé avec ce site (dépôt imbriqué, chemin partagé).
+      const otherSitePaths = (await sitesStore.listAllSites())
+        .filter((s) => s.slug !== slug)
+        .flatMap((s) => [s.documentRoot, s.repositoryPath])
+        .filter(Boolean);
 
       // Fichiers de production : jamais hors du périmètre ni la racine partagée elle-même
       // (un documentRoot hérité invalide n'est pas supprimé, le site l'est quand même).
@@ -222,6 +234,10 @@ router.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (r
           console.error(`⚠️ [Sites] documentRoot hors périmètre conservé lors de la suppression de ${slug} : ${site.documentRoot}`);
         }
       }
+      if (removableRoot && otherSitePaths.some((p) => isWithin(p, removableRoot))) {
+        console.error(`⚠️ [Sites] Dossier publié de ${slug} conservé : il contient celui d'un autre site (${removableRoot}).`);
+        removableRoot = null;
+      }
 
       // La suppression Payload nettoie aussi les contenus rattachés (médias et leurs
       // fichiers compris, sauf ceux qu'un autre site cite encore) et la relation users.sites.
@@ -231,7 +247,7 @@ router.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (r
       // En attente dans la file : retiré (son build serait de toute façon annulé)
       build.dequeue(slug);
       // Données locales, et copie du modèle créée par l'outil pour ce site (dépôt marqué)
-      purgeSiteData(slug, { repositoryPath: site.repositoryPath });
+      purgeSiteData(slug, { repositoryPath: site.repositoryPath, otherSitePaths });
 
       if (removableRoot && fs.existsSync(removableRoot)) {
         fs.rmSync(removableRoot, { recursive: true, force: true });
@@ -598,8 +614,9 @@ router.post('/api/sites/:slug/rollback', auth.authenticate, auth.requireAdmin, a
 
 // --- Export / import de site (admin only) ---
 
-// Export : archive zip streamée contenant meta.json, pages.json, posts.json, theme.json
-// et le build déployé (dist/) s'il existe. Sert de sauvegarde ou de transfert.
+// Export : archive zip streamée contenant meta.json (informations légales comprises),
+// pages.json, posts.json, theme.json et le build déployé (dist/) s'il existe. Sert de
+// sauvegarde ou de transfert.
 router.get('/api/sites/:slug/export', auth.authenticate, auth.requireAdmin, async (req, res) => {
   try {
     const site = await sitesStore.getSiteBySlug(req.params.slug);
@@ -613,7 +630,7 @@ router.get('/api/sites/:slug/export', auth.authenticate, auth.requireAdmin, asyn
     archive.on('error', (e) => { console.error('Erreur export zip :', e.message); res.destroy(); });
     archive.pipe(res);
 
-    const meta = { slug: site.slug, name: site.name, domain: site.domain, stack: site.stack, exportedAt: new Date().toISOString() };
+    const meta = { slug: site.slug, name: site.name, domain: site.domain, stack: site.stack, legal: site.legal, exportedAt: new Date().toISOString() };
     archive.append(JSON.stringify(meta, null, 2), { name: 'meta.json' });
     archive.append(JSON.stringify(await readSitePages(site.slug), null, 2), { name: 'pages.json' });
     archive.append(JSON.stringify(await readSitePosts(site.slug), null, 2), { name: 'posts.json' });
@@ -642,7 +659,8 @@ const IMPORT_MAX_ENTRIES = 5000;
 const IMPORT_MAX_UNCOMPRESSED = 200 * 1024 * 1024;
 
 // Import : recrée un site depuis une archive d'export. Corps = zip brut (bornés à 50 Mo).
-// Contenu nettoyé (pages invalides et thème hors liste écartés). Anti zip-slip : chaque
+// Contenu nettoyé (pages invalides et thème hors liste écartés), informations légales
+// normalisées (archive antérieure : champs vides). Anti zip-slip : chaque
 // entrée est filtrée (segments contrôlés) et écrite uniquement sous le documentRoot
 // fraîchement créé via assertSafePath. En cas d'échec après la création, le site
 // partiellement importé est supprimé (createSiteFromContent).
@@ -694,6 +712,7 @@ router.post('/api/sites/import-archive',
         baseSlug,
         name: asText(meta.name, 200),
         stack: asText(meta.stack, 100),
+        legal: normalizeLegal(meta.legal),
         content,
         // Build embarqué (dist/) : extraction contrôlée entrée par entrée
         afterCreate: async ({ documentRoot }) => {

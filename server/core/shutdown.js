@@ -1,8 +1,8 @@
 // Arrêt propre du serveur (SIGINT/SIGTERM) : plus aucune nouvelle connexion, requêtes en
 // cours menées à terme, build en cours interrompu puis remis en tête de file (repris au
-// redémarrage), tâches de fond (historique des builds, emails) attendues, le tout dans la
-// limite de SHUTDOWN_GRACE_MS. Un second signal (au-delà de la fenêtre des signaux relayés)
-// force l'arrêt.
+// redémarrage), tâches de fond (historique des builds, emails, journal d'audit, statut des
+// sites) attendues, le tout dans la limite de SHUTDOWN_GRACE_MS. Un second signal (au-delà
+// de la fenêtre des signaux relayés) force l'arrêt.
 //
 // Aucun require lourd à l'import : ce module est chargé avant tout le reste (gestionnaires
 // de processus, Express). Le pool Postgres n'est pas fermé : pg-pool end() attend la
@@ -10,7 +10,10 @@
 // (payload.destroy() ne ferme pas non plus le pool) ; la sortie du process ferme les sockets.
 
 let shuttingDown = false;
-const background = new Set();
+// Tâches de fond attendues : registre partagé sur globalThis (même clé que
+// lib/audit-events, dont les hooks Payload bundlés par Next sont une autre instance).
+const BACKGROUND_KEY = Symbol.for('meta-builder.background');
+const background = globalThis[BACKGROUND_KEY] || (globalThis[BACKGROUND_KEY] = new Set());
 let attachedServer = null;
 let active = 0;
 
@@ -23,8 +26,9 @@ function beginDrain() {
   shuttingDown = true;
 }
 
-// Tâche de fond (historique, notification…) attendue par l'arrêt propre. Renvoie la
-// promesse telle quelle : l'appelant garde la main sur ses erreurs.
+// Tâche de fond (historique, notification, statut de site…) attendue par l'arrêt propre ;
+// les écritures du journal d'audit s'y inscrivent d'elles-mêmes. Renvoie la promesse
+// telle quelle : l'appelant garde la main sur ses erreurs.
 function trackBackground(promise) {
   const tracked = Promise.resolve(promise);
   background.add(tracked);
@@ -88,8 +92,8 @@ function createShutdown({
 
   function handleSignal(signal) {
     if (exited) return;
-    // (1) Arrêt déjà commencé : un signal relayé (Ctrl+C puis SIGTERM de tsx ou du
-    // lanceur) est ignoré ; un second signal volontaire force l'arrêt.
+    // (1) Arrêt déjà commencé : un signal relayé (Ctrl+C puis SIGTERM du lanceur) est
+    // ignoré ; un second signal volontaire force l'arrêt.
     if (startedAt !== null) {
       if (now() - startedAt < forceAfterMs) {
         log.log(`🛑 [Arrêt] ${signal} reçu (signal relayé ignoré).`);

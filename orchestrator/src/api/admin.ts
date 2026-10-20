@@ -97,6 +97,9 @@ export interface BackupSiteSummary {
   theme: boolean;
   /** Le site existe encore (le remplacement n'est possible que dans ce cas) */
   exists: boolean;
+  /** Site supprimé : recréé en copie sous son slug d'origine (sinon slug suffixé, des
+   * fichiers de l'ancien site occupant encore l'adresse) */
+  slugFree: boolean;
 }
 export interface BackupContents {
   name: string;

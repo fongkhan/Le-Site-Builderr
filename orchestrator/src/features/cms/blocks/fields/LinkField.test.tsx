@@ -64,6 +64,20 @@ describe('LinkField', () => {
     expect(html).toContain('⚠️ Ce lien ne correspond à aucune page');
   });
 
+  it('article du blog (jamais listé) : option sans avertissement, cohérente avec l’indication', () => {
+    for (const value of ['/blog/mon-article/', '/blog/mon-article']) {
+      const html = render(value);
+      expect(html).toContain(`<option value="${value}" selected="">Article du blog : ${value}</option>`);
+      expect(html).not.toContain('⚠️');
+      expect(html).toContain("Lien vers un article du blog : il fonctionne tant que l&#x27;article est publié.");
+    }
+    // Sans cibles non plus
+    expect(render('/blog/mon-article/', false)).toContain('>Article du blog : /blog/mon-article/</option>');
+    // Index du blog : cible proposée ; adresse plus profonde : introuvable
+    expect(render('/blog/')).toContain('<option value="/blog/" selected="">Actualités (/blog/)</option>');
+    expect(render('/blog/a/b/')).toContain('⚠️ Lien introuvable : /blog/a/b/');
+  });
+
   it('sans cibles : ni pages ni ancres proposées, aucun avertissement de page', () => {
     const html = render('/tarifs/', false);
     expect(html).not.toContain('Pages du site');

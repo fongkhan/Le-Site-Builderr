@@ -33,6 +33,7 @@ const { normalizeLegal } = require('../lib/legal');
 const { generateSlug, assertStrictlyInside } = require('../lib/paths');
 const { collectMediaFilenames, encodeMediaName, remapMediaFilenames } = require('../lib/media');
 const { mediaMimeType, isPublishableMediaName } = require('../lib/media-policy');
+const { cleanAlt } = require('../lib/media-library');
 
 // Bornes : articles repris par import, taille d'une image restaurée.
 const MAX_IMPORTED_POSTS = 500;
@@ -120,10 +121,11 @@ function parseSiteContent(readText) {
   return sanitizeSiteContent({ pages: parse('pages.json'), posts: parse('posts.json'), theme: parse('theme.json') });
 }
 
-// Recrée dans la médiathèque du site `targetSiteId` les images sauvegardées.
-// files = [{ filename, size, read: () => Buffer }] ; seuls les noms d'images publiables
-// de 50 Mo au plus sont lus. keepOwned : une image que le site possède déjà (fiche ET
-// fichier présents) est conservée telle quelle. Renvoie la table { ancienNom: nouveauNom }
+// Recrée dans la médiathèque du site `targetSiteId` les images sauvegardées, avec leur
+// texte alternatif. files = [{ filename, alt?, size, read: () => Buffer }] ; seuls les
+// noms d'images publiables de 50 Mo au plus sont lus. keepOwned : une image que le site
+// possède déjà (fiche ET fichier présents) est conservée telle quelle (son texte
+// alternatif actuel compris). Renvoie la table { ancienNom: nouveauNom }
 // à appliquer au contenu (Payload renomme un fichier homonyme), les compteurs et les noms
 // déjà possédés. Une image refusée (contenu qui n'est pas une image…) est ignorée.
 async function restoreMediaFiles(payloadInstance, targetSiteId, files, {
@@ -158,9 +160,10 @@ async function restoreMediaFiles(payloadInstance, targetSiteId, files, {
     try {
       const data = file.read();
       if (!Buffer.isBuffer(data) || data.length > RESTORE_MEDIA_MAX_BYTES) continue;
+      const alt = cleanAlt(file.alt);
       const created = await payloadInstance.create({
         collection: 'media',
-        data: { site: targetSiteId },
+        data: { site: targetSiteId, ...(alt ? { alt } : {}) },
         file: { data, mimetype, name: filename, size: data.length },
         overrideAccess: true,
       });

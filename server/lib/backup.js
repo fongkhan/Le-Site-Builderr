@@ -6,23 +6,38 @@ const { isPublishableMediaName } = require('./media-policy');
 const { normalizeLegal } = require('./legal');
 
 // Nom d'archive horodaté, triable lexicographiquement = chronologiquement.
-// `date` est injectée pour la testabilité. Ex. backup-2026-07-22T11-30-00.zip
-function backupFilename(date) {
+// `date` est injectée pour la testabilité. Ex. backup-2026-07-22T11-30-00.zip ; sauvegarde
+// de sécurité (avant un remplacement ou une suppression) : backup-<date>-securite.zip.
+const SAFETY_SUFFIX = '-securite';
+function backupFilename(date, { safety = false } = {}) {
   const iso = date.toISOString().slice(0, 19).replace(/:/g, '-');
-  return `backup-${iso}.zip`;
+  return `backup-${iso}${safety ? SAFETY_SUFFIX : ''}.zip`;
 }
 
 // Valide un nom d'archive avant toute opération fichier (anti-traversée de chemin).
 function isValidBackupName(name) {
-  return typeof name === 'string' && /^backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.zip$/.test(name);
+  return typeof name === 'string' && /^backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-securite)?\.zip$/.test(name);
 }
 
-// Parmi `names` (noms d'archives), renvoie ceux à SUPPRIMER pour ne garder que les
-// `keep` plus récents. Les noms non conformes sont ignorés (jamais supprimés).
-function selectBackupsToDelete(names, keep) {
+// Sauvegarde de sécurité : famille à part, avec sa propre rétention.
+function isSafetyBackupName(name) {
+  return isValidBackupName(name) && name.endsWith(`${SAFETY_SUFFIX}.zip`);
+}
+
+// Parmi `names` (noms d'archives), renvoie ceux à SUPPRIMER pour ne garder que les `keep`
+// plus récentes des sauvegardes planifiées et manuelles, et les `keepSafety` plus récentes
+// des sauvegardes de sécurité : une série de suppressions ou de remplacements n'efface
+// jamais l'historique planifié. Les noms non conformes sont ignorés (jamais supprimés).
+function selectBackupsToDelete(names, keep, keepSafety = keep) {
   const valid = (names || []).filter(isValidBackupName).sort(); // ordre chronologique
-  const k = Math.max(0, Number(keep) || 0);
-  return k === 0 ? valid.slice() : valid.slice(0, Math.max(0, valid.length - k));
+  const oldest = (list, n) => {
+    const k = Math.max(0, Number(n) || 0);
+    return k === 0 ? list : list.slice(0, Math.max(0, list.length - k));
+  };
+  return [
+    ...oldest(valid.filter((n) => !isSafetyBackupName(n)), keep),
+    ...oldest(valid.filter(isSafetyBackupName), keepSafety),
+  ];
 }
 
 // --- Planification ---
@@ -54,11 +69,11 @@ function isBackupDue(lastCreatedAt, nowMs, intervalMs, toleranceMs = 0) {
 // Premier nom libre à partir de `date`, seconde par seconde : deux sauvegardes créées dans
 // la même seconde (sauvegarde de sécurité juste après une sauvegarde manuelle…) ne
 // s'écrasent jamais. Au-delà de 60 essais, le dernier nom est renvoyé.
-function nextFreeBackupName(date, exists) {
+function nextFreeBackupName(date, exists, { safety = false } = {}) {
   const start = date.getTime();
-  let name = backupFilename(date);
+  let name = backupFilename(date, { safety });
   for (let i = 0; i < 60; i++) {
-    name = backupFilename(new Date(start + i * 1000));
+    name = backupFilename(new Date(start + i * 1000), { safety });
     if (!exists(name)) return name;
   }
   return name;
@@ -139,6 +154,16 @@ function parseBackupSiteLegal(text) {
   return normalizeLegal(m && m.legal);
 }
 
+// media.json → Map nom de fichier → texte alternatif saisi dans la médiathèque (archive
+// antérieure, fichier illisible ou valeur non textuelle : aucun).
+function parseBackupMediaAlts(text) {
+  const alts = new Map();
+  for (const [name, alt] of Object.entries(parseJsonObject(text) || {})) {
+    if (isPublishableMediaName(name) && typeof alt === 'string' && alt.trim()) alts.set(name, alt);
+  }
+  return alts;
+}
+
 // Corps de POST /api/admin/backups/restore → { name, slug, mode } ou { error }.
 const RESTORE_MODES = ['copy', 'replace'];
 function parseRestoreRequest(body) {
@@ -153,6 +178,7 @@ function parseRestoreRequest(body) {
 module.exports = {
   backupFilename,
   isValidBackupName,
+  isSafetyBackupName,
   selectBackupsToDelete,
   backupIntervalMs,
   BACKUP_CHECK_MS,
@@ -165,6 +191,7 @@ module.exports = {
   parseBackupManifest,
   parseBackupSiteMeta,
   parseBackupSiteLegal,
+  parseBackupMediaAlts,
   RESTORE_MODES,
   parseRestoreRequest,
 };

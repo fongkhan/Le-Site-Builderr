@@ -1,6 +1,23 @@
 // Journal d'audit : pagination et filtres validés, entrées non modifiables par l'API,
-// GraphQL désactivé, modifications de comptes tracées. Aucun échec de connexion ici.
-export default async function ({ BASE, ORIGIN, req, check, admin }) {
+// GraphQL désactivé, modifications de comptes tracées (y compris par lot), limiteurs
+// d'authentification sur les chemins à segments « . »/« .. », aucun avatar tiers dans
+// /admin. Aucun échec de connexion ici.
+import http from 'node:http';
+
+// Requête au chemin envoyé tel quel (fetch résoudrait « . » et « .. » avant l'envoi).
+function rawRequest(base, rawPath, { method = 'GET', headers = {}, body } = {}) {
+  const url = new URL(base);
+  return new Promise((resolve) => {
+    const r = http.request({ host: url.hostname, port: url.port, path: rawPath, method, headers, agent: false }, (res) => {
+      res.resume();
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers }));
+    });
+    r.on('error', (err) => resolve({ status: 0, headers: {}, error: err.code }));
+    r.end(body);
+  });
+}
+
+export default async function ({ BASE, ORIGIN, CLIENT_PASSWORD, req, check, admin }) {
   if (!admin?.token) {
     check('Audit (module) : jeton admin disponible', false, 'login admin en échec');
     return;
@@ -102,5 +119,50 @@ export default async function ({ BASE, ORIGIN, req, check, admin }) {
       check('Audit des comptes : aucun mot de passe ni hash dans le journal', !all.includes('Cheval-Correct-42!') && !/"(hash|salt)"|resetPasswordToken/.test(all));
     }
     await purge();
+  }
+
+  // ---- Mot de passe changé par lot : une entrée par compte (comptes traités en parallèle) ----
+  {
+    const prefix = 'audit-lot-mdp-';
+    const purgeLot = async () => {
+      const existing = await req(`/api/users?where[email][like]=${prefix}&limit=50&depth=0`, { token });
+      for (const doc of existing.json?.docs || []) await req(`/api/users/${doc.id}`, { method: 'DELETE', token });
+    };
+    await purgeLot();
+    const emails = ['a', 'b', 'c'].map((s) => `${prefix}${s}@nulle-part.example`);
+    for (const email of emails) await req('/api/users', { method: 'POST', body: { email, password: 'Cheval-Correct-42!', roles: ['client'] }, token });
+    const since = Date.now() - 2000;
+    const lot = await req(`/api/users?where[email][like]=${prefix}&depth=0`, { method: 'PATCH', body: { password: 'Nouveau-Cheval-Correct-43!' }, token });
+    check('Audit des comptes : changement de mot de passe par lot (3 comptes) -> 200', lot.status === 200 && (lot.json?.docs || []).length === 3, `HTTP ${lot.status} ${(lot.json?.docs || []).length} compte(s)`);
+    const traced = [];
+    for (const email of emails) {
+      const hit = await waitAudit({ action: 'utilisateur.modification', target: email }, (d) => (d.details || '').includes('motdepasse=modifié'), since);
+      if (hit) traced.push(email);
+    }
+    check('Audit des comptes : mot de passe changé par lot tracé pour chaque compte', traced.length === emails.length, `${traced.length}/${emails.length} tracé(s)`);
+    await purgeLot();
+  }
+
+  // ---- Limiteurs d'authentification : segments « . » et « .. » (chemin brut) ----
+  // Connexions RÉUSSIES uniquement (le budget d'échecs n'est pas consommé) : le limiteur
+  // doit tourner (en-tête RateLimit-Policy) sur chaque forme que Next résout en login.
+  {
+    const body = JSON.stringify({ email: 'client@client.com', password: CLIENT_PASSWORD });
+    const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), Origin: ORIGIN };
+    for (const p of ['/api/users/./login', '/api/users/%2e/login', '/api/users/x/../login']) {
+      const r = await rawRequest(BASE, p, { method: 'POST', headers, body });
+      check(`Rate-limit : POST ${p} (servi comme login) -> limiteur de login appliqué`, r.status === 200 && Boolean(r.headers['ratelimit-policy']), `HTTP ${r.status} RateLimit-Policy=${r.headers['ratelimit-policy'] ?? 'absent'}`);
+    }
+    // Une seule requête (GET, aucun email envoyé) sur le budget de réinitialisation
+    const reset = await rawRequest(BASE, '/api/users/%2e/forgot-password');
+    check('Rate-limit : /api/users/%2e/forgot-password -> limiteur de réinitialisation appliqué', Boolean(reset.headers['ratelimit-policy']), `HTTP ${reset.status} RateLimit-Policy=${reset.headers['ratelimit-policy'] ?? 'absent'}`);
+  }
+
+  // ---- /admin : aucun avatar chargé depuis gravatar.com (hachage de l'email exposé) ----
+  {
+    const page = await req('/admin', { token });
+    const html = await page.res.text();
+    check('Admin : GET /admin connecté -> 200', page.status === 200, `HTTP ${page.status}`);
+    check('Admin : aucun avatar gravatar.com (avatar générique)', page.status === 200 && !/gravatar\.com/i.test(html));
   }
 }

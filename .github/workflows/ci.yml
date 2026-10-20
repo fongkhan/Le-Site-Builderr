@@ -137,8 +137,8 @@ jobs:
         run: npx tsx tests/auth-empty-db-check.mjs
       - name: Démarrer le serveur
         run: |
-          # CLI de tsx lancée directement : SIGTERM lui parvient et il le relaie au serveur
-          node node_modules/tsx/dist/cli.mjs index.js > server.log 2>&1 &
+          # tsx chargé dans le process du serveur (sans CLI relais) : SIGTERM lui parvient
+          node --import tsx index.js > server.log 2>&1 &
           echo $! > server.pid
           # Attendre que le serveur soit prêt (init Payload + push du schéma + seeding) :
           # /api/health/ready renvoie 200 seulement quand la base répond (-f : 503 = échec)

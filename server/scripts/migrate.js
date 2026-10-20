@@ -8,14 +8,17 @@
 //   create <nom>      génère une migration depuis le schéma (--skip-empty : rien si inchangé)
 //   check             échoue si le schéma a changé sans migration (sans base ni réseau)
 //   baseline          adopte une base créée en mode développement (voir README)
+//   importmap         régénère app/(payload)/admin/importMap.js, composants de l'admin
+//                     Payload (--check : échoue s'il n'est pas à jour ; sans base ni réseau)
 require('dotenv').config();
 require('../core/next-env-patch'); // avant payload
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { DEV_SCHEMA_MESSAGE, hasDevPushedSchema, isBenignSchemaStatement } = require('../lib/db-migrations');
 
-const COMMANDS = ['migrate', 'status', 'create', 'check', 'baseline'];
+const COMMANDS = ['migrate', 'status', 'create', 'check', 'baseline', 'importmap'];
 const DEMO_ACCOUNTS = ['admin@admin.com', 'client@client.com'];
 
 const argv = process.argv.slice(2);
@@ -34,7 +37,7 @@ if (!COMMANDS.includes(command)) {
 const migrationName = command === 'create' && argv[1] && !argv[1].startsWith('--') ? argv[1] : undefined;
 if (command === 'create' && !migrationName) fail('❌ [Migrations] Nom manquant : npm run migrate:create -- <nom>');
 
-const offline = command === 'create' || command === 'check';
+const offline = command === 'create' || command === 'check' || command === 'importmap';
 if (offline) {
   // Génération et vérification : le schéma vient de la configuration, aucune connexion
   process.env.DATABASE_URI ||= 'postgres://hors-ligne@127.0.0.1:5432/aucune';
@@ -43,6 +46,19 @@ if (offline) {
 // Jamais de synchronisation automatique du schéma (push) ni de rechargement à chaud ici
 process.env.PAYLOAD_MIGRATING = 'true';
 process.env.DISABLE_PAYLOAD_HMR = 'true';
+
+// Question posée par drizzle-kit ou Payload (colonne ou table renommée ? migration vide ?) :
+// hors terminal (CI, hook git), personne ne peut y répondre. L'entrée est fermée pour
+// qu'elle ne bloque jamais, et une boucle d'évènements vidée sans process.exit(0)
+// (question restée sans réponse) est un échec, jamais un succès silencieux.
+process.exitCode = 1;
+process.on('beforeExit', () => {
+  fail('\n❌ [Migrations] Question sans réponse (ci-dessus) : relancez la commande dans un terminal interactif.', [
+    'Colonne ou table renommée : « npm run migrate:create -- <nom> » dans un terminal, puis committez les fichiers générés.',
+    'Schéma inchangé : « --skip-empty » évite la question d\'une migration vide.',
+  ]);
+});
+if (!process.stdin.isTTY) process.stdin.destroy();
 
 // Dernier instantané du schéma (fichier .json écrit avec chaque migration), par nom
 function latestSnapshotFile(dir) {
@@ -100,7 +116,53 @@ async function baseline(payload) {
   }
 }
 
+// importMap de l'admin Payload : composants cités par la configuration, dont le widget
+// « CollectionCards » du tableau de bord ajouté par Payload. À régénérer après une mise à
+// jour de Payload ou un composant ajouté (le CLI « payload generate:importmap » ne
+// démarre pas non plus sur ce projet).
+const IMPORT_MAP_FILE = path.join(__dirname, '..', 'app', '(payload)', 'admin', 'importMap.js');
+// Clés (chemins des composants) d'un importMap écrit par Payload
+const importMapKeys = (source) => [...source.matchAll(/^ {2}"([^"]+)": [\w$]+,?$/gm)].map((m) => m[1]).sort();
+
+async function writeImportMapFile(config, file) {
+  const { generateImportMap } = require('payload');
+  const target = { ...config, admin: { ...config.admin, importMap: { ...config.admin.importMap, importMapFile: file } } };
+  await generateImportMap(target, { force: true, log: false });
+  return importMapKeys(fs.readFileSync(file, 'utf8'));
+}
+
+async function importMap() {
+  const config = await require('../payload.config.ts').default;
+  if (!argv.includes('--check')) {
+    const keys = await writeImportMapFile(config, IMPORT_MAP_FILE);
+    console.log(`✔ [Admin] importMap régénéré (${keys.length} composant(s)) : committez app/(payload)/admin/importMap.js.`);
+    return;
+  }
+  // Généré à part : seules les clés sont comparées (les chemins d'import relatifs
+  // dépendent de l'emplacement du fichier)
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'importmap-'));
+  let expected;
+  try {
+    expected = await writeImportMapFile(config, path.join(tmp, 'importMap.js'));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  const actual = importMapKeys(fs.readFileSync(IMPORT_MAP_FILE, 'utf8'));
+  const problems = [
+    ...expected.filter((k) => !actual.includes(k)).map((k) => `manquant : ${k}`),
+    ...actual.filter((k) => !expected.includes(k)).map((k) => `en trop : ${k}`),
+  ];
+  if (problems.length) {
+    fail('❌ [Admin] importMap.js n\'est pas à jour : lancez « npx tsx scripts/migrate.js importmap » puis committez-le.', problems);
+  }
+  console.log(`✔ [Admin] importMap à jour (${expected.length} composant(s))`);
+}
+
 async function main() {
+  if (command === 'importmap') {
+    await importMap();
+    process.exit(0);
+  }
   const { getPayload } = require('payload');
   const payload = await getPayload({
     config: require('../payload.config.ts').default,

@@ -7,9 +7,24 @@
 const DEFAULT_RETENTION_DAYS = 365;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// Écritures en cours, attendues par l'arrêt propre (core/shutdown, même clé) : registre
+// partagé sur globalThis, car la copie de ce module bundlée par Next (hooks Payload) est
+// une autre instance que celle des routes Express. La promesse ne doit jamais rejeter.
+const BACKGROUND_KEY = Symbol.for('meta-builder.background');
+function trackWrite(promise) {
+  const pending = globalThis[BACKGROUND_KEY] || (globalThis[BACKGROUND_KEY] = new Set());
+  pending.add(promise);
+  promise.finally(() => pending.delete(promise)).catch(() => { /* jamais : promesse sans rejet */ });
+  return promise;
+}
+
 // Écrit une entrée. Ne rejette jamais : l'audit ne fait jamais échouer une opération.
 // Sans `req` : connexion séparée, hors de la transaction de l'opération tracée.
-async function writeAudit(payload, { action, actor, target, details } = {}) {
+function writeAudit(payload, entry) {
+  return trackWrite(insertAudit(payload, entry));
+}
+
+async function insertAudit(payload, { action, actor, target, details } = {}) {
   if (!payload || typeof payload.create !== 'function') return false;
   try {
     await payload.create({
@@ -34,10 +49,11 @@ async function writeAudit(payload, { action, actor, target, details } = {}) {
 // (écriture du journal, libellés des sites) bloquerait tout le pool dès que toutes ses
 // connexions sont ainsi tenues (constaté : 10 demandes de réinitialisation simultanées).
 // La tâche part donc en arrière-plan, après le retour du hook ; elle ne rejette jamais.
+// Inscrite dès l'appel (pendant la requête) auprès de l'arrêt propre.
 function auditInBackground(task) {
-  Promise.resolve()
+  trackWrite(Promise.resolve()
     .then(task)
-    .catch((e) => console.error('Audit non enregistré :', e && e.message));
+    .catch((e) => console.error('Audit non enregistré :', e && e.message)));
 }
 
 // Auteur d'une action : compte connecté ; sinon « anonyme » pour un appel HTTP Payload

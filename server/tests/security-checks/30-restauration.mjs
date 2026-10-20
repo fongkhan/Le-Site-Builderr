@@ -1,6 +1,7 @@
-// Restauration des sauvegardes (lot 3) : droits et validation des endpoints, images dans
-// les sauvegardes, restauration en copie et en remplacement, sauvegarde préalable à la
-// suppression d'un site. Tout ce qui est créé (sites, archives) est supprimé à la fin.
+// Restauration des sauvegardes (lot 3) : droits et validation des endpoints, images (et
+// leur texte alternatif) dans les sauvegardes, restauration en copie et en remplacement,
+// sauvegarde préalable à la suppression d'un site. Tout ce qui est créé (sites, archives)
+// est supprimé à la fin ; les archives existantes du serveur testé sont mises à l'abri.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,7 +9,62 @@ import { fileURLToPath } from 'node:url';
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
 const SERVER_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const BACKUPS_DIR = path.join(path.dirname(SERVER_DIR), 'backups');
-const BACKUP_NAME = /^backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.zip$/;
+export const BACKUP_NAME = /^backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-securite)?\.zip$/;
+const SAFETY_NAME = /^backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-securite\.zip$/;
+const SHELTER_PREFIX = '.matrice-abri-';
+const ALT = 'Vitrine de la boulangerie au matin';
+
+// Remet en place les archives d'un abri qui ont disparu de backups/ (même fichier, même
+// date), puis supprime l'abri.
+function unshelter(dir) {
+  for (const name of fs.readdirSync(dir)) {
+    const dest = path.join(BACKUPS_DIR, name);
+    if (BACKUP_NAME.test(name) && !fs.existsSync(dest)) {
+      try { fs.renameSync(path.join(dir, name), dest); } catch (e) { console.error(`Archive ${name} non remise en place : ${e.message}`); }
+    }
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// Chaque sauvegarde créée par la matrice applique la rétention du serveur testé, qui
+// supprimerait les archives les plus anciennes de l'exploitant. Elles sont mises à l'abri
+// (liens physiques dans un sous-dossier de backups/, ignoré par la liste et la rétention)
+// et remises en place par la fonction renvoyée ; un abri laissé par une exécution
+// interrompue est d'abord vidé. null : archives hors de portée (serveur distant) que les
+// `created` archives créées pourraient évincer — scénario à ignorer.
+export async function shelterBackups(req, token, created) {
+  try {
+    for (const name of fs.readdirSync(BACKUPS_DIR)) {
+      if (name.startsWith(SHELTER_PREFIX)) unshelter(path.join(BACKUPS_DIR, name));
+    }
+  } catch { /* pas de dossier backups/ */ }
+  const info = (await req('/api/admin/backups', { token })).json || {};
+  const names = (info.backups || []).map((b) => b.name).filter((n) => BACKUP_NAME.test(n));
+  if (names.length === 0) return () => {};
+  if (!names.every((n) => fs.existsSync(path.join(BACKUPS_DIR, n)))) {
+    const keep = Math.min(Number(info.config?.keep) || 0, Number(info.config?.keepSafety ?? info.config?.keep) || 0);
+    return names.length + created <= keep ? () => {} : null;
+  }
+  let dir = null;
+  try {
+    dir = fs.mkdtempSync(path.join(BACKUPS_DIR, SHELTER_PREFIX));
+    for (const name of names) {
+      const src = path.join(BACKUPS_DIR, name);
+      const dest = path.join(dir, name);
+      try {
+        fs.linkSync(src, dest);
+      } catch {
+        fs.copyFileSync(src, dest);
+        const st = fs.statSync(src);
+        fs.utimesSync(dest, st.atime, st.mtime);
+      }
+    }
+  } catch {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+    return null;
+  }
+  return () => unshelter(dir);
+}
 
 export default async function ({ BASE, ORIGIN, req, check, admin, client }) {
   const restore = (body, token) => req('/api/admin/backups/restore', { method: 'POST', body, token });
@@ -43,7 +99,7 @@ export default async function ({ BASE, ORIGIN, req, check, admin, client }) {
   const upload = async (siteId, name) => {
     const form = new FormData();
     form.append('file', new Blob([PNG], { type: 'image/png' }), name);
-    form.append('_payload', JSON.stringify({ site: siteId }));
+    form.append('_payload', JSON.stringify({ site: siteId, alt: ALT }));
     const res = await fetch(`${BASE}/api/media`, { method: 'POST', headers: { Origin: ORIGIN, Cookie: `payload-token=${token}` }, body: form });
     let json = null;
     try { json = await res.clone().json(); } catch { /* non-JSON */ }
@@ -52,10 +108,18 @@ export default async function ({ BASE, ORIGIN, req, check, admin, client }) {
 
   const createdSites = new Set();
   const createdArchives = new Set();
+  let restoreShelter = null;
   try {
     // Restes d'une exécution interrompue
     for (const leftover of ['restauration-sc', 'restauration-sc-restauration']) {
       await req(`/api/sites/${leftover}?deleteFiles=true`, { method: 'DELETE', token });
+    }
+    // Trois archives créées : sauvegarde manuelle, sécurité du remplacement, sauvegarde
+    // préalable à la suppression
+    restoreShelter = await shelterBackups(req, token, 3);
+    if (!restoreShelter) {
+      check('Restauration : scénario ignoré (archives du serveur testé hors de portée, la rétention en supprimerait)', true);
+      return;
     }
 
     const created = await req('/api/sites', { method: 'POST', body: { name: 'Restauration SC' }, token });
@@ -100,6 +164,7 @@ export default async function ({ BASE, ORIGIN, req, check, admin, client }) {
       const media = copyId ? await siteMedia(copyId) : [];
       const newName = media[0]?.filename;
       check('Restauration copie : 1 image, sous un autre nom', media.length === 1 && Boolean(newName) && newName !== filename, `${media.length} média(s) ${filename} -> ${newName}`);
+      check('Restauration copie : texte alternatif de l’image conservé', media[0]?.alt === ALT, JSON.stringify(media[0]?.alt));
       const copyPages = JSON.stringify(await pagesOf(copySlug));
       check('Restauration copie : les pages citent la nouvelle image', Boolean(newName) && copyPages.includes(`/api/media/file/${newName}`) && !copyPages.includes(imageUrl), `${filename} -> ${newName}`);
       check('Restauration copie : 1 article', (await postsOf(copySlug)).length === 1);
@@ -117,8 +182,7 @@ export default async function ({ BASE, ORIGIN, req, check, admin, client }) {
     const replaced = await restore({ name: archive, slug, mode: 'replace' }, token);
     const safety = replaced.json?.safetyBackup;
     if (safety) createdArchives.add(safety);
-    check('Restauration remplacement -> 200 avec sauvegarde de sécurité', replaced.status === 200 && BACKUP_NAME.test(safety || '') && safety !== archive, `HTTP ${replaced.status} ${safety} ${replaced.json?.error || ''}`);
-    const pages = await pagesOf(slug);
+    check('Restauration remplacement -> 200 avec sauvegarde de sécurité (backup-<date>-securite.zip)', replaced.status === 200 && SAFETY_NAME.test(safety || '') && safety !== archive, `HTTP ${replaced.status} ${safety} ${replaced.json?.error || ''}`);    const pages = await pagesOf(slug);
     check('Restauration remplacement : seule la page home, citant l’image d’origine', pages.length === 1 && pages[0]?.slug === 'home' && JSON.stringify(pages).includes(imageUrl), JSON.stringify(pages.map((p) => p.slug)));
     const theme = (await req(`/api/theme?site=${slug}`, { token })).json?.theme;
     check('Restauration remplacement : thème restauré', String(theme?.colors?.primary).toLowerCase() === String(t0.colors.primary).toLowerCase(), `${theme?.colors?.primary} (attendu ${t0.colors.primary})`);
@@ -133,7 +197,7 @@ export default async function ({ BASE, ORIGIN, req, check, admin, client }) {
       const del = await req(`/api/sites/${copySlug}?deleteFiles=true&backup=true`, { method: 'DELETE', token });
       const before = del.json?.backup;
       if (before) createdArchives.add(before);
-      check('Suppression avec sauvegarde préalable -> 200 + nom de la sauvegarde', del.status === 200 && BACKUP_NAME.test(before || ''), `HTTP ${del.status} ${before}`);
+      check('Suppression avec sauvegarde préalable -> 200 + nom de la sauvegarde de sécurité', del.status === 200 && SAFETY_NAME.test(before || ''), `HTTP ${del.status} ${before}`);
       if (del.status === 200) createdSites.delete(copySlug);
       if (before) {
         check('Restauration remplacement d’un site supprimé -> 404', (await restore({ name: before, slug: copySlug, mode: 'replace' }, token)).status === 404);
@@ -141,6 +205,9 @@ export default async function ({ BASE, ORIGIN, req, check, admin, client }) {
         if (back.json?.site?.slug) createdSites.add(back.json.site.slug);
         check('Restauration copie d’un site supprimé -> 200 sous le même slug', back.status === 200 && back.json?.site?.slug === copySlug, `HTTP ${back.status} ${back.json?.site?.slug}`);
         check('Restauration copie d’un site supprimé : image restaurée depuis la sauvegarde', back.json?.media?.restored === 1, JSON.stringify(back.json?.media));
+        const backId = back.json?.site?.slug ? await payloadSiteId(back.json.site.slug) : null;
+        const backMedia = backId ? await siteMedia(backId) : [];
+        check('Restauration copie d’un site supprimé : texte alternatif conservé', backMedia.length === 1 && backMedia[0].alt === ALT, JSON.stringify(backMedia.map((m) => m.alt)));
       }
     }
   } finally {
@@ -148,5 +215,7 @@ export default async function ({ BASE, ORIGIN, req, check, admin, client }) {
     for (const name of createdArchives) {
       if (BACKUP_NAME.test(name)) fs.rmSync(path.join(BACKUPS_DIR, name), { force: true });
     }
+    // Après le retrait des archives de la matrice : celles de l'exploitant reviennent
+    if (restoreShelter) restoreShelter();
   }
 }

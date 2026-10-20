@@ -82,6 +82,16 @@ export interface DerivedColors {
   textMuted: string;
 }
 
+// Fond des cartes : blanc sur un thème clair ; sur un thème sombre, fond éclairci au
+// plus de 6 % tant que le texte y reste lisible (4,5:1, ou son contraste sur le fond s'il
+// est moindre), sinon le fond lui-même.
+function surfaceColor(background: string, text: string): string {
+  if (contrastRatio('#ffffff', background) < AA_RATIO) return '#ffffff';
+  const target = Math.min(AA_RATIO, contrastRatio(text, background));
+  const lighter = [0.06, 0.04, 0.02].map((t) => mixHex(background, '#ffffff', t));
+  return lighter.find((s) => contrastRatio(text, s) >= target) ?? mixHex(background, '#ffffff', 0);
+}
+
 export function derivedColors(colors: { primary: string; secondary: string; background: string; text: string }): DerivedColors {
   const primary = clean(colors?.primary);
   const secondary = clean(colors?.secondary);
@@ -90,7 +100,7 @@ export function derivedColors(colors: { primary: string; secondary: string; back
   const onPrimary = readableOn(primary);
   const onSecondary = readableOn(secondary, [text, '#111111']);
   const primaryDeep = mixHex(primary, relativeLuminance(onPrimary) > 0.5 ? '#000000' : '#ffffff', 0.35);
-  const surface = contrastRatio('#ffffff', background) >= AA_RATIO ? mixHex(background, '#ffffff', 0.06) : '#ffffff';
+  const surface = surfaceColor(background, text);
   let textMuted = toHex6(text);
   for (const t of [0.3, 0.2, 0.1]) {
     const muted = mixHex(text, surface, t);

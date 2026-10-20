@@ -185,8 +185,8 @@ test('restoreMediaFiles — images restaurées, conservées ou ignorées sans le
   let bigRead = false;
   const files = [
     { filename: 'garde.png', size: PNG.length, read: () => { throw new Error('ne doit pas être lu'); } },
-    { filename: 'photo.png', size: PNG.length, read: () => PNG },
-    { filename: 'refuse.png', size: 13, read: () => Buffer.from('pas une image') },
+    { filename: 'photo.png', alt: '  Photo\u0007 du   four ', size: PNG.length, read: () => PNG },
+    { filename: 'refuse.png', alt: 42, size: 13, read: () => Buffer.from('pas une image') },
     { filename: 'logo.svg', size: 6, read: () => Buffer.from('<svg/>') },
     { filename: 'enorme.png', size: 60 * 1024 * 1024, read: () => { bigRead = true; throw new Error('lu'); } },
   ];
@@ -200,7 +200,9 @@ test('restoreMediaFiles — images restaurées, conservées ou ignorées sans le
   assert.deepEqual(finds[0].where, { site: { equals: 5 } });
   assert.deepEqual(created.map((c) => c.file.name), ['photo.png', 'refuse.png']);
   assert.equal(created[0].collection, 'media');
-  assert.equal(created[0].data.site, 5);
+  // Texte alternatif sauvegardé repris, nettoyé ; valeur non textuelle ignorée
+  assert.deepEqual(created[0].data, { site: 5, alt: 'Photo du four' });
+  assert.deepEqual(created[1].data, { site: 5 });
   assert.equal(created[0].file.mimetype, 'image/png');
   assert.equal(created[0].file.size, PNG.length);
   assert.equal(created[0].overrideAccess, true);

@@ -2,6 +2,7 @@
 // texte lisible sur la couleur primaire.
 // Option : --logo=/media/<nom> pour le build fait avec PUBLIC_SITE_LOGO (sans elle : site
 // sans logo, nom du site et icône générée). Fixture construite avec PUBLIC_SITE_NAME=Demo.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { themeCssColor } from '../../src/lib/monogram.mjs';
@@ -29,6 +30,9 @@ export default async function ({ dist, base, htmlFiles, readDist, check }) {
   const themeCss = fs.readFileSync(new URL('../../src/styles/theme.css', import.meta.url), 'utf-8');
   const primary = themeCssColor(themeCss, 'primary');
   check(Boolean(primary), 'theme.css : --color-primary introuvable');
+  // Icônes générées : adresse versionnée par le contenu publié de favicon.svg (cache long)
+  const svg = readDist('favicon.svg');
+  const iconVersion = crypto.createHash('sha256').update(svg).digest('hex').slice(0, 10);
 
   for (const file of htmlFiles) {
     const rel = path.relative(dist, file);
@@ -46,7 +50,8 @@ export default async function ({ dist, base, htmlFiles, readDist, check }) {
       check(!html.includes('favicon.svg'), `${rel} : icône générée annoncée malgré le logo`);
     } else {
       check(html.includes(`<span class="site-brand-name">${SITE_NAME}</span>`), `${rel} : nom du site absent de l'en-tête`);
-      check(html.includes(`<link rel="icon" type="image/svg+xml" href="${base}/favicon.svg">`), `${rel} : icône d'onglet ${base}/favicon.svg absente`);
+      check(html.includes(`<link rel="icon" type="image/svg+xml" href="${base}/favicon.svg?v=${iconVersion}">`), `${rel} : icône d'onglet ${base}/favicon.svg?v=${iconVersion} absente`);
+      check(html.includes(`<link rel="icon" href="${base}/favicon.ico?v=${iconVersion}" sizes="32x32">`), `${rel} : icône ${base}/favicon.ico?v=${iconVersion} absente`);
       check(!html.includes('site-brand-logo'), `${rel} : logo affiché sans logo configuré`);
     }
     check(html.includes(`<meta name="theme-color" content="${primary}">`), `${rel} : <meta name="theme-color" content="${primary}"> absente`);
@@ -55,7 +60,6 @@ export default async function ({ dist, base, htmlFiles, readDist, check }) {
   }
 
   // Icônes générées (initiales du site sur la couleur primaire)
-  const svg = readDist('favicon.svg');
   check(svg.startsWith('<svg'), 'favicon.svg absente ou invalide');
   check(svg.includes(`fill="${primary}"`), `favicon.svg : couleur primaire ${primary} absente`);
   check(svg.includes(`>${SITE_NAME[0]}<`), `favicon.svg : initiale « ${SITE_NAME[0]} » absente`);

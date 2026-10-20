@@ -12,6 +12,12 @@ const SERVER_DIR = path.join(__dirname, 'server');
 const ORCHESTRATOR_DIR = path.join(__dirname, 'orchestrator');
 const ENV_FILE = path.join(SERVER_DIR, '.env');
 
+// Commande du serveur (depuis server/) : tsx chargé DANS le process du serveur, sans la
+// CLI tsx. Celle-ci relaie les signaux et tue le serveur (SIGKILL) s'il n'en confirme pas
+// la réception sous 30 ms (boucle d'événements occupée par une copie synchrone de
+// déploiement…) : arrêt propre sauté, publication perdue, build orphelin.
+const SERVER_NODE_ARGS = ['--import', 'tsx', 'index.js'];
+
 const errors = [];
 const warnings = [];
 let envContent = '';
@@ -165,18 +171,17 @@ async function main() {
 
   // Enfants lancés SANS shell (node directement) : un signal atteint le vrai process, qui
   // ne survit jamais au lanceur (sinon : process orphelin et EADDRINUSE au redémarrage).
-  let tsxCli;
   let viteBin;
   try {
-    tsxCli = require.resolve('tsx/cli', { paths: [SERVER_DIR] });
+    require.resolve('tsx', { paths: [SERVER_DIR] });
     viteBin = path.join(path.dirname(require.resolve('vite/package.json', { paths: [ORCHESTRATOR_DIR] })), 'bin', 'vite.js');
   } catch {
     console.error('\n❌ Dépendances incomplètes (tsx ou vite introuvable).\n   → cd server && npm install, puis cd orchestrator && npm install');
     process.exit(1);
   }
 
-  // 1. Serveur Express + Payload (port 4000), via la CLI de tsx
-  const serverProcess = spawn(process.execPath, [tsxCli, 'index.js'], {
+  // 1. Serveur Express + Payload (port 4000), tsx chargé dans son process
+  const serverProcess = spawn(process.execPath, SERVER_NODE_ARGS, {
     cwd: SERVER_DIR,
     stdio: 'inherit',
   });
@@ -226,4 +231,4 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { createStopper, readShutdownGraceMs };
+module.exports = { createStopper, readShutdownGraceMs, SERVER_NODE_ARGS };
