@@ -5,7 +5,7 @@ import { nodemailerAdapter } from '@payloadcms/email-nodemailer'
 import path from 'path'
 import { createRequire } from 'module'
 import { fileURLToPath } from 'url'
-import { Access } from 'payload'
+import { Access, Plugin } from 'payload'
 // Thème : logo validé comme par POST /api/theme (module CommonJS, import par défaut)
 import themeLib from './lib/theme.js'
 
@@ -110,6 +110,25 @@ const frontendOrigins = (process.env.FRONTEND_ORIGIN || 'http://localhost:5173')
   .split(',')
   .map((o) => o.trim())
 
+// Verrous de documents (posés par /admin à l'ouverture d'un document) : toute écriture
+// passe outre, comme l'API locale des endpoints Express. Sans cela (défaut de l'API REST),
+// Payload vérifie le verrou HORS de la transaction de l'écriture : une seconde connexion
+// du pool réclamée pendant que la première est tenue. Dès une dizaine d'écritures REST
+// simultanées, plus aucune ne se libère : tout le serveur se fige (un client connecté y
+// suffit, PATCH /api/users/<son id>). Le verrou est levé dans la transaction. Appliqué à
+// toutes les collections par un plugin.
+const overrideDocumentLocks = ({ args, operation }: any) => {
+  if (operation === 'update' || operation === 'delete') args.overrideLock = true
+  return args
+}
+const documentLocksOverridden: Plugin = (config) => ({
+  ...config,
+  collections: (config.collections || []).map((c) => ({
+    ...c,
+    hooks: { ...c.hooks, beforeOperation: [overrideDocumentLocks, ...(c.hooks?.beforeOperation || [])] },
+  })),
+})
+
 // Lien de réinitialisation pointant vers le front (première origine configurée)
 const resetPasswordUrl = (token: string) => `${frontendOrigins[0]}/reset-password?token=${token}`
 
@@ -189,6 +208,10 @@ export default buildConfig({
   db: postgresAdapter({
     pool: {
       connectionString: dbUri,
+      // Filet de sécurité : sans connexion libre au bout de 30 s, la requête échoue (et sa
+      // transaction est annulée) au lieu d'attendre indéfiniment ; un pool saturé ne fige
+      // plus le serveur jusqu'au redémarrage.
+      connectionTimeoutMillis: 30_000,
     },
     // Développement : schéma poussé automatiquement (push). Production : migrations
     // versionnées de ce dossier, appliquées au démarrage par core/payload.js (pas de
@@ -1092,6 +1115,7 @@ export default buildConfig({
       ],
     },
   ],
+  plugins: [documentLocksOverridden],
   typescript: {
     outputFile: path.resolve(dirname, 'payload-types.ts'),
   },

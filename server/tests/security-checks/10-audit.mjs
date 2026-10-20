@@ -17,7 +17,7 @@ function rawRequest(base, rawPath, { method = 'GET', headers = {}, body } = {}) 
   });
 }
 
-export default async function ({ BASE, ORIGIN, CLIENT_PASSWORD, req, check, admin }) {
+export default async function ({ BASE, ORIGIN, CLIENT_PASSWORD, req, check, admin, client }) {
   if (!admin?.token) {
     check('Audit (module) : jeton admin disponible', false, 'login admin en échec');
     return;
@@ -109,6 +109,17 @@ export default async function ({ BASE, ORIGIN, CLIENT_PASSWORD, req, check, admi
         signal: AbortSignal.timeout(20000),
       }).then((r) => r.status).catch(() => 'délai dépassé')));
       check('Audit : 12 modifications simultanées d’un compte -> toutes traitées (pool jamais bloqué)', burst.every((s) => s === 200), burst.join(','));
+
+      // Même rafale par un client sur son propre compte : aucune écriture REST ne doit
+      // pouvoir figer le serveur (vérification de verrou de document hors transaction)
+      const meId = client?.token ? (await req('/api/users/me', { token: client.token })).json?.user?.id : undefined;
+      const selfBurst = meId === undefined ? [] : await Promise.all(Array.from({ length: 12 }, () => fetch(`${BASE}/api/users/${meId}`, {
+        method: 'PATCH',
+        headers: { Origin: ORIGIN, Cookie: `payload-token=${client.token}`, 'Content-Type': 'application/json' },
+        body: '{}',
+        signal: AbortSignal.timeout(20000),
+      }).then((r) => r.status).catch(() => 'délai dépassé')));
+      check('Comptes : 12 modifications simultanées de son compte par un client -> toutes traitées', selfBurst.length === 12 && selfBurst.every((s) => s === 200), selfBurst.join(',') || 'compte client introuvable');
 
       await req(`/api/users/${id}`, { method: 'DELETE', token });
       const deletion = await waitAudit({ action: 'utilisateur.suppression', target: email }, () => true, since);

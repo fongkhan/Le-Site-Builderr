@@ -73,3 +73,46 @@ test('authLimiterFor — limiteurs de login et de réinitialisation, quelle que 
     assert.equal(authLimiterFor(p), null, p);
   }
 });
+
+test('concurrencyGate — au plus N requêtes à la fois, place libérée en fin de réponse', () => {
+  const { EventEmitter } = require('node:events');
+  const { concurrencyGate } = require('../../core/http.js');
+  const gate = concurrencyGate(2);
+  const started = [];
+  const responses = Array.from({ length: 4 }, () => new EventEmitter());
+  responses.forEach((res, i) => gate({}, res, () => started.push(i)));
+  assert.deepEqual(started, [0, 1]);
+  responses[0].emit('finish');
+  responses[0].emit('close');
+  assert.deepEqual(started, [0, 1, 2], 'une seule place libérée par réponse (finish puis close)');
+  responses[1].emit('close');
+  assert.deepEqual(started, [0, 1, 2, 3]);
+});
+
+test('concurrencyGate — une requête fermée pendant l’attente quitte la file', () => {
+  const { EventEmitter } = require('node:events');
+  const { concurrencyGate } = require('../../core/http.js');
+  const gate = concurrencyGate(1);
+  const started = [];
+  const [a, b, c] = [new EventEmitter(), new EventEmitter(), new EventEmitter()];
+  gate({}, a, () => started.push('a'));
+  gate({}, b, () => started.push('b'));
+  gate({}, c, () => started.push('c'));
+  b.emit('close');
+  a.emit('finish');
+  assert.deepEqual(started, ['a', 'c']);
+  c.emit('close');
+  const d = new EventEmitter();
+  gate({}, d, () => started.push('d'));
+  assert.deepEqual(started, ['a', 'c', 'd'], 'aucune place perdue');
+});
+
+test('isForgotPasswordPath — chemin canonique, quelle que soit sa forme', () => {
+  const { isForgotPasswordPath } = require('../../core/http.js');
+  for (const p of ['/api/users/forgot-password', '/api/users/%2e/forgot-password', '/api/users/FORGOT-PASSWORD/', '/api/users//forgot-password']) {
+    assert.equal(isForgotPasswordPath(p), true, p);
+  }
+  for (const p of ['/api/users/login', '/api/users/reset-password', '/api/users/forgot-passwordx']) {
+    assert.equal(isForgotPasswordPath(p), false, p);
+  }
+});

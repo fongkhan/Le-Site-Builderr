@@ -121,12 +121,57 @@ function authLimiterFor(rawPath) {
   return hit ? hit[1] : null;
 }
 
+// Au plus `limit` requêtes traitées à la fois, les suivantes attendent leur tour. Place
+// libérée à la fin de la réponse ou à la fermeture de la connexion ; une requête dont la
+// connexion se ferme pendant l'attente quitte la file.
+function concurrencyGate(limit) {
+  let active = 0;
+  const waiting = [];
+  const release = () => {
+    active -= 1;
+    const resume = waiting.shift();
+    if (resume) resume();
+  };
+  return (req, res, next) => {
+    const run = () => {
+      active += 1;
+      let released = false;
+      const done = () => {
+        if (released) return;
+        released = true;
+        release();
+      };
+      res.once('finish', done);
+      res.once('close', done);
+      next();
+    };
+    if (active < limit) return run();
+    waiting.push(run);
+    res.once('close', () => {
+      const i = waiting.indexOf(run);
+      if (i !== -1) waiting.splice(i, 1);
+    });
+  };
+}
+
+// Mot de passe oublié (Payload) : la transaction de la requête reste ouverte pendant une
+// écriture hors transaction (seconde connexion du pool) puis pendant l'envoi SMTP.
+// Exécutées deux à la fois au plus : des demandes simultanées (anonymes) ne peuvent ni
+// bloquer le pool ni l'occuper le temps des envois.
+const FORGOT_PASSWORD_PATH = '/api/users/forgot-password';
+const forgotPasswordGate = concurrencyGate(2);
+const isForgotPasswordPath = (rawPath) => {
+  const p = canonicalApiPath(rawPath);
+  return p === FORGOT_PASSWORD_PATH || p.startsWith(FORGOT_PASSWORD_PATH + '/');
+};
+
 // Middleware unique : mêmes instances de limiteurs (donc même compteur par IP) quelle que
 // soit la forme du chemin.
 function authRateLimits(req, res, next) {
   const name = authLimiterFor(req.path);
-  if (name) return limiters[name](req, res, next);
-  next();
+  if (!name) return next();
+  if (!isForgotPasswordPath(req.path)) return limiters[name](req, res, next);
+  limiters[name](req, res, (err) => (err ? next(err) : forgotPasswordGate(req, res, next)));
 }
 
 // Limiteurs montés par préfixe de chemin (le login est servi par Next : le limiter
@@ -251,6 +296,8 @@ module.exports = {
   limiters,
   mountRateLimits,
   authLimiterFor,
+  concurrencyGate,
+  isForgotPasswordPath,
   EXPRESS_ROUTE_PREFIXES,
   isExpressRoute,
   isPublicRoute,

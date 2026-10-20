@@ -30,11 +30,12 @@ Toutes les modifications notables apportées à ce projet sont documentées dans
 - **Courses** : suppression, rollback, prévisualisation, publication et restauration d'un même site s'excluent ; la suppression n'efface jamais les dossiers d'un autre site.
 - **Sauvegardes** : sauvegardes de sécurité comptées à part (`BACKUP_KEEP_SAFETY`), planification sans débordement de minuteur, suppression refusée si la sauvegarde préalable ne serait pas restaurable.
 - Images dont le nom contient `( )` ou `'` reconnues partout (usage, publication, duplication) ; logo et informations légales suivis par la duplication, l'import, l'export et la restauration.
+- **Connexions à la base** : des écritures simultanées par l'API REST (dès une dizaine ; un seul compte client suffisait) ne figent plus le serveur — Payload vérifiait les verrous de documents hors de la transaction de l'écriture ; « mot de passe oublié » traité deux demandes à la fois (sa transaction reste ouverte pendant l'envoi de l'email) ; sans connexion libre au bout de 30 s, une requête échoue au lieu d'attendre indéfiniment.
 - Publication cPanel avec un délai proportionnel à la taille de l'archive (`CPANEL_UPLOAD_TIMEOUT_MS`) ; messages reçus de plus de 12 mois purgés chaque jour ; `theme.css` généré au build et ignoré par git (mise à jour par `git pull` sans conflit).
 
 ### Vérification
 
-- Matrice de sécurité : 421 contrôles en développement, 428 en production avec l'interface servie (228 auparavant), organisés en modules par thème. 599 tests unitaires serveur, 362 tests Vitest, fixture du template étendue (14 pages, CSP, médias, identité, légal, parité du sitemap).
+- Matrice de sécurité : 422 contrôles en développement, 429 en production avec l'interface servie (228 auparavant), organisés en modules par thème, dont des rafales d'écritures simultanées. 602 tests unitaires serveur, 362 tests Vitest, fixture du template étendue (14 pages, CSP, médias, identité, légal, parité du sitemap).
 - Nouveaux contrôles : inventaire automatique des gardes de toutes les routes Express, lint ESLint et typecheck TypeScript du serveur, cohérence de la documentation, jobs CI de production (build, migrations, démarrage, arrêt propre) et Docker.
 
 ## [2.3.0] - 2026-10-02
