@@ -37,7 +37,7 @@ function isUsableJsonFile(filePath, validate) {
   if (!fs.existsSync(filePath)) return false;
   try {
     return validate(JSON.parse(fs.readFileSync(filePath, 'utf-8')));
-  } catch (e) {
+  } catch {
     return false;
   }
 }
@@ -194,7 +194,7 @@ async function readSitePages(siteSlug) {
 // démonstration pour le site seedé, sinon des pages de départ à son nom.
 async function fallbackPages(siteSlug) {
   if (siteSlug === SEED_SITE_SLUG) return DEFAULT_PAGES;
-  let site = null;
+  let site;
   try { site = await sitesStore.getSiteBySlug(siteSlug); } catch { site = null; }
   return starterPages(site ? site.name : siteSlug);
 }
@@ -425,7 +425,7 @@ async function saveSitePages(siteSlug, body) {
   }
 
   // Mode sans base : même règle sur le fichier JSON (pages absentes conservées)
-  let previous = [];
+  let previous;
   try {
     const data = readJsonStrict(getSitePagesFile(siteSlug), null);
     previous = data && Array.isArray(data.docs) ? data.docs : [];

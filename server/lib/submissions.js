@@ -9,6 +9,7 @@ const RETENTION = { retentionDays: 365, max: 500 };
 // pour le message), espaces de bord supprimés, longueur plafonnée.
 function cleanText(value, max, { multiline = false } = {}) {
   if (typeof value !== 'string') return '';
+  // eslint-disable-next-line no-control-regex -- caractères de contrôle retirés ou remplacés volontairement
   const pattern = multiline ? /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g : /[\u0000-\u001F\u007F]/g;
   return value.replace(/\r\n?/g, '\n').replace(pattern, multiline ? '' : ' ').trim().slice(0, max).trim();
 }

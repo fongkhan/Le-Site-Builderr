@@ -46,7 +46,7 @@ jobs:
           echo "OK : aucun appel natif."
 
   server-unit:
-    name: Serveur — tests unitaires (sans DB)
+    name: Serveur — lint, types et tests unitaires (sans DB)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -59,7 +59,12 @@ jobs:
           cache: npm
           cache-dependency-path: server/package-lock.json
       - run: npm ci
-      # Tests de logique pure (slug, confinement de chemins, quota) — rapides, sans Postgres
+      # ESLint (règles recommandées, server/eslint.config.mjs) et typecheck TypeScript
+      # (payload.config.ts, app/, migrations) : sans base ni build Next
+      - run: npm run lint
+      - run: npm run typecheck
+      # Tests unitaires (logique, routes et services simulés, inventaire des gardes) —
+      # rapides, sans Postgres
       - run: npm test
 
   client-template:

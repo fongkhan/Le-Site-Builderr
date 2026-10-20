@@ -13,7 +13,7 @@ const cache = new Map();
 // Lue une fois par dossier de projet (fichiers relus seulement au redémarrage).
 function readAppVersion(projectDir) {
   if (cache.has(projectDir)) return cache.get(projectDir);
-  let version = null;
+  let version;
   try {
     version = parseChangelogVersion(fs.readFileSync(path.join(projectDir, 'CHANGELOG.md'), 'utf-8'));
   } catch {

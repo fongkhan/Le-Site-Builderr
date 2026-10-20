@@ -23,14 +23,13 @@ test('redactPaths — racine vide ou « / » ignorée (séparateurs intacts)', (
 test('createPathRedactor — chemin coupé entre deux paquets masqué quand même', () => {
   const r = createPathRedactor(MASKS);
   const full = `at ${ROOT}/client-template/src/pages/index.astro:3\nfin\n`;
-  let out = '';
   // Découpage à chaque position possible
   for (let cut = 0; cut <= full.length; cut++) {
     const rr = createPathRedactor(MASKS);
     const got = rr.push(full.slice(0, cut)) + rr.push(full.slice(cut)) + rr.flush();
     assert.equal(got, 'at ./client-template/src/pages/index.astro:3\nfin\n', `coupure ${cut}`);
   }
-  out = r.push('progression 42%') + r.flush();
+  const out = r.push('progression 42%') + r.flush();
   assert.equal(out, 'progression 42%');
 });
 

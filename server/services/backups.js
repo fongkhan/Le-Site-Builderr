@@ -147,7 +147,7 @@ function scheduleBackups() {
   console.log(`💾 [Sauvegardes] Planifiées toutes les ${intervalMs / 3600000} h (rétention ${BACKUP_KEEP}).`);
   const runIfDue = () => {
     if (isShuttingDown()) return;
-    let latest = null;
+    let latest;
     try { latest = listBackups()[0] || null; } catch { latest = null; }
     if (!backup.isBackupDue(latest && latest.createdAt, Date.now(), intervalMs, BACKUP_DUE_TOLERANCE_MS)) return;
     trackBackground(createBackupArchive()

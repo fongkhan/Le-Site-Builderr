@@ -122,7 +122,7 @@ async function resolveInternalSite(req) {
   try {
     const sites = await sitesStore.listSites();
     if (sites.length > 0) return sites[0].slug;
-  } catch (e) { /* repli ci-dessous */ }
+  } catch { /* repli ci-dessous */ }
   return 'boulangerie-artisanale';
 }
 

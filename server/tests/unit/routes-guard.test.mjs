@@ -168,7 +168,7 @@ function request(method, urlPath, { user, headers = {}, body, accept = 'applicat
       res.setEncoding('utf8');
       res.on('data', (d) => { text += d; });
       res.on('end', () => {
-        let json = null;
+        let json;
         try { json = JSON.parse(text); } catch { json = null; }
         resolve({ status: res.statusCode, type: String(res.headers['content-type'] || ''), json, text });
       });

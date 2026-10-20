@@ -16,7 +16,7 @@ function today() {
 function readUsage() {
   try {
     return JSON.parse(fs.readFileSync(USAGE_FILE, 'utf-8'));
-  } catch (e) {
+  } catch {
     return {};
   }
 }

@@ -171,6 +171,7 @@ function logoFilename(value) {
   } catch {
     return null;
   }
+  // eslint-disable-next-line no-control-regex -- caractères de contrôle refusés volontairement
   if (!name || name.length > 255 || name.startsWith('.') || /[/\\\u0000-\u001f\u007f]/.test(name)) return null;
   return isPublishableMediaName(name) ? name : null;
 }

@@ -33,6 +33,7 @@ function cleanUntruncated(value, multiline) {
   const text = value
     .replace(/\r\n?/g, '\n')
     .replace(/\t/g, ' ')
+    // eslint-disable-next-line no-control-regex -- caractères de contrôle retirés volontairement
     .replace(/[\u0000-\u0008\u000B-\u001F\u007F]/g, '');
   return (multiline ? text : text.replace(/\n/g, ' ')).trim();
 }

@@ -19,7 +19,7 @@ router.get('/api/admin/overview', auth.authenticate, auth.requireAdmin, async (r
   try {
     const sites = await sitesStore.listSites();
     const rows = sites.map((s) => {
-      let statsData = {};
+      let statsData;
       try { statsData = readJsonFile(getSiteStatsFile(s.slug), {}) || {}; } catch { statsData = {}; }
       const series = stats.lastNDays(statsData, 30);
       return {

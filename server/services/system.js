@@ -131,7 +131,7 @@ async function collectSystemInfo() {
   const { readAppVersion } = require('../lib/version');
 
   const status = build.getBuildStatus();
-  let backupList = [];
+  let backupList;
   try { backupList = backups.listBackups(); } catch { backupList = []; }
   const backupCfg = backups.backupConfig();
   const latest = backupList[0] || null;

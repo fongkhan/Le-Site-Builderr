@@ -58,7 +58,7 @@ function ensureConfinedPaths(res, { documentRoot, repositoryPath }) {
     if (documentRoot) assertStrictlyInside(documentRoot, PUBLIC_HTML_DIR);
     if (repositoryPath) assertStrictlyInside(repositoryPath, REPOSITORIES_DIR);
     return true;
-  } catch (e) {
+  } catch {
     res.status(400).json({ error: "Chemin non autorisé : le dossier doit rester dans le périmètre du projet." });
     return false;
   }

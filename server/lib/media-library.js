@@ -6,6 +6,7 @@ const { isPublishableMediaName } = require('./media-policy');
 const { variantWidthsFor, loadSharp } = require('./media-variants');
 
 const ALT_MAX = 200;
+// eslint-disable-next-line no-control-regex -- caractères de contrôle remplacés volontairement
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/g;
 
 // Texte alternatif nettoyé (caractères de contrôle → espace, blancs réduits, 200

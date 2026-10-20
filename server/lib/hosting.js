@@ -72,7 +72,7 @@ function createSimulationDriver() {
 // Driver « cpanel » : API réelle o2switch/cPanel.
 // ---------------------------------------------------------------------------
 function createCpanelDriver(config) {
-  const { host, user, token, rootDomain, port = 2083, fetchImpl = fetch, insecureTls = false } = config;
+  const { host, user, token, rootDomain, port = 2083, fetchImpl = fetch } = config;
   const base = `https://${host}:${port}`;
   const authHeader = `cpanel ${user}:${token}`;
 
@@ -96,7 +96,8 @@ function createCpanelDriver(config) {
       });
     } catch (e) {
       if (isTimeout(e)) throw timeoutError();
-      // Ne jamais relayer e.message brut : il peut contenir l'URL complète
+      // Ne jamais relayer l'erreur réseau (message ni cause) : elle contient l'URL complète
+      // eslint-disable-next-line preserve-caught-error -- erreur d'origine écartée volontairement (URL de l'hôte cPanel)
       throw new Error(`cPanel injoignable (${fn}) : réseau ou hôte invalide.`);
     }
     if (!res.ok) {
@@ -107,6 +108,7 @@ function createCpanelDriver(config) {
       json = await res.json();
     } catch (e) {
       if (isTimeout(e)) throw timeoutError();
+      // eslint-disable-next-line preserve-caught-error -- erreur d'origine écartée volontairement (extrait de la réponse de l'hôte)
       throw new Error(`Réponse cPanel illisible sur ${fn}.`);
     }
     return json;
@@ -238,7 +240,7 @@ function createCpanelDriver(config) {
         await unlinkRemote(`public_html/${zipName}`);
         return { published: 'cpanel', remoteDir: `public_html/${slug}`, bytes };
       } finally {
-        try { fs.rmSync(localZip, { force: true }); } catch {}
+        try { fs.rmSync(localZip, { force: true }); } catch { /* nettoyage au mieux : jamais au détriment du résultat de la publication */ }
       }
     },
 

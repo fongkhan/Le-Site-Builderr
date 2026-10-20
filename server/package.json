@@ -13,7 +13,9 @@
     "migrate:create": "tsx scripts/migrate.js create",
     "migrate:check": "tsx scripts/migrate.js check",
     "migrate:baseline": "tsx scripts/migrate.js baseline",
-    "test": "node --test tests/unit/*.test.mjs"
+    "test": "node --test tests/unit/*.test.mjs",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit --incremental false"
   },
   "dependencies": {
     "@payloadcms/db-postgres": "3.91.0",
@@ -36,10 +38,13 @@
     "tsx": "^4.7.1"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/express": "^4.17.21",
     "@types/node": "^20.11.24",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "eslint": "^10.13.0",
+    "globals": "^17.13.0",
     "typescript": "^5.3.3"
   }
 }

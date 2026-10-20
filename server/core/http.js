@@ -192,8 +192,8 @@ function jsonBodyForExpressRoutes(req, res, next) {
 }
 
 // Dernier middleware : erreurs non gérées rendues en JSON (jamais la page HTML par
-// défaut d'Express, qui peut contenir une stack en développement).
-// eslint-disable-next-line no-unused-vars
+// défaut d'Express, qui peut contenir une stack en développement). Quatre paramètres
+// obligatoires : Express reconnaît un gestionnaire d'erreurs à fn.length === 4.
 function jsonErrorHandler(err, req, res, next) {
   if (res.headersSent) return next(err);
   // Formulaire d'un site publié posté sans JavaScript : page HTML (langue de la page

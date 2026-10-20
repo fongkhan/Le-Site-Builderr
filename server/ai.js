@@ -66,9 +66,9 @@ async function postJson(provider, url, headers, body) {
     });
   } catch (err) {
     if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-      throw new Error(`${label} n'a pas répondu dans le délai imparti (${Math.round(AI_TIMEOUT_MS / 1000)} s).`);
+      throw new Error(`${label} n'a pas répondu dans le délai imparti (${Math.round(AI_TIMEOUT_MS / 1000)} s).`, { cause: err });
     }
-    throw new Error(`${label} est injoignable : ${err && err.message}`);
+    throw new Error(`${label} est injoignable : ${err && err.message}`, { cause: err });
   }
   if (!res.ok) {
     if (res.status === 429) {

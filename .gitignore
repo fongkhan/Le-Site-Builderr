@@ -11,6 +11,8 @@ client-template/.astro/
 server/.next/
 # Généré par Next à chaque build ou démarrage (références vers .next/types)
 server/next-env.d.ts
+# Caches de compilation TypeScript (tsc incrémental)
+*.tsbuildinfo
 simulated_public_html/
 
 # Lockfiles

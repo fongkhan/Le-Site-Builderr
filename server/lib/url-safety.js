@@ -12,6 +12,7 @@ const DANGEROUS_URL = /^(?:javascript|vbscript)\s*:|^data\s*:\s*text\/html/i;
 const UNSAFE_LINK_MESSAGE = 'Lien non autorisé (javascript:, vbscript: ou data:text/html).';
 
 // Les navigateurs ignorent blancs et caractères de contrôle dans un schéma (« java\tscript: »).
+// eslint-disable-next-line no-control-regex -- caractères de contrôle retirés volontairement
 const isDangerousUrl = (value) => typeof value === 'string' && DANGEROUS_URL.test(value.replace(/[\u0000- ]/g, ''));
 
 // Validateur au format Payload : true si accepté, sinon le message d'erreur. Seuls les
