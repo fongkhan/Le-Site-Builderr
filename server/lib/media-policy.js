@@ -24,4 +24,21 @@ function isPublishableMediaName(name) {
   return PUBLISHABLE_EXTENSIONS.has(name.slice(dot + 1).toLowerCase());
 }
 
-module.exports = { isPublishableMediaName, PUBLISHABLE_EXTENSIONS, mediaMaxMb, DEFAULT_MEDIA_MAX_MB };
+// Type MIME d'une image publiable d'après sa dernière extension (restauration d'une
+// image sauvegardée) ; null pour tout autre nom.
+const MIME_BY_EXTENSION = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  jpe: 'image/jpeg',
+  jfif: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  avif: 'image/avif',
+};
+function mediaMimeType(name) {
+  if (!isPublishableMediaName(name)) return null;
+  return MIME_BY_EXTENSION[name.slice(name.lastIndexOf('.') + 1).toLowerCase()] || null;
+}
+
+module.exports = { isPublishableMediaName, PUBLISHABLE_EXTENSIONS, mediaMaxMb, DEFAULT_MEDIA_MAX_MB, mediaMimeType };

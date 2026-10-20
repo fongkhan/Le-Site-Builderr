@@ -18,25 +18,28 @@ function failedSteps(remote: RemoteRemoval): string {
 // Suppression d'un site. La suppression des fichiers publiés est un choix explicite
 // (décochée par défaut) : sans elle, le dossier de production reste en place. En mode
 // cPanel, elle retire aussi le site du serveur (domaine personnalisé, sous-domaine,
-// dossier en ligne).
+// dossier en ligne). Une sauvegarde préalable de tous les sites (cochée par défaut) garde
+// le site restaurable depuis « Sauvegardes du contenu ».
 export function DeleteSiteDialog({ site, onClose, onDeleted }: { site: Site; onClose: () => void; onDeleted: () => void }) {
   const toast = useToast();
   const { config } = useConfig();
   const isRemote = config?.hostingMode === 'cpanel';
   const [deleteFiles, setDeleteFiles] = useState(false);
+  const [backupFirst, setBackupFirst] = useState(true);
   const [deleting, setDeleting] = useState(false);
 
   const handleDelete = async () => {
     setDeleting(true);
     try {
-      const result = await deleteSite(site.slug, deleteFiles);
+      const result = await deleteSite(site.slug, deleteFiles, { backup: backupFirst });
+      const backupNote = result.backup ? ` Sauvegarde préalable : ${result.backup}.` : '';
       if (result.remote && !result.remote.removed) {
         const steps = failedSteps(result.remote);
         toast.error(
-          `Site « ${site.name} » supprimé, mais son retrait de l'hébergement est incomplet${steps ? ` (${steps})` : ''} : vérifiez le serveur cPanel.`
+          `Site « ${site.name} » supprimé, mais son retrait de l'hébergement est incomplet${steps ? ` (${steps})` : ''} : vérifiez le serveur cPanel.${backupNote}`
         );
       } else {
-        toast.success(`Site « ${site.name} » supprimé${deleteFiles ? (isRemote ? ' et retiré du serveur' : ', fichiers compris') : ''}.`);
+        toast.success(`Site « ${site.name} » supprimé${deleteFiles ? (isRemote ? ' et retiré du serveur' : ', fichiers compris') : ''}.${backupNote}`);
       }
       onDeleted();
       onClose();
@@ -53,7 +56,10 @@ export function DeleteSiteDialog({ site, onClose, onDeleted }: { site: Site; onC
       message={
         <>
           Le site <strong>{site.name}</strong> (slug : <code>{site.slug}</code>) sera retiré de la base, avec ses
-          pages, articles, images téléversées, thème, statistiques et versions conservées. Cette action est irréversible.
+          pages, articles, images téléversées, thème, statistiques et versions conservées.{' '}
+          {backupFirst
+            ? 'Il pourra être restauré depuis la sauvegarde créée juste avant.'
+            : 'Sans sauvegarde, cette action est irréversible.'}
         </>
       }
       confirmLabel={deleteFiles ? (isRemote ? 'Supprimer le site et le retirer du serveur' : 'Supprimer le site et ses fichiers') : 'Supprimer définitivement'}
@@ -62,6 +68,10 @@ export function DeleteSiteDialog({ site, onClose, onDeleted }: { site: Site; onC
       onConfirm={handleDelete}
       onCancel={onClose}
     >
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem', color: 'var(--text-muted)', cursor: 'pointer' }}>
+        <input type="checkbox" checked={backupFirst} onChange={(e) => setBackupFirst(e.target.checked)} style={{ width: 16, height: 16 }} />
+        <span>Créer d'abord une sauvegarde de tous les sites (restaurable depuis « Sauvegardes du contenu »)</span>
+      </label>
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem', color: 'var(--text-muted)', cursor: 'pointer' }}>
         <input type="checkbox" checked={deleteFiles} onChange={(e) => setDeleteFiles(e.target.checked)} style={{ width: 16, height: 16 }} />
         {isRemote ? (

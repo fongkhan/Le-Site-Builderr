@@ -86,6 +86,46 @@ router.get('/api/admin/backups/download', auth.authenticate, auth.requireAdmin, 
     .pipe(res);
 });
 
+// --- Restauration d'une sauvegarde (admin) ---
+
+// Erreur de restauration : message explicite (statut < 500) ou erreur serveur journalisée
+// sans détail interne dans la réponse.
+function sendRestoreError(res, e, fallback) {
+  if (e instanceof backups.RestoreError) {
+    if (e.status < 500) return res.status(e.status).json({ error: e.message });
+    return sendError(res, e.message, e.cause || e, e.status);
+  }
+  return sendError(res, fallback, e);
+}
+
+// Sites contenus dans une sauvegarde (pages, articles, images, existence actuelle).
+router.get('/api/admin/backups/sites', auth.authenticate, auth.requireAdmin, async (req, res) => {
+  try {
+    res.json(await backups.describeBackup(req.query.name));
+  } catch (e) {
+    sendRestoreError(res, e, "Impossible de lire la sauvegarde.");
+  }
+});
+
+// Restaure un site : { name, slug, mode: 'copy' | 'replace' }.
+router.post('/api/admin/backups/restore', auth.authenticate, auth.requireAdmin, async (req, res) => {
+  const parsed = backups.parseRestoreRequest(req.body);
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+  const { name, slug, mode } = parsed;
+  try {
+    const result = await backups.restoreSiteFromBackup(parsed);
+    const images = result.media.restored + result.media.copied;
+    const safety = result.safetyBackup ? ` securite=${result.safetyBackup}` : '';
+    logAudit(req, 'sauvegarde.restauration', result.site.slug, `archive=${name} source=${slug} mode=${mode}${safety} images=${images}`);
+    res.json({ success: true, ...result });
+  } catch (e) {
+    if (e && e.safetyBackup) {
+      logAudit(req, 'sauvegarde.restauration', slug, `archive=${name} source=${slug} mode=replace échec securite=${e.safetyBackup}`);
+    }
+    sendRestoreError(res, e, "Échec de la restauration.");
+  }
+});
+
 // --- Hébergement (admin only) : état du driver et test de connexion cPanel ---
 // status() ne renvoie JAMAIS le jeton API (hôte/utilisateur/domaine racine seulement).
 router.get('/api/hosting/status', auth.authenticate, auth.requireAdmin, (req, res) => {

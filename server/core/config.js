@@ -44,6 +44,8 @@ const SHUTDOWN_GRACE_MS = envInt('SHUTDOWN_GRACE_MS', IS_PRODUCTION ? 15000 : 30
 const BACKUP_KEEP = envInt('BACKUP_KEEP', 14);
 const BACKUP_INTERVAL_HOURS = envInt('BACKUP_INTERVAL_HOURS', 24);
 const BACKUP_ENABLED = process.env.BACKUP_ENABLED === 'true';
+// Images téléversées des sites incluses dans les sauvegardes (par défaut)
+const BACKUP_MEDIA = process.env.BACKUP_MEDIA !== 'false';
 
 // Dossiers qui doivent exister dès le boot : données, production simulée (cible du scan
 // par défaut, créée par aucun autre chemin avant le premier déploiement) et brouillons
@@ -91,6 +93,7 @@ module.exports = {
   BACKUP_KEEP,
   BACKUP_INTERVAL_HOURS,
   BACKUP_ENABLED,
+  BACKUP_MEDIA,
   ensureRuntimeDirs,
   getSitePagesFile,
   getSiteThemeFile,

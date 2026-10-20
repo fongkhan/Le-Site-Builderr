@@ -233,6 +233,15 @@ Publics, sans authentification, sans secret, version ni chemin dans la réponse 
 * `GET /api/health` — vivacité : `200 { "status": "ok", "uptimeS": 42 }` dès que le process répond.
 * `GET /api/health/ready` — disponibilité : `200` (`ok` ou `degraded`) ou `503` (`down`) avec `{ "status", "checks": { "database", "storage", "build": { "inProgress", "queueLength" } } }`. `database` exécute un `select 1` borné à 2 s ; `storage` vérifie l'accès en écriture aux données, à la production et à la médiathèque ; `build` est informatif. Le résultat est mis en cache 2 s : une sonde fréquente ne sollicite jamais la base à chaque appel et ne reçoit jamais de 429. À utiliser pour une sonde de disponibilité, un `HEALTHCHECK` Docker ou l'attente de démarrage en CI (`curl -fsS http://localhost:4000/api/health/ready`).
 
+### Sauvegardes et restauration
+* **Contenu sauvegardé** : fiches, pages, thèmes, articles et images téléversées de tous les sites, dans `backups/backup-<date>.zip` (une archive par sauvegarde, jamais écrasée même si deux sauvegardes tombent dans la même seconde).
+* **Réglages** : `BACKUP_ENABLED=true` active la planification (vérifiée au plus toutes les heures, quel que soit l'intervalle), `BACKUP_INTERVAL_HOURS` (24 par défaut), `BACKUP_KEEP` (14 archives conservées), `BACKUP_MEDIA=false` pour exclure les images (archives plus légères ; une restauration ne reprend alors que les images encore présentes). « Sauvegarder maintenant » reste disponible dans le panel d'administration.
+* **Restaurer…** (panel d'administration, « Sauvegardes du contenu ») : choisir un site de la sauvegarde, puis
+  * **copie** (recommandé) : nouveau site en brouillon « <nom> (restauration) » ; un site supprimé depuis est recréé sous son slug d'origine s'il est libre. Le site actuel n'est pas modifié ; la copie n'est rattachée à aucun compte client (ni domaine personnalisé ni mesure d'audience restaurés) ;
+  * **remplacement** : pages, articles et thème du site existant remplacés, images manquantes restaurées, après une **sauvegarde de sécurité** de tous les sites et sous le créneau de build. Le site en ligne ne change qu'à la prochaine publication.
+* **Suppression d'un site** : une sauvegarde préalable de tous les sites est proposée (cochée par défaut) ; le site supprimé reste ainsi restaurable en copie.
+* Endpoints (admin) : `GET /api/admin/backups/sites?name=<archive>` (sites contenus, pages, articles, images) et `POST /api/admin/backups/restore` `{ name, slug, mode: "copy" | "replace" }`. Les archives de plus de 1 Go ne sont pas restaurables depuis l'interface.
+
 ### 5. Payload CMS v3 multi-tenant
 * Collections `users` (auth + rôles + quota IA), `payload_sites` (source de vérité), `pages` (blocs), `themes`, avec access control par rôle et ownership.
 * Panel d'administration Payload complet pour la gestion des comptes et des données.

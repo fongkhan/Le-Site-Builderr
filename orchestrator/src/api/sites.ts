@@ -33,8 +33,14 @@ export interface RemoteRemoval {
   files?: RemoteRemovalStep;
 }
 
-export function deleteSite(slug: string, deleteFiles: boolean): Promise<{ success: boolean; message: string; remote?: RemoteRemoval | null }> {
-  return apiFetch(`${sitePath(slug)}?deleteFiles=${deleteFiles}`, { method: 'DELETE' });
+// backup : sauvegarde préalable de tous les sites (le site reste restaurable) ; son nom
+// est renvoyé dans `backup`.
+export function deleteSite(
+  slug: string,
+  deleteFiles: boolean,
+  { backup = false }: { backup?: boolean } = {},
+): Promise<{ success: boolean; message: string; remote?: RemoteRemoval | null; backup?: string | null }> {
+  return apiFetch(`${sitePath(slug)}?deleteFiles=${deleteFiles}&backup=${backup}`, { method: 'DELETE' });
 }
 
 // Duplication d'un site (admin) : crée un jumeau sous un nouveau slug

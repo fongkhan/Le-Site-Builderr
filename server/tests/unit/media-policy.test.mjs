@@ -34,3 +34,18 @@ test('mediaMaxMb — valeur de MEDIA_MAX_MB, 8 par défaut ou si invalide', () =
   assert.equal(mediaMaxMb('4'), 4);
   for (const v of [undefined, '', 'abc', '0', '-3']) assert.equal(mediaMaxMb(v), 8, String(v));
 });
+
+test('mediaMimeType — type MIME par dernière extension, null hors images publiables', () => {
+  const { mediaMimeType } = require('../../lib/media-policy.js');
+  assert.equal(mediaMimeType('photo.JPG'), 'image/jpeg');
+  assert.equal(mediaMimeType('a.jfif'), 'image/jpeg');
+  assert.equal(mediaMimeType('b.jpe'), 'image/jpeg');
+  assert.equal(mediaMimeType('x.png'), 'image/png');
+  assert.equal(mediaMimeType('x.webp'), 'image/webp');
+  assert.equal(mediaMimeType('x.gif'), 'image/gif');
+  assert.equal(mediaMimeType('x.avif'), 'image/avif');
+  assert.equal(mediaMimeType('logo.svg'), null);
+  assert.equal(mediaMimeType('a/b.png'), null);
+  assert.equal(mediaMimeType('sans-extension'), null);
+  assert.equal(mediaMimeType(null), null);
+});

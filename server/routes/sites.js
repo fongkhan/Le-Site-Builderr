@@ -10,10 +10,11 @@ const releases = require('../lib/releases');
 const analytics = require('../lib/analytics');
 const { generateSlug, assertSafePath, assertStrictlyInside, previewPathFor } = require('../lib/paths');
 const { publicSiteView } = require('../lib/sites-view');
-const { validateTheme } = require('../lib/theme');
 const { replaceDirAtomically } = require('../lib/fs-swap');
 const { sendError, createRouter } = require('../core/http');
 const { logAudit } = require('../core/audit');
+const { parseSiteContent, sanitizeSiteContent, createSiteFromContent } = require('../services/site-import');
+const backups = require('../services/backups');
 const { getPayloadInstance } = require('../core/payload');
 const {
   PROJECT_DIR,
@@ -24,7 +25,7 @@ const {
   getSiteThemeFile,
 } = require('../core/config');
 const { DEFAULT_THEME, starterPages } = require('../services/defaults');
-const { readSitePages, readSitePosts, normalizePost, writePostsFile, writeJsonFile, findPayloadSiteId } = require('../services/content');
+const { readSitePages, readSitePosts, readSiteTheme, writeJsonFile, findPayloadSiteId } = require('../services/content');
 const {
   toPosixPath,
   defaultDocumentRoot,
@@ -195,6 +196,22 @@ router.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (r
     // prévisualisation et publication de ce site sont refusés jusqu'à la fin.
     build.markDeleting(slug);
     try {
+      // Sauvegarde préalable de tous les sites (?backup=true) : le site reste restaurable
+      // depuis « Sauvegardes du contenu ». Si elle échoue, rien n'est supprimé.
+      let safetyBackup = null;
+      if (req.query.backup === 'true') {
+        try {
+          safetyBackup = await backups.createBackupArchive();
+        } catch (e) {
+          return sendError(res, "Sauvegarde préalable impossible : le site n'a pas été supprimé.", e);
+        }
+        if (!safetyBackup) return res.status(409).json({ error: 'Une sauvegarde est déjà en cours : réessayez dans un instant.' });
+        // Un build a pu démarrer pendant la sauvegarde : revérification synchrone
+        if (build.isSiteBusy(slug)) {
+          return res.status(409).json({ error: "Un build ou une prévisualisation de ce site est en cours : réessayez quand il sera terminé." });
+        }
+      }
+
       // Fichiers de production : jamais hors du périmètre ni la racine partagée elle-même
       // (un documentRoot hérité invalide n'est pas supprimé, le site l'est quand même).
       let removableRoot = null;
@@ -233,13 +250,14 @@ router.delete('/api/sites/:slug', auth.authenticate, auth.requireAdmin, async (r
       }
 
       const remoteAudit = remote ? ` distant=${remote.removed ? 'ok' : 'partiel'}` : '';
-      logAudit(req, 'site.suppression', req.params.slug, `fichiers=${Boolean(deleteFiles)}${remoteAudit}`);
+      logAudit(req, 'site.suppression', req.params.slug, `fichiers=${Boolean(deleteFiles)}${remoteAudit}${safetyBackup ? ` sauvegarde=${safetyBackup}` : ''}`);
       res.json({
         success: true,
         message: remote && !remote.removed
           ? "Site supprimé, mais son retrait de l'hébergement est incomplet : vérifiez le serveur."
           : "Site supprimé avec succès.",
         remote,
+        backup: safetyBackup,
       });
     } finally {
       build.unmarkDeleting(slug);
@@ -624,15 +642,14 @@ const IMPORT_MAX_ENTRIES = 5000;
 const IMPORT_MAX_UNCOMPRESSED = 200 * 1024 * 1024;
 
 // Import : recrée un site depuis une archive d'export. Corps = zip brut (bornés à 50 Mo).
-// Anti zip-slip : chaque entrée est filtrée (segments contrôlés) et écrite uniquement sous
-// le documentRoot fraîchement créé via assertSafePath. En cas d'échec après la création,
-// le site partiellement importé est supprimé.
+// Contenu nettoyé (pages invalides et thème hors liste écartés). Anti zip-slip : chaque
+// entrée est filtrée (segments contrôlés) et écrite uniquement sous le documentRoot
+// fraîchement créé via assertSafePath. En cas d'échec après la création, le site
+// partiellement importé est supprimé (createSiteFromContent).
 router.post('/api/sites/import-archive',
   auth.authenticate, auth.requireAdmin,
   express.raw({ type: ['application/zip', 'application/octet-stream'], limit: '50mb' }),
   async (req, res) => {
-    let createdSlug = null;
-    let createdDocumentRoot = null;
     try {
       if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
         return res.status(400).json({ error: "Archive manquante (envoyez le zip en corps de requête, Content-Type: application/zip)." });
@@ -669,149 +686,70 @@ router.post('/api/sites/import-archive',
       const asText = (v, max) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : '');
       const baseSlug = generateSlug(asText(meta.slug, 200) || asText(meta.name, 200));
       if (!baseSlug) return res.status(400).json({ error: "Slug invalide dans meta.json." });
-      const slug = await uniqueSlug(baseSlug);
 
-      const documentRoot = defaultDocumentRoot(slug);
-      // uniqueSlug écarte les dossiers existants : en cas d'échec, on ne supprime que ce
-      // que cet import a créé (jamais des fichiers conservés d'un ancien site).
-      const documentRootExisted = fs.existsSync(documentRoot);
-      const newSite = await sitesStore.createSite({
-        slug,
-        name: asText(meta.name, 200) || slug,
-        domain: await resolveSiteDomain(slug),
-        documentRoot,
-        repositoryPath: "",
-        stack: asText(meta.stack, 100) || "Astro SSG",
-        createdWithTool: true,
-        status: "draft",
-        sslStatus: initialSslStatus()
+      // Pages, thème, articles : fichiers JSON de repli (repris par le CMS puis persistés
+      // dans Payload à la première sauvegarde). Un fichier illisible est ignoré.
+      const content = parseSiteContent(readEntry);
+      const result = await createSiteFromContent({
+        baseSlug,
+        name: asText(meta.name, 200),
+        stack: asText(meta.stack, 100),
+        content,
+        // Build embarqué (dist/) : extraction contrôlée entrée par entrée
+        afterCreate: async ({ documentRoot }) => {
+          let extracted = 0;
+          for (const entry of entries) {
+            if (entry.isDirectory || !entry.entryName.startsWith('dist/')) continue;
+            const relative = entry.entryName.slice('dist/'.length);
+            // refuser toute entrée louche (segments vides, "..", chemins absolus, séparateurs
+            // Windows ou caractères de contrôle)
+            const segments = relative.split('/');
+            if (segments.some((s) => s === '' || s === '.' || s === '..' || /[\\:\0]/.test(s))) continue;
+            const dest = path.join(documentRoot, ...segments);
+            assertSafePath(dest, documentRoot);
+            fs.mkdirSync(path.dirname(dest), { recursive: true });
+            fs.writeFileSync(dest, entry.getData());
+            extracted++;
+          }
+          return extracted;
+        },
       });
-      createdSlug = slug;
-      createdDocumentRoot = documentRootExisted ? null : documentRoot;
+      if (result.after > 0) updateSiteStatus(result.slug, 'active');
 
-      // Pages : fichier JSON de fallback (repris par le CMS puis persisté dans Payload
-      // à la première sauvegarde). Thème : validé avant écriture.
-      const pagesRaw = readEntry('pages.json');
-      if (pagesRaw) {
-        try {
-          const pagesData = JSON.parse(pagesRaw);
-          if (pagesData && Array.isArray(pagesData.docs)) {
-            writeJsonFile(getSitePagesFile(slug), pagesData);
-          }
-        } catch { /* pages illisibles : le site démarre avec les pages par défaut */ }
-      }
-      const themeRaw = readEntry('theme.json');
-      if (themeRaw) {
-        try {
-          const themeData = JSON.parse(themeRaw);
-          if (validateTheme(themeData && themeData.theme).ok) {
-            writeJsonFile(getSiteThemeFile(slug), themeData);
-          }
-        } catch { /* thème illisible : défaut au premier enregistrement */ }
-      }
-      const postsRaw = readEntry('posts.json');
-      if (postsRaw) {
-        try {
-          const postsData = JSON.parse(postsRaw);
-          if (postsData && Array.isArray(postsData.docs)) {
-            const posts = postsData.docs
-              .filter((p) => p && typeof p === 'object' && typeof p.title === 'string' && generateSlug(p.slug))
-              .map((p) => normalizePost({ ...p, slug: generateSlug(p.slug) }));
-            writePostsFile(slug, posts);
-          }
-        } catch { /* articles illisibles : le blog démarre vide */ }
-      }
-
-      // Build embarqué (dist/) : extraction contrôlée entrée par entrée
-      let extracted = 0;
-      for (const entry of entries) {
-        if (entry.isDirectory || !entry.entryName.startsWith('dist/')) continue;
-        const relative = entry.entryName.slice('dist/'.length);
-        // refuser toute entrée louche (segments vides, "..", chemins absolus, séparateurs
-        // Windows ou caractères de contrôle)
-        const segments = relative.split('/');
-        if (segments.some((s) => s === '' || s === '.' || s === '..' || /[\\:\0]/.test(s))) continue;
-        const dest = path.join(documentRoot, ...segments);
-        assertSafePath(dest, documentRoot);
-        fs.mkdirSync(path.dirname(dest), { recursive: true });
-        fs.writeFileSync(dest, entry.getData());
-        extracted++;
-      }
-      if (extracted > 0) updateSiteStatus(slug, 'active');
-
-      logAudit(req, 'site.import-archive', slug, `fichiers=${extracted}`);
-      res.json({ success: true, site: newSite, extractedFiles: extracted });
+      logAudit(req, 'site.import-archive', result.slug, `fichiers=${result.after}`);
+      res.json({ success: true, site: result.site, extractedFiles: result.after });
     } catch (e) {
-      // Pas de site à moitié importé : on défait la création (best-effort).
-      if (createdSlug) {
-        try {
-          await sitesStore.deleteSite(createdSlug);
-          purgeSiteData(createdSlug);
-          if (createdDocumentRoot) {
-            fs.rmSync(assertStrictlyInside(createdDocumentRoot, PUBLIC_HTML_DIR), { recursive: true, force: true });
-          }
-        } catch (cleanupErr) {
-          console.error("Nettoyage de l'import raté :", cleanupErr.message);
-        }
-      }
       sendError(res, "Échec de l'import de l'archive.", e);
     }
   });
 
 // Duplication d'un site (admin) : crée un jumeau (contenu + thème) sous un nouveau slug.
+// Images : le jumeau reçoit ses propres copies (supprimer l'un ne casse pas l'autre), et
+// son contenu cite les nouveaux noms de fichiers. Création défaite en cas d'échec.
 router.post('/api/sites/:slug/duplicate', auth.authenticate, auth.requireAdmin, async (req, res) => {
   try {
     const source = await sitesStore.getSiteBySlug(req.params.slug);
     if (!source) return res.status(404).json({ error: "Site source introuvable." });
 
-    const slug = await uniqueSlug(generateSlug(`${source.slug}-copie`) || `${source.slug}-copie`);
-    const newSite = await sitesStore.createSite({
-      slug,
+    // Lecture illisible : élément absent (le jumeau démarre avec les valeurs par défaut)
+    const readOrNull = async (read) => {
+      try { return await read(source.slug); } catch { return null; }
+    };
+    const content = sanitizeSiteContent({
+      pages: await readOrNull(readSitePages),
+      posts: await readOrNull(readSitePosts),
+      theme: await readOrNull(readSiteTheme),
+    });
+    const result = await createSiteFromContent({
+      baseSlug: generateSlug(`${source.slug}-copie`) || `${source.slug}-copie`,
       name: `${source.name} (copie)`,
-      domain: await resolveSiteDomain(slug),
-      documentRoot: defaultDocumentRoot(slug),
-      repositoryPath: "",
       stack: source.stack,
-      createdWithTool: true,
-      status: "draft",
-      sslStatus: initialSslStatus()
+      content,
+      mediaSourceSlug: source.slug,
     });
 
-    // Contenu + thème copiés via le fallback JSON (repris par le CMS, persisté dans
-    // Payload à la première sauvegarde) — même approche que l'import d'archive.
-    let pagesData = null;
-    try { pagesData = await readSitePages(source.slug); } catch { /* pages source illisibles : pages par défaut */ }
-    let postsDocs = null;
-    try { postsDocs = (await readSitePosts(source.slug)).docs; } catch { /* articles source illisibles : pas de blog */ }
-
-    // Images : le jumeau reçoit ses propres copies (supprimer l'un ne casse pas l'autre),
-    // et son contenu cite les nouveaux noms de fichiers.
-    const { copySiteMedia } = require('../services/sites');
-    const { remapMediaFilenames } = require('../lib/media');
-    let mediaMap = {};
-    try {
-      const payloadInstance = getPayloadInstance();
-      const targetId = payloadInstance ? await findPayloadSiteId(payloadInstance, slug) : null;
-      if (targetId) mediaMap = await copySiteMedia(source.slug, targetId, { pages: pagesData, posts: postsDocs });
-    } catch (e) {
-      console.error(`[Duplication] Médias de ${source.slug} non copiés :`, e.message);
-    }
-
-    if (pagesData && Array.isArray(pagesData.docs)) {
-      try {
-        writeJsonFile(getSitePagesFile(slug), remapMediaFilenames(pagesData, mediaMap));
-      } catch { /* le jumeau démarre avec les pages par défaut */ }
-    }
-    const srcTheme = getSiteThemeFile(source.slug);
-    if (fs.existsSync(srcTheme)) {
-      try { fs.copyFileSync(srcTheme, getSiteThemeFile(slug)); } catch { /* thème par défaut sinon */ }
-    }
-    if (postsDocs) {
-      try { writePostsFile(slug, remapMediaFilenames(postsDocs, mediaMap)); } catch { /* le jumeau démarre sans blog */ }
-    }
-
-    logAudit(req, 'site.duplication', slug, `source=${source.slug} médias=${Object.keys(mediaMap).length}`);
-    res.json({ success: true, site: newSite });
+    logAudit(req, 'site.duplication', result.slug, `source=${source.slug} médias=${result.media.copied}`);
+    res.json({ success: true, site: result.site });
   } catch (e) {
     sendError(res, "Échec de la duplication du site.", e);
   }

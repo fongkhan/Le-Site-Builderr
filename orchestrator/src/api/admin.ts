@@ -1,4 +1,5 @@
 import { apiFetch } from './client';
+import type { Site } from '../types';
 
 // --- Administration : hébergement, journal d'audit, vue d'ensemble, sauvegardes ---
 
@@ -73,7 +74,7 @@ export function fetchAdminOverview(): Promise<AdminOverview> {
 // Sauvegardes automatiques (admin)
 export interface BackupEntry { name: string; size: number; createdAt: string }
 export interface BackupsInfo {
-  config: { enabled: boolean; intervalHours: number; keep: number };
+  config: { enabled: boolean; intervalHours: number; keep: number; media?: boolean };
   backups: BackupEntry[];
 }
 export function fetchBackups(): Promise<BackupsInfo> {
@@ -84,4 +85,43 @@ export function createBackup(): Promise<{ success: boolean; filename: string }> 
 }
 export function backupDownloadUrl(name: string): string {
   return `/api/admin/backups/download?name=${encodeURIComponent(name)}`;
+}
+
+// Restauration d'une sauvegarde (admin) : sites contenus, puis copie ou remplacement
+export interface BackupSiteSummary {
+  slug: string;
+  name: string;
+  pages: number;
+  posts: number;
+  media: number;
+  theme: boolean;
+  /** Le site existe encore (le remplacement n'est possible que dans ce cas) */
+  exists: boolean;
+}
+export interface BackupContents {
+  name: string;
+  createdAt: string | null;
+  /** 1 : sauvegarde antérieure, sans images ; 2 : images incluses */
+  format: number;
+  sites: BackupSiteSummary[];
+}
+export function fetchBackupSites(name: string): Promise<BackupContents> {
+  return apiFetch<BackupContents>(`/api/admin/backups/sites?name=${encodeURIComponent(name)}`);
+}
+
+export type RestoreMode = 'copy' | 'replace';
+export interface RestoreResult {
+  success: boolean;
+  mode: RestoreMode;
+  site: Site;
+  pages: number;
+  posts: number;
+  theme: boolean;
+  media: { restored: number; copied: number; kept: number; missing: string[] };
+  skipped: { pages: number; posts: number; theme: boolean };
+  /** Remplacement : sauvegarde de sécurité créée juste avant */
+  safetyBackup?: string;
+}
+export function restoreBackup(name: string, slug: string, mode: RestoreMode): Promise<RestoreResult> {
+  return apiFetch<RestoreResult>('/api/admin/backups/restore', { method: 'POST', body: JSON.stringify({ name, slug, mode }) });
 }

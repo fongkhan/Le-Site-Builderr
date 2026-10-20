@@ -93,7 +93,7 @@ export function AdminPanel() {
 
       <SystemPanel version={version} />
 
-      <BackupsPanel />
+      <BackupsPanel onRestored={sitesChanged} />
 
       <div className="grid-2col">
         <ScanPanel scannedSites={scannedSites} onScanned={setScannedSites} onImportClick={setImportCandidate} />
