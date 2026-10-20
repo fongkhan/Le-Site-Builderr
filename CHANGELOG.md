@@ -2,6 +2,41 @@
 
 Toutes les modifications notables apportées à ce projet sont documentées dans ce fichier.
 
+## [2.4.0] - 2026-10-20
+
+### Ajouts
+
+- **Médiathèque du site** : bouton 🖼️ des champs image pour parcourir et réutiliser les images, texte alternatif par image repris par le site publié, suppression refusée tant que l'image est citée (pages, articles, brouillons, logo du site).
+- **Identité des sites** : logo par site (en-tête de marque et icône d'onglet) ; sans logo, icône générée aux initiales et aux couleurs du thème ; contraste AA garanti (texte clair ou foncé calculé), avertissements de lisibilité dans la page Design.
+- **Mentions légales et confidentialité** : pages générées (fr et en) à partir de l'onglet « Infos légales » (éditeur, directeur de la publication, hébergeur), liens en bas de page, mention RGPD sous chaque formulaire ; erreurs du formulaire de contact codées et traduites, avec ou sans JavaScript.
+- **Liens des boutons** : lien éditable (formulaire, page du site, page légale, ancre, adresse web, téléphone, email) avec avertissements de saisie ; liens exécutables refusés, y compris par l'API REST.
+- **Sites publiés** : images en variantes 480/960/1600 px (srcset) avec dimensions, fond du premier Hero préchargé.
+- **Restauration des sauvegardes** : copie en brouillon ou remplacement du contenu (après une sauvegarde de sécurité) ; les sauvegardes incluent les images, leurs textes alternatifs et le thème ; sauvegarde préalable proposée avant la suppression d'un site.
+- **Journal d'audit complet** : comptes, mots de passe (jamais leur valeur), connexions, pages, thème, médias ; entrées non modifiables ; panneau filtrable et paginé ; purge quotidienne au-delà de `AUDIT_RETENTION_DAYS` / `BUILDS_RETENTION_DAYS`.
+- **Exploitation** : panneau Système (version, disque, dossiers, build, sauvegardes), nettoyage confirmé des données orphelines, page 404 du site sous `/preview` et `/draft`.
+- **Production** : `npm run build` puis `npm run start:prod`, migrations Payload versionnées appliquées au démarrage (`migrate:check` en CI, `migrate:baseline` pour adopter une base de développement), interface de l'orchestrateur servie par le serveur, Dockerfile et profil `prod` de docker-compose.
+
+### Sécurité
+
+- **Dépendances** : Payload 3.91 et Next 16.4 (injections SQL de Payload, exécution de code par l'optimiseur d'images, SSRF des Server Actions), sharp 0.35, nodemailer 10, react-router 7.18.4 ; optimiseur d'images de Next fermé (`/_next/image` → 404) ; garde d'audit des dépendances hebdomadaire avec exceptions datées.
+- **Connexion** : message unifié et limiteurs de connexion et de réinitialisation appliqués quelle que soit la forme du chemin (casse, encodage, « / » final, segments « . » / « .. ») ; GraphQL désactivé ; création anonyme de compte contrôlée en CI sur base vide.
+- **CSP** : orchestrateur compilé et sites publiés (sans `'unsafe-inline'` pour les scripts, hôtes de mesure d'audience et API autorisés automatiquement) ; polices auto-hébergées, plus aucune requête vers Google Fonts ni gravatar.com.
+- **Médias** : suppression et remplacement de fichier par l'API REST réservés aux admins (les clients passent par la médiathèque, qui contrôle l'usage).
+- En-têtes de sécurité dans le `.htaccess` généré et sur les pages servies sous `/preview` et `/draft` ; variables réservées d'Astro/Vite retirées de l'environnement du build ; aucun message de visiteur dans les journaux du serveur.
+
+### Fiabilité
+
+- **Arrêt propre** (SIGTERM/SIGINT) : requêtes en cours terminées, écritures d'audit et sauvegardes attendues (`SHUTDOWN_GRACE_MS`), build interrompu remis en file ; file de publications conservée sur disque et relancée au redémarrage ; serveur lancé par `node --import tsx` (plus de SIGKILL d'un serveur occupé).
+- **Courses** : suppression, rollback, prévisualisation, publication et restauration d'un même site s'excluent ; la suppression n'efface jamais les dossiers d'un autre site.
+- **Sauvegardes** : sauvegardes de sécurité comptées à part (`BACKUP_KEEP_SAFETY`), planification sans débordement de minuteur, suppression refusée si la sauvegarde préalable ne serait pas restaurable.
+- Images dont le nom contient `( )` ou `'` reconnues partout (usage, publication, duplication) ; logo et informations légales suivis par la duplication, l'import, l'export et la restauration.
+- Publication cPanel avec un délai proportionnel à la taille de l'archive (`CPANEL_UPLOAD_TIMEOUT_MS`) ; messages reçus de plus de 12 mois purgés chaque jour ; `theme.css` généré au build et ignoré par git (mise à jour par `git pull` sans conflit).
+
+### Vérification
+
+- Matrice de sécurité : 421 contrôles en développement, 428 en production avec l'interface servie (228 auparavant), organisés en modules par thème. 599 tests unitaires serveur, 362 tests Vitest, fixture du template étendue (14 pages, CSP, médias, identité, légal, parité du sitemap).
+- Nouveaux contrôles : inventaire automatique des gardes de toutes les routes Express, lint ESLint et typecheck TypeScript du serveur, cohérence de la documentation, jobs CI de production (build, migrations, démarrage, arrêt propre) et Docker.
+
 ## [2.3.0] - 2026-10-02
 
 ### Ajouts
