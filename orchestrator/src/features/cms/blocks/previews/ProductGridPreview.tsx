@@ -1,8 +1,9 @@
-import { withAlpha } from '../../../../lib/color';
+import { derivedColors, withAlpha } from '../../../../lib/color';
 import type { BlockPreviewProps } from '../types';
 import { headingStyle, SECTION_STYLE } from './previewStyles';
 
 export function ProductGridPreview({ block, theme }: BlockPreviewProps) {
+  const { onPrimary } = derivedColors(theme.colors);
   return (
     <div style={{ ...SECTION_STYLE, backgroundColor: withAlpha(theme.colors.secondary, 0.13) }}>
       <h2 style={headingStyle(theme)}>{block.title}</h2>
@@ -17,7 +18,7 @@ export function ProductGridPreview({ block, theme }: BlockPreviewProps) {
             <div style={{ padding: 15 }}>
               <h4 style={{ color: theme.colors.text, marginBottom: 4 }}>{product.name}</h4>
               <span style={{ color: theme.colors.primary, fontWeight: 700 }}>{product.price}</span>
-              <button type="button" tabIndex={-1} style={{ width: '100%', border: 'none', background: theme.colors.primary, color: 'white', borderRadius: theme.radius, padding: 6, marginTop: 10, fontSize: '0.85rem' }}>
+              <button type="button" tabIndex={-1} style={{ width: '100%', border: 'none', background: theme.colors.primary, color: onPrimary, borderRadius: theme.radius, padding: 6, marginTop: 10, fontSize: '0.85rem' }}>
                 Acheter
               </button>
             </div>

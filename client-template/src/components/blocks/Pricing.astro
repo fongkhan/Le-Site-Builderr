@@ -100,11 +100,11 @@ const plans = (data.plans || []).filter(Boolean).map((plan) => ({
   }
 
   .pricing-card {
-    background: #ffffff;
+    background: var(--color-surface);
     padding: 40px 30px;
     border-radius: var(--border-radius);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-    border: 1px solid rgba(0, 0, 0, 0.05);
+    border: 1px solid color-mix(in srgb, var(--color-text) 10%, transparent);
     transition: all 0.3s ease;
     text-align: left;
     display: flex;
@@ -130,7 +130,7 @@ const plans = (data.plans || []).filter(Boolean).map((plan) => ({
     left: 50%;
     transform: translateX(-50%);
     background-color: var(--color-primary);
-    color: #ffffff;
+    color: var(--color-on-primary);
     padding: 4px 14px;
     border-radius: 20px;
     font-size: 0.75rem;
@@ -153,7 +153,7 @@ const plans = (data.plans || []).filter(Boolean).map((plan) => ({
 
   .plan-desc {
     font-size: 0.875rem;
-    color: #6b7280;
+    color: var(--color-text-muted);
     margin: 0;
     min-height: 40px;
   }
@@ -185,7 +185,7 @@ const plans = (data.plans || []).filter(Boolean).map((plan) => ({
     align-items: center;
     gap: 10px;
     font-size: 0.95rem;
-    color: #4b5563;
+    color: var(--color-text-muted);
   }
 
   .checkmark {
@@ -212,7 +212,7 @@ const plans = (data.plans || []).filter(Boolean).map((plan) => ({
 
   .btn-primary {
     background-color: var(--color-primary);
-    color: #ffffff;
+    color: var(--color-on-primary);
   }
 
   .btn-primary:hover {
@@ -222,11 +222,12 @@ const plans = (data.plans || []).filter(Boolean).map((plan) => ({
 
   .btn-secondary {
     background-color: var(--color-secondary);
-    color: var(--color-text);
+    color: var(--color-on-secondary);
     border: 1px solid rgba(0, 0, 0, 0.05);
   }
 
+  /* Assombrit légèrement la couleur secondaire : le texte garde son contraste */
   .btn-secondary:hover {
-    background-color: rgba(0, 0, 0, 0.02);
+    filter: brightness(0.95);
   }
 </style>

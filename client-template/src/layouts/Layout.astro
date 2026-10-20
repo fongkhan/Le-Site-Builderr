@@ -4,6 +4,9 @@ import '../styles/theme.css';
 import '../styles/blocks.css';
 // Polices du thème auto-hébergées (voir integrations/theme-fonts.mjs)
 import 'virtual:theme-fonts.css';
+// Identité du site : couleur primaire du thème (barre du navigateur mobile)
+import themeCss from '../styles/theme.css?raw';
+import { themeCssColor } from '../lib/monogram.mjs';
 import { localePath, normalizeLocale, LOCALE_LABELS, DEFAULT_LOCALE } from '../lib/i18n.mjs';
 import { withBase, stripBase, absoluteUrl } from '../lib/url';
 import { jsonLdString } from '../lib/jsonld';
@@ -70,6 +73,16 @@ const beaconUrl = statsSlug ? `${statsApiBase}/api/stats/hit/${statsSlug}` : '';
 const siteName = process.env.PUBLIC_SITE_NAME || title;
 const siteUrl = (process.env.PUBLIC_SITE_URL || '').replace(/\/+$/, '');
 
+// Identité : logo du thème (fichier vérifié et copié dans /media/ par le serveur), sinon
+// nom du site et icône d'onglet générée (favicon.svg / favicon.ico, initiales du site).
+// Un chemin hors de la forme « /media/<nom> » est ignoré.
+const themeColor = themeCssColor(themeCss, 'primary');
+const rawLogo = process.env.PUBLIC_SITE_LOGO || '';
+const logoPath = /^\/media\/(?!\.)[A-Za-z0-9._~%-]+$/.test(rawLogo) ? rawLogo : '';
+const logoSrc = logoPath ? withBase(logoPath) : '';
+// La marque mène à l'accueil de la langue de la page (sinon à celui de la langue par défaut)
+const brandHref = withBase(localePath(locales.includes(pageLocale) ? pageLocale : DEFAULT_LOCALE, 'home'));
+
 // Mesure d'audience (GA4 ou Matomo) : valeurs validées côté serveur à l'écriture.
 // Le script n'est JAMAIS chargé avant le consentement (bannière RGPD ci-dessous).
 const analyticsProvider = process.env.PUBLIC_ANALYTICS_PROVIDER || '';
@@ -100,8 +113,18 @@ const jsonLdScripts = (jsonLd || []).filter(Boolean).map((d) => jsonLdString(d))
 	<head>
 		<meta charset="UTF-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
-		<link rel="icon" type="image/svg+xml" href={withBase('/favicon.svg')} />
-		<link rel="icon" href={withBase('/favicon.ico')} sizes="32x32" />
+		{logoSrc ? (
+			<>
+				<link rel="icon" href={logoSrc} />
+				<link rel="apple-touch-icon" href={logoSrc} />
+			</>
+		) : (
+			<>
+				<link rel="icon" type="image/svg+xml" href={withBase('/favicon.svg')} />
+				<link rel="icon" href={withBase('/favicon.ico')} sizes="32x32" />
+			</>
+		)}
+		{themeColor && <meta name="theme-color" content={themeColor} />}
 		<meta name="generator" content={Astro.generator} />
 		<title>{title}</title>
 		{preloadImage && <link rel="preload" as="image" href={preloadImage} fetchpriority="high" />}
@@ -130,8 +153,14 @@ const jsonLdScripts = (jsonLd || []).filter(Boolean).map((d) => jsonLdString(d))
 		{/* Lien d'évitement : premier élément focalisable, mène au contenu principal
 		    (chaque page pose id="contenu" sur son <main>). */}
 		<a class="skip-link" href="#contenu">{t(pageLocale, 'skipLink')}</a>
-		{(pages.length > 1 || otherLocales.length > 0) && (
-			<header>
+		<header class="site-header">
+			{/* Marque : logo (texte alternatif = nom du site) ou nom du site ; jamais de h1 ici */}
+			<a class="site-brand" href={brandHref}>
+				{logoSrc
+					? <img class="site-brand-logo" src={logoSrc} alt={siteName} height="40" decoding="async" />
+					: <span class="site-brand-name">{siteName}</span>}
+			</a>
+			{(pages.length > 1 || otherLocales.length > 0) && (
 				<nav class="site-nav" aria-label={t(pageLocale, 'mainNav')}>
 					{pages.map((p) => (
 						<a
@@ -149,8 +178,8 @@ const jsonLdScripts = (jsonLd || []).filter(Boolean).map((d) => jsonLdString(d))
 						</span>
 					)}
 				</nav>
-			</header>
-		)}
+			)}
+		</header>
 		<slot />
 		{analyticsEnabled && (
 			<>
@@ -272,14 +301,39 @@ const jsonLdScripts = (jsonLd || []).filter(Boolean).map((d) => jsonLdString(d))
 		color: var(--color-text);
 	}
 
+	/* En-tête de marque (toujours affiché) : logo ou nom du site, puis le menu */
+	.site-header {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 8px 16px;
+		padding: 12px 20px;
+		background-color: var(--color-bg);
+		border-bottom: 1px solid color-mix(in srgb, var(--color-text) 12%, transparent);
+	}
+
+	.site-brand {
+		color: var(--color-text);
+		font-family: var(--font-heading), serif;
+		font-weight: 700;
+		font-size: 1.15rem;
+		text-decoration: none;
+	}
+
+	.site-brand-logo {
+		display: block;
+		height: 40px;
+		width: auto;
+		max-width: 180px;
+		object-fit: contain;
+	}
+
 	/* Menu de navigation multi-pages (affiché seulement si le site a plusieurs pages) */
 	.site-nav {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 4px;
-		padding: 12px 20px;
-		background-color: var(--color-bg);
-		border-bottom: 1px solid color-mix(in srgb, var(--color-text) 12%, transparent);
+		margin-left: auto;
 	}
 
 	.site-nav a {
@@ -299,7 +353,7 @@ const jsonLdScripts = (jsonLd || []).filter(Boolean).map((d) => jsonLdString(d))
 
 	.site-nav a.active {
 		background-color: var(--color-primary);
-		color: #ffffff;
+		color: var(--color-on-primary);
 	}
 
 	/* Sélecteur de langue (affiché seulement si le site est multilingue) */
@@ -366,12 +420,13 @@ const jsonLdScripts = (jsonLd || []).filter(Boolean).map((d) => jsonLdString(d))
 
 	.consent-accept {
 		background-color: var(--color-primary);
-		color: #ffffff;
+		color: var(--color-on-primary);
 	}
 
+	/* Bannière blanche : texte foncé fixe, bordure à la couleur primaire */
 	.consent-refuse {
 		background-color: #ffffff;
-		color: var(--color-primary);
+		color: #1f2937;
 	}
 
 	.consent-reopen {

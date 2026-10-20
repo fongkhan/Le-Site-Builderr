@@ -53,6 +53,13 @@ test('normalizeOnboardResult — blocs inconnus écartés, thème invalide refus
   assert.equal(out.theme, null);
 });
 
+test('normalizeOnboardResult — le thème de l’IA ne porte jamais de logo ni de clé inconnue', () => {
+  const theme = { colors: { primary: '#8B5A2B', secondary: '#F5E6CC', background: '#FAFAFA', text: '#2D241E' }, fonts: { heading: 'Lora', body: 'Inter' }, radius: '8px' };
+  const out = normalizeOnboardResult({ theme: { ...theme, logo: 'https://x/l.png', extra: 1 } });
+  assert.deepEqual(out.theme, theme);
+  assert.deepEqual(normalizeOnboardResult({ theme: { ...theme, logo: '/api/media/file/logo.png' } }).theme, theme);
+});
+
 test('normalizeOnboardResult — slugs de pages dédoublonnés', () => {
   const block = { blockType: 'hero', title: 'x' };
   const out = normalizeOnboardResult({ pages: { docs: [

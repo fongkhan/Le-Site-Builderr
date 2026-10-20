@@ -16,12 +16,16 @@ interface ImageFieldProps {
   label?: string;
   /** Libellé accessible quand aucun libellé n'est visible */
   ariaLabel?: string;
+  /** Valeur refusée (aria-invalid) */
+  invalid?: boolean;
+  /** Identifiants des messages qui décrivent le champ (erreur, aide) */
+  describedBy?: string;
 }
 
 // Champ image : URL libre, image déjà présente dans la médiathèque du site (bouton 🖼️ :
 // parcourir, choisir, texte alternatif, suppression) OU téléversement (bouton 📤).
 // Aussi utilisé par le blog (features/blog/PostEditor.tsx, via ../cms/BlockEditor).
-export function ImageField({ siteSlug, value, placeholder, onChange, label, ariaLabel }: ImageFieldProps) {
+export function ImageField({ siteSlug, value, placeholder, onChange, label, ariaLabel, invalid, describedBy }: ImageFieldProps) {
   const id = useId();
   const toast = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -64,6 +68,8 @@ export function ImageField({ siteSlug, value, placeholder, onChange, label, aria
           style={{ ...COMPACT_INPUT_STYLE, flex: 1 }}
           placeholder={placeholder || 'URL de l’image ou 📤'}
           aria-label={label ? undefined : ariaLabel ?? placeholder ?? 'URL de l’image'}
+          aria-invalid={invalid || undefined}
+          aria-describedby={describedBy}
           value={value || ''}
           onChange={(e) => onChange(e.target.value)}
         />

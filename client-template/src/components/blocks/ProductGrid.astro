@@ -91,7 +91,7 @@ const products = (data.products || []).filter(Boolean).map((p) => {
   }
 
   .product-card {
-    background: #ffffff;
+    background: var(--color-surface);
     border-radius: var(--border-radius);
     overflow: hidden;
     box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05);
@@ -151,7 +151,7 @@ const products = (data.products || []).filter(Boolean).map((p) => {
     margin-top: auto;
     padding: 10px 20px;
     background-color: var(--color-primary);
-    color: #ffffff;
+    color: var(--color-on-primary);
     border: none;
     border-radius: var(--border-radius);
     font-weight: 600;

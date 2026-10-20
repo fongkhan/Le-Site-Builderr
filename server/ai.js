@@ -1,7 +1,7 @@
 // Fournisseurs d'IA (OpenAI, Anthropic, Gemini) : onboarding d'un site complet et
 // assistant de rédaction du CMS. Un seul point d'appel réseau (délai maximal, erreurs
 // homogènes) et une seule construction de message par fournisseur.
-const { HEADING_FONTS, BODY_FONTS, validateTheme } = require('./lib/theme');
+const { HEADING_FONTS, BODY_FONTS, validateTheme, canonicalTheme } = require('./lib/theme');
 
 const AI_TIMEOUT_MS = Number.parseInt(process.env.AI_TIMEOUT_MS ?? '', 10) || 90 * 1000;
 
@@ -313,7 +313,8 @@ function normalizeOnboardResult(raw, { name, features } = {}) {
     })
     .filter((p) => p.layout.length > 0);
 
-  const theme = raw && raw.theme && validateTheme(raw.theme).ok ? raw.theme : null;
+  // Le thème proposé par l'IA ne porte jamais de logo (ni aucune autre clé inconnue)
+  const theme = raw && raw.theme && validateTheme({ ...raw.theme, logo: '' }).ok ? canonicalTheme({ ...raw.theme, logo: '' }) : null;
   return { qualification, pages: docs.length > 0 ? { docs } : null, theme };
 }
 

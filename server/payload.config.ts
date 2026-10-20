@@ -6,6 +6,8 @@ import path from 'path'
 import { createRequire } from 'module'
 import { fileURLToPath } from 'url'
 import { Access } from 'payload'
+// Thème : logo validé comme par POST /api/theme (module CommonJS, import par défaut)
+import themeLib from './lib/theme.js'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
@@ -850,6 +852,16 @@ export default buildConfig({
         {
           name: 'radius',
           type: 'text',
+        },
+        {
+          // Même règle que l'API du thème : bloque aussi PATCH /api/themes/:id (REST Payload)
+          name: 'logo',
+          type: 'text',
+          validate: (value: unknown) =>
+            value == null || value === '' || themeLib.normalizeLogo(value) !== null ? true : themeLib.LOGO_ERROR,
+          admin: {
+            description: 'Logo du site : image de la médiathèque (/api/media/file/<nom>). Vide : nom du site affiché.',
+          },
         },
       ],
     },

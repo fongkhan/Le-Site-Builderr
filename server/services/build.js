@@ -354,7 +354,7 @@ function sanitizedEnv(env = process.env) {
 // Environnement du process de build : site actif, jeton d'accès interne, métadonnées
 // publiques (Open Graph, JSON-LD) et mesure d'audience. Un brouillon n'a ni URL
 // publique (pas de canonique vers la prod) ni mesure d'audience ni beacon de stats.
-function buildEnvFor(site, siteSlug, { draft = false } = {}) {
+function buildEnvFor(site, siteSlug, { draft = false, logo = null } = {}) {
   return {
     ...sanitizedEnv(),
     ACTIVE_SITE_SLUG: siteSlug,
@@ -366,6 +366,7 @@ function buildEnvFor(site, siteSlug, { draft = false } = {}) {
     PUBLIC_API_BASE: String(process.env.PUBLIC_API_URL || '').replace(/\/+$/, ''),
     PUBLIC_SITE_NAME: (site && site.name) || siteSlug,
     PUBLIC_SITE_URL: !draft && site && site.domain ? `https://${site.domain}` : '',
+    PUBLIC_SITE_LOGO: logo ? logo.staticPath : '', // logo vérifié (resolveSiteLogo), jamais hérité de l'environnement
     // Mesure d'audience (validée à l'écriture) : chargée après consentement RGPD
     PUBLIC_ANALYTICS_PROVIDER: (!draft && site && site.analyticsProvider) || '',
     PUBLIC_ANALYTICS_ID: (!draft && site && site.analyticsId) || '',
@@ -567,13 +568,20 @@ async function startDraftBuild(siteSlug) {
 
   fs.writeFileSync(LOCK_FILE, 'locked');
   try {
-    // Thème courant appliqué au template avant compilation (comme un vrai build)
-    await applySiteThemeCss(siteSlug);
+    // Thème courant appliqué au template avant compilation (comme un vrai build) ; logo
+    // vérifié (le journal de build n'est pas écrit par un brouillon : console seule)
+    const theme = await applySiteThemeCss(siteSlug);
+    let logo = null;
+    try {
+      logo = await resolveSiteLogo(siteSlug, theme);
+    } catch (logoErr) {
+      console.error(`Logo du brouillon non vérifié : ${logoErr.message}`);
+    }
     activeBuildingSite = siteSlug;
     activeBasePath = basePathFor(site, siteSlug, { draft: true });
 
     await new Promise((resolve, reject) => {
-      runAstroBuild(buildCommand(), buildEnvFor(site, siteSlug, { draft: true }), (error, stdout, stderr) => {
+      runAstroBuild(buildCommand(), buildEnvFor(site, siteSlug, { draft: true, logo }), (error, stdout, stderr) => {
         if (error) return reject(new Error(`Build brouillon échoué : ${error.message}\n${String(stderr || stdout).slice(-500)}`));
         resolve();
       }, { log: false });
@@ -589,6 +597,9 @@ async function startDraftBuild(siteSlug) {
       await copyReferencedMedia(siteSlug, await readSitePages(siteSlug), await readSitePosts(siteSlug, { publishedOnly: true }));
     } catch (mediaErr) {
       console.error(`Médias du brouillon non copiés : ${mediaErr.message}`);
+    }
+    if (logo) {
+      try { copyLogo(logo); } catch (logoErr) { console.error(`Logo du brouillon non copié : ${logoErr.message}`); }
     }
 
     // Site supprimé pendant la compilation : aucun brouillon écrit (il survivrait à la
@@ -649,8 +660,19 @@ async function startBuild(siteSlug) {
   resetBuildLog('');
   appendBuildLog(`DÉMARRAGE : Build du site "${site.name}" (${siteSlug})...`);
 
-  // Thème du site appliqué au template CSS avant compilation
-  await applySiteThemeCss(siteSlug);
+  // Thème du site appliqué au template CSS avant compilation. Avertissements de
+  // lisibilité dans le journal (jamais bloquants) ; logo vérifié (médiathèque du site).
+  const theme = await applySiteThemeCss(siteSlug);
+  for (const { message } of require('../lib/theme').themeContrastWarnings(theme)) {
+    appendBuildLog(`Avertissement d'accessibilité : ${message}`);
+  }
+  let logo = null;
+  try {
+    logo = await resolveSiteLogo(siteSlug, theme);
+    if (theme && theme.logo && !logo) appendBuildLog('Logo ignoré : image absente de la médiathèque du site.');
+  } catch (logoErr) {
+    appendBuildLog(`Logo non vérifié : ${logoErr.message}`);
+  }
 
   // Site actif pour le routage dynamique d'Astro
   activeBuildingSite = siteSlug;
@@ -659,10 +681,10 @@ async function startBuild(siteSlug) {
   const cmd = buildCommand();
   appendBuildLog(`Commande exécutée : ${cmd} (dans ${displayPath(ASTRO_PROJECT_DIR, PROJECT_DIR)})`);
 
-  runAstroBuild(cmd, buildEnvFor(site, siteSlug), (error, stdout, stderr) => {
+  runAstroBuild(cmd, buildEnvFor(site, siteSlug, { logo }), (error, stdout, stderr) => {
     // Le traitement du résultat est async (publication distante éventuelle) mais le
     // point de sortie reste UNIQUE : libération des verrous dans le finally.
-    handleBuildResult(siteSlug, site, error, stdout, stderr)
+    handleBuildResult(siteSlug, site, error, stdout, stderr, logo)
       .catch((e) => {
         console.error('Erreur inattendue de post-build :', e.message);
         failBuild(siteSlug, site, 'Erreur interne de déploiement.', e.message);
@@ -685,6 +707,27 @@ function failBuild(siteSlug, site, publicError, excerpt) {
   buildStatus.error = redactLogText(publicError);
   updateSiteStatus(siteSlug, 'error');
   finalizeBuild(siteSlug, site.name, 'error', redactLogText(excerpt || ''));
+}
+
+// Logo du thème publiable avec le site : fichier de la médiathèque DU SITE (jamais celui
+// d'un autre client cité par son nom) présent sur le disque. Sinon null : le nom du site
+// s'affiche dans l'en-tête et l'icône d'onglet reprend son initiale.
+async function resolveSiteLogo(siteSlug, theme) {
+  const { logoFilename, publishableLogo } = require('../lib/theme');
+  const name = logoFilename(theme && theme.logo);
+  if (!name) return null;
+  if (!(await require('./content').siteOwnsMedia(siteSlug, name))) return null;
+  const logo = publishableLogo(theme, new Set([name]));
+  return logo && fs.existsSync(path.join(UPLOADS_DIR, path.basename(logo.name))) ? logo : null;
+}
+
+// Copie le fichier du logo dans le site compilé (dist/media/<nom>), servi sous le chemin
+// de base comme les autres médias.
+function copyLogo(logo) {
+  const name = path.basename(logo.name);
+  const mediaOut = path.join(DIST_DIR, 'media');
+  fs.mkdirSync(mediaOut, { recursive: true });
+  fs.copyFileSync(path.join(UPLOADS_DIR, name), path.join(mediaOut, name));
 }
 
 // SEO : sitemap.xml + robots.txt générés dans le dist avant publication.
@@ -754,7 +797,7 @@ function cancelDeletedSiteBuild(siteSlug) {
   buildTriggers.delete(siteSlug);
 }
 
-async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
+async function handleBuildResult(siteSlug, site, error, stdout, stderr, logo = null) {
   activeBuildingSite = null;
   activeBasePath = '/';
   if (error && error.interrupted) {
@@ -807,6 +850,9 @@ async function handleBuildResult(siteSlug, site, error, stdout, stderr) {
       if (missing.length > 0) appendBuildLog(`Médias introuvables sur le disque : ${summarizeNames(missing)}.`);
     } catch (mediaErr) {
       appendBuildLog(`Copie des médias échouée : ${mediaErr.message}`);
+    }
+    if (logo) {
+      try { copyLogo(logo); } catch (logoErr) { appendBuildLog(`Logo non copié : ${logoErr.message}`); }
     }
 
     // Site supprimé pendant le build : rien n'est déployé ni publié
@@ -886,6 +932,7 @@ module.exports = {
   isSiteBusy,
   dequeue,
   sanitizedEnv,
+  buildEnvFor,
   abortCurrent,
   restoreQueue,
   persistQueue,

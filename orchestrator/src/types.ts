@@ -31,6 +31,7 @@ export interface Theme {
     body: string;
   };
   radius: string;
+  logo?: string;
 }
 
 export interface Block {

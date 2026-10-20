@@ -3,7 +3,7 @@
 // (admin ou propriétaire du site).
 const auth = require('../auth');
 const { generateSlug } = require('../lib/paths');
-const { validateTheme } = require('../lib/theme');
+const { validateTheme, canonicalTheme, logoFilename, themeContrastWarnings } = require('../lib/theme');
 const { sendError, createRouter } = require('../core/http');
 const { logAudit } = require('../core/audit');
 const { themeChangeSummary } = require('../lib/audit-events');
@@ -103,6 +103,7 @@ router.get('/api/theme', ...siteAccess, async (req, res) => {
 });
 
 router.post('/api/theme', ...siteAccess, async (req, res) => {
+  const site = req.query.site;
   const themeData = req.body;
 
   // Valider avant toute écriture : les valeurs finissent interpolées dans theme.css
@@ -111,16 +112,22 @@ router.post('/api/theme', ...siteAccess, async (req, res) => {
   if (!validation.ok) {
     return res.status(400).json({ error: validation.error });
   }
+  // Seul le thème validé est persisté (pas d'autres clés arbitraires du corps) ; logo
+  // absent du corps = pas de logo.
+  const theme = canonicalTheme(themeData.theme);
 
   try {
-    const site = req.query.site;
+    // Logo : fichier de la médiathèque DE CE SITE uniquement (jamais celui d'un autre client)
+    if (theme.logo && !(await content.siteOwnsMedia(site, logoFilename(theme.logo)))) {
+      return res.status(400).json({ error: 'Logo introuvable dans la médiathèque du site : téléversez-le depuis la page Design.' });
+    }
     // Thème précédent : base du résumé des changements pour le journal d'audit
     const prev = await content.readSiteTheme(site).catch(() => null);
-    // Seul le thème validé est persisté (pas d'autres clés arbitraires du corps)
-    await content.saveSiteTheme(site, { theme: themeData.theme });
-    const summary = themeChangeSummary(prev && prev.theme, themeData.theme);
+    await content.saveSiteTheme(site, { theme });
+    const summary = themeChangeSummary(prev && prev.theme, theme);
     if (summary) logAudit(req, 'theme.modification', site, summary);
-    res.json({ success: true, message: "Thème mis à jour avec succès !" });
+    // Avertissements de lisibilité : jamais bloquants (le thème est enregistré)
+    res.json({ success: true, message: "Thème mis à jour avec succès !", warnings: themeContrastWarnings(theme).map((w) => w.message) });
   } catch (e) {
     sendError(res, "Impossible d'enregistrer le thème.", e);
   }

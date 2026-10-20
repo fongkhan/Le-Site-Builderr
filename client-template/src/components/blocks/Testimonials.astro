@@ -85,11 +85,11 @@ const testimonials = (data.testimonials || []).filter(Boolean).map((t) => {
   }
 
   .testimonial-card {
-    background: #ffffff;
+    background: var(--color-surface);
     padding: 40px 30px;
     border-radius: var(--border-radius);
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-    border: 1px solid rgba(0, 0, 0, 0.05);
+    border: 1px solid color-mix(in srgb, var(--color-text) 10%, transparent);
     transition: all 0.3s ease;
     text-align: left;
     display: flex;
@@ -127,7 +127,7 @@ const testimonials = (data.testimonials || []).filter(Boolean).map((t) => {
 
   .quote-text {
     white-space: pre-line;
-    color: #4b5563;
+    color: var(--color-text-muted);
     font-size: 1rem;
     line-height: 1.6;
     font-style: italic;
@@ -161,7 +161,7 @@ const testimonials = (data.testimonials || []).filter(Boolean).map((t) => {
 
   .author-meta p {
     font-size: 0.85rem;
-    color: #9ca3af;
+    color: var(--color-text-muted);
     margin: 0;
   }
 </style>

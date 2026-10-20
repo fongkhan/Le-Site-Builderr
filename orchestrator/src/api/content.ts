@@ -19,6 +19,7 @@ export function fetchTheme(siteSlug: string): Promise<{ theme: Theme }> {
   return apiFetch(`/api/theme${siteQuery(siteSlug)}`);
 }
 
-export function saveTheme(siteSlug: string, theme: Theme): Promise<{ success: boolean }> {
+// warnings : avertissements de lisibilité (contraste), jamais bloquants.
+export function saveTheme(siteSlug: string, theme: Theme): Promise<{ success: boolean; warnings?: string[] }> {
   return apiFetch(`/api/theme${siteQuery(siteSlug)}`, { method: 'POST', body: JSON.stringify({ theme }) });
 }

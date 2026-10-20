@@ -1,9 +1,11 @@
+import { derivedColors } from '../../../../lib/color';
 import type { BlockPreviewProps } from '../types';
 import { formFieldStyle, headingStyle } from './previewStyles';
 
 // Reproduit client-template/src/components/blocks/Appointment.astro (formulaire inactif).
 export function AppointmentPreview({ block, theme }: BlockPreviewProps) {
   const field = formFieldStyle(theme);
+  const { onPrimary } = derivedColors(theme.colors);
   const services = (block.services ?? []).map((s) => s?.name).filter((name): name is string => Boolean(name && name.trim()));
   return (
     <div style={{ padding: '50px 20px', backgroundColor: theme.colors.background }}>
@@ -20,7 +22,7 @@ export function AppointmentPreview({ block, theme }: BlockPreviewProps) {
         )}
         <input disabled placeholder="Créneau souhaité (ex. mardi après-midi)" aria-label="Créneau souhaité" style={field} />
         <textarea disabled placeholder="Précisions (facultatif)…" aria-label="Précisions" rows={3} style={field} />
-        <button type="button" disabled style={{ backgroundColor: theme.colors.primary, color: '#fff', border: 'none', borderRadius: theme.radius, padding: '10px 20px', fontWeight: 600 }}>
+        <button type="button" disabled style={{ backgroundColor: theme.colors.primary, color: onPrimary, border: 'none', borderRadius: theme.radius, padding: '10px 20px', fontWeight: 600 }}>
           {block.ctaText || 'Demander un rendez-vous'}
         </button>
       </div>

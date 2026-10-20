@@ -4,6 +4,12 @@
   --color-secondary: #eff6ff;
   --color-bg: #ffffff;
   --color-text: #1f2937;
+  /* Couleurs dérivées : derivedColors (server/lib/theme.js) des 4 couleurs ci-dessus */
+  --color-on-primary: #111111;
+  --color-on-secondary: #1f2937;
+  --color-primary-deep: #80aef9;
+  --color-surface: #ffffff;
+  --color-text-muted: #626973;
   --font-heading: 'Inter', sans-serif;
   --font-body: 'Inter', sans-serif;
   --border-radius: 8px;

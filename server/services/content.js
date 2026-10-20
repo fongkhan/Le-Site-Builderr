@@ -2,7 +2,7 @@
 // fichiers JSON de data/ servent de repli (mode sans base) et de miroir.
 const fs = require('fs');
 const path = require('path');
-const { validateTheme } = require('../lib/theme');
+const { validateTheme, themeCss } = require('../lib/theme');
 const { readJsonStrict, writeJsonAtomic } = require('../lib/json-file');
 const sitesStore = require('../sites-store');
 const { getPayloadInstance } = require('../core/payload');
@@ -70,39 +70,33 @@ function seedDefaultData() {
   writeThemeCss(DEFAULT_THEME);
 }
 
-// Synchronise un thème JSON vers le fichier CSS global du template Astro.
+// Synchronise un thème JSON vers le fichier CSS global du template Astro (couleurs du
+// thème et couleurs dérivées : texte lisible sur primaire et secondaire, surfaces…).
+// Renvoie le thème appliqué (logo compris), ou le thème par défaut.
 function writeThemeCss(themeData) {
   // Défense en profondeur : un siteThemeFile corrompu ou légué (antérieur à la
-  // validation d'entrée) ne doit jamais injecter de CSS ni casser le build.
+  // validation d'entrée) ne doit jamais injecter de CSS ni casser le build. Le logo est
+  // vérifié à part (au build) : un logo invalide ne fait jamais tomber les couleurs.
   const candidate = themeData && themeData.theme;
-  const t = validateTheme(candidate).ok ? candidate : DEFAULT_THEME.theme;
-  const cssContent = `/* Généré automatiquement par l'Orchestrateur */
-:root {
-  --color-primary: ${t.colors.primary};
-  --color-secondary: ${t.colors.secondary};
-  --color-bg: ${t.colors.background};
-  --color-text: ${t.colors.text};
-  --font-heading: '${t.fonts.heading}', serif;
-  --font-body: '${t.fonts.body}', sans-serif;
-  --border-radius: ${t.radius};
-}
-`;
+  const t = validateTheme({ ...candidate, logo: '' }).ok ? candidate : DEFAULT_THEME.theme;
   const cssDir = path.join(ASTRO_PROJECT_DIR, 'src/styles');
   if (!fs.existsSync(cssDir)) {
     fs.mkdirSync(cssDir, { recursive: true });
   }
-  fs.writeFileSync(path.join(cssDir, 'theme.css'), cssContent, 'utf-8');
+  fs.writeFileSync(path.join(cssDir, 'theme.css'), themeCss(t), 'utf-8');
+  return t;
 }
 
 // Applique au template le thème d'un site avant une compilation. Même source que
 // l'éditeur de design (readSiteTheme) ; sans thème enregistré, le thème par défaut est
 // écrit — jamais celui du site compilé précédemment (theme.css est global au template).
+// Renvoie le thème appliqué (avertissements de lisibilité et logo du build).
 async function applySiteThemeCss(siteSlug) {
   try {
-    writeThemeCss(await readSiteTheme(siteSlug));
+    return writeThemeCss(await readSiteTheme(siteSlug));
   } catch (e) {
     console.error("Erreur lors de l'application du thème pour le build", e);
-    writeThemeCss(DEFAULT_THEME);
+    return writeThemeCss(DEFAULT_THEME);
   }
 }
 
@@ -632,7 +626,8 @@ async function readSiteTheme(siteSlug) {
             theme: {
               colors: t.colors,
               fonts: t.fonts,
-              radius: t.radius
+              radius: t.radius,
+              ...(t.logo ? { logo: t.logo } : {})
             }
           };
         }
@@ -675,7 +670,8 @@ async function saveSiteTheme(siteSlug, themeData) {
         site: siteDoc.id,
         colors: tInput.colors,
         fonts: tInput.fonts,
-        radius: tInput.radius
+        radius: tInput.radius,
+        logo: tInput.logo || ''
       };
 
       if (themeRes.docs.length > 0) {
@@ -696,6 +692,23 @@ async function saveSiteTheme(siteSlug, themeData) {
   }
 
   writeJsonFile(getSiteThemeFile(siteSlug), themeData);
+}
+
+// Vrai si le fichier (nom exact) appartient à la médiathèque du site : un logo qui cite
+// le fichier d'un autre client n'est jamais accepté ni publié. Sans base : faux.
+async function siteOwnsMedia(siteSlug, filename) {
+  const payloadInstance = getPayloadInstance();
+  if (!payloadInstance || typeof filename !== 'string' || !filename) return false;
+  const siteId = await findPayloadSiteId(payloadInstance, siteSlug);
+  if (!siteId) return false;
+  const res = await payloadInstance.find({
+    collection: 'media',
+    where: { and: [{ site: { equals: siteId } }, { filename: { equals: filename } }] },
+    limit: 1,
+    depth: 0,
+    overrideAccess: true,
+  });
+  return res.docs.length > 0;
 }
 
 module.exports = {
@@ -725,4 +738,5 @@ module.exports = {
   deletePost,
   readSiteTheme,
   saveSiteTheme,
+  siteOwnsMedia,
 };
