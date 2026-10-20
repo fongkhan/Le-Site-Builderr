@@ -1,10 +1,20 @@
+/// <reference types="node" />
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import { BLOCK_DEFINITIONS, BLOCK_REGISTRY, getBlockDefinition } from './registry';
 import { BLOCK_TYPES, blockLabel, createBlock } from './definitions';
 
-// Types de blocs de la collection « pages » (server/payload.config.ts, champ layout).
-// Ajouter un bloc côté serveur sans libellé/défauts/éditeur/aperçu côté CMS fait échouer ce test.
-const SERVER_BLOCK_TYPES = ['hero', 'features', 'product-grid', 'gallery', 'testimonials', 'faq', 'pricing', 'contact', 'appointment', 'info', 'footer'];
+// Types de blocs de la collection « pages », lus dans server/payload.config.ts (inventaire
+// partagé avec les tests du serveur : server/lib/payload-inventory.js). Ajouter un bloc
+// côté serveur sans libellé/défauts/éditeur/aperçu côté CMS fait échouer ce test.
+const requireServer = createRequire(import.meta.url);
+const { payloadConfigSlugs } = requireServer('../../../../../server/lib/payload-inventory.js') as {
+  payloadConfigSlugs: (text: string) => { collections: string[]; blocks: string[] };
+};
+const SERVER_BLOCK_TYPES = payloadConfigSlugs(
+  readFileSync(new URL('../../../../../server/payload.config.ts', import.meta.url), 'utf-8'),
+).blocks;
 
 // Blocs à liste : champ de la liste principale
 const LIST_FIELDS: Record<string, string> = {
@@ -18,6 +28,11 @@ const LIST_FIELDS: Record<string, string> = {
 };
 
 describe('registre des blocs', () => {
+  it('lit les blocs de payload.config.ts', () => {
+    expect(SERVER_BLOCK_TYPES).toContain('hero');
+    expect(SERVER_BLOCK_TYPES).toContain('footer');
+  });
+
   it('couvre exactement les types de blocs du serveur', () => {
     expect([...BLOCK_TYPES].sort()).toEqual([...SERVER_BLOCK_TYPES].sort());
     expect(Object.keys(BLOCK_REGISTRY).sort()).toEqual([...SERVER_BLOCK_TYPES].sort());

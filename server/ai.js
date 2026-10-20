@@ -407,4 +407,7 @@ module.exports = {
   cleanAndParseJSON,
   parseBase64Image,
   normalizeOnboardResult,
+  // Exportés pour les tests (cohérence de la documentation)
+  PROVIDERS,
+  KNOWN_BLOCK_TYPES,
 };
