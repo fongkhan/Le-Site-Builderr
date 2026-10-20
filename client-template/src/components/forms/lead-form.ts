@@ -6,11 +6,13 @@
 // journaux ou l'historique). Avec JavaScript, l'envoi se fait en fetch (JSON) et le
 // résultat s'affiche sans quitter la page. Échoue en douceur : ne casse jamais la page.
 // Messages d'état dans la langue de la page : attributs data-msg-sending, data-msg-ok,
-// data-msg-error, data-msg-invalid et data-msg-rate-limit du formulaire (posés par
-// LeadForm.astro), repli sur le français. Le texte d'erreur du serveur (en français)
-// n'est jamais affiché : le message dépend du code de la réponse (lead-status.mjs).
+// data-msg-error, data-msg-invalid, data-msg-rate-limit et data-msg-too-long du
+// formulaire (posés par LeadForm.astro), repli sur le français. Le texte d'erreur du
+// serveur (en français) n'est jamais affiché : le message dépend du code d'erreur de la
+// réponse, sinon de son statut (lead-status.mjs). Les champs refusés par le serveur
+// sont marqués aria-invalid et le premier reçoit le focus.
 
-import { errorMessageFor } from './lead-status.mjs';
+import { errorMessageFor, invalidFieldsOf } from './lead-status.mjs';
 
 type LeadKind = 'contact' | 'appointment';
 
@@ -18,9 +20,10 @@ const COMMON = {
   sending: 'Envoi en cours…',
   invalid: 'Vérifiez votre nom, votre email et votre message.',
   rateLimited: "Trop d'envois en peu de temps : réessayez dans quelques minutes.",
+  tooLong: 'Votre message est trop long.',
 };
 
-const MESSAGES: Record<LeadKind, { sending: string; ok: string; failed: string; invalid: string; rateLimited: string }> = {
+const MESSAGES: Record<LeadKind, { sending: string; ok: string; failed: string; invalid: string; rateLimited: string; tooLong: string }> = {
   contact: {
     ...COMMON,
     ok: 'Merci, votre message a bien été envoyé !',
@@ -63,6 +66,7 @@ function enhance(form: HTMLFormElement) {
     failed: form.dataset.msgError || fallback.failed,
     invalid: form.dataset.msgInvalid || fallback.invalid,
     rateLimited: form.dataset.msgRateLimit || fallback.rateLimited,
+    tooLong: form.dataset.msgTooLong || fallback.tooLong,
   };
   const status = form.querySelector<HTMLElement>('.lead-status');
   const button = form.querySelector<HTMLButtonElement>('button[type="submit"]');
@@ -71,6 +75,7 @@ function enhance(form: HTMLFormElement) {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (button) button.disabled = true;
+    form.querySelectorAll('[aria-invalid]').forEach((el) => el.removeAttribute('aria-invalid'));
     say(texts.sending);
     try {
       const res = await fetch(form.getAttribute('action') || '', {
@@ -82,8 +87,15 @@ function enhance(form: HTMLFormElement) {
         form.reset();
         say(texts.ok);
       } else {
-        // Message traduit selon le code (trop d'envois, champ invalide, erreur)
-        say(errorMessageFor(res.status, texts));
+        // Message traduit selon le code d'erreur (trop d'envois, champ invalide, message
+        // trop long, erreur), champs refusés signalés et focus sur le premier.
+        const data = await res.json().catch(() => null);
+        say(errorMessageFor(res.status, texts, data?.code));
+        const invalid = invalidFieldsOf(data)
+          .map((name) => form.elements.namedItem(name))
+          .filter((el): el is HTMLInputElement | HTMLTextAreaElement => el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement);
+        invalid.forEach((el) => el.setAttribute('aria-invalid', 'true'));
+        invalid[0]?.focus();
       }
     } catch {
       say(errorMessageFor(0, texts));

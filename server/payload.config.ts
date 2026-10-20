@@ -563,6 +563,28 @@ export default buildConfig({
           type: 'text',
           admin: { description: 'Matomo uniquement : hôte du serveur (ex. stats.mondomaine.fr).' },
         },
+        // --- Informations légales (mentions légales et politique de confidentialité du
+        // site publié) : mêmes clés et longueurs que server/lib/legal.js. Saisie par le
+        // propriétaire via PUT /api/sites/:slug/legal (validée), accès REST inchangés.
+        {
+          name: 'legal',
+          type: 'group',
+          label: 'Informations légales',
+          admin: { description: "Publiées dans les mentions légales et la politique de confidentialité du site. Hébergeur vide : valeur par défaut du serveur (LEGAL_HOST_*)." },
+          fields: [
+            { name: 'companyName', type: 'text', maxLength: 200, label: "Raison sociale ou nom de l'éditeur" },
+            { name: 'legalForm', type: 'text', maxLength: 200, label: 'Forme juridique et capital' },
+            { name: 'address', type: 'textarea', maxLength: 400, label: 'Adresse du siège' },
+            { name: 'registration', type: 'text', maxLength: 200, label: 'Immatriculation (SIREN, RCS ou RM)' },
+            { name: 'vatNumber', type: 'text', maxLength: 40, label: 'N° de TVA intracommunautaire' },
+            { name: 'phone', type: 'text', maxLength: 40, label: 'Téléphone' },
+            { name: 'email', type: 'text', maxLength: 200, label: 'Email de contact' },
+            { name: 'publisherName', type: 'text', maxLength: 200, label: 'Directeur ou directrice de la publication' },
+            { name: 'hostName', type: 'text', maxLength: 200, label: 'Hébergeur' },
+            { name: 'hostAddress', type: 'textarea', maxLength: 400, label: "Adresse de l'hébergeur" },
+            { name: 'hostPhone', type: 'text', maxLength: 40, label: "Téléphone de l'hébergeur" },
+          ],
+        },
       ],
     },
     {

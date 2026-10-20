@@ -23,6 +23,7 @@ const ROUTERS = [
   require('./routes/content'),
   require('./routes/media'),
   require('./routes/domains'),
+  require('./routes/legal'),
   require('./routes/public'),
   require('./routes/ai'),
   require('./routes/build'),

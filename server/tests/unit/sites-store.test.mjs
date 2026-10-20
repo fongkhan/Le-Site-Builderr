@@ -115,3 +115,47 @@ test('reassignSharedMedia — aucun média cité ailleurs : rien n’est rattach
   assert.equal(await sitesStore.reassignSharedMedia(payload, 1, {}), 0);
   assert.equal(payload.updates.length, 0);
 });
+
+// ---- Informations légales (mentions légales, confidentialité) ----
+
+test('informations légales — repli JSON : 11 chaînes vides à la création, objet relu après mise à jour', async () => {
+  const os = await import('node:os');
+  const { LEGAL_KEYS } = require('../../lib/legal.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sites-store-legal-'));
+  const sitesFile = path.join(tmp, 'sites.json');
+  fs.writeFileSync(sitesFile, '[]');
+  sitesStore.init({ getPayload: () => null, sitesFile });
+  try {
+    const created = await sitesStore.createSite({ slug: 'zz-legal', name: 'Légal' });
+    assert.deepEqual(Object.keys(created.legal), LEGAL_KEYS);
+    assert.ok(Object.values(created.legal).every((v) => v === ''));
+
+    const legal = { ...created.legal, companyName: 'Société <b>X</b>', address: 'l1\nl2' };
+    const updated = await sitesStore.updateSite('zz-legal', { legal });
+    assert.equal(updated.legal.companyName, 'Société <b>X</b>');
+    const reread = await sitesStore.getSiteBySlug('zz-legal');
+    assert.deepEqual(reread.legal, legal);
+    // Une mise à jour sans `legal` ne le touche pas
+    await sitesStore.updateSite('zz-legal', { name: 'Autre nom' });
+    assert.deepEqual((await sitesStore.getSiteBySlug('zz-legal')).legal, legal);
+    assert.equal(await sitesStore.updateSite('absent', { legal }), null);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('informations légales — Payload : l’objet complet est transmis à payload.update', async () => {
+  const payload = fakePayload({ payload_sites: [{ id: 5, slug: 'avec-base', name: 'Base' }] });
+  sitesStore.init({ getPayload: () => payload, sitesFile: null });
+  try {
+    const site = await sitesStore.updateSite('avec-base', { legal: { companyName: ' Société ', inconnu: 'x' } });
+    assert.equal(payload.updates.length, 1);
+    const sent = payload.updates[0].data.legal;
+    assert.equal(sent.companyName, 'Société');
+    assert.equal(Object.keys(sent).length, 11);
+    assert.ok(!('inconnu' in sent));
+    assert.equal(site.legal.companyName, 'Société');
+  } finally {
+    sitesStore.init({ getPayload: () => null, sitesFile: null });
+  }
+});

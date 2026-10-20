@@ -208,6 +208,23 @@
       }
     ]
   },
+  "_comment_legal": "Informations légales (même forme que PUBLIC_LEGAL_JSON). Raison sociale hostile (doit rester du texte), champs facultatif (vatNumber) et obligatoire (hostPhone) vides : omis sur le site publié. La page CMS fr/mentions-legales reste prioritaire : seules confidentialite, en/legal-notice et en/privacy-policy sont générées.",
+  "legal": {
+    "companyName": "Atelier Terre & Feu <script>alert(1)</script>",
+    "legalForm": "SARL au capital de 5 000 €",
+    "address": "12 rue des Potiers\n69001 Lyon",
+    "registration": "RCS Lyon 123 456 789",
+    "vatNumber": "",
+    "phone": "04 78 00 00 00",
+    "email": "contact@atelier.example",
+    "publisherName": "Camille Martin",
+    "hostName": "Hébergeur Démo",
+    "hostAddress": "1 avenue de l'Exemple\n00000 Ville-Démo",
+    "hostPhone": "",
+    "retentionMonths": 12,
+    "visitStats": true,
+    "analyticsProvider": ""
+  },
   "posts": {
     "docs": [
       {

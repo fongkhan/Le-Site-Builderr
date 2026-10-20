@@ -89,6 +89,21 @@ export interface PagesData {
   deleted?: PageRef[];
 }
 
+/** Informations légales d'un site (mentions légales et politique de confidentialité publiées) */
+export interface LegalInfo {
+  companyName: string;
+  legalForm: string;
+  address: string;
+  registration: string;
+  vatNumber: string;
+  phone: string;
+  email: string;
+  publisherName: string;
+  hostName: string;
+  hostAddress: string;
+  hostPhone: string;
+}
+
 export interface Site {
   slug: string;
   name: string;
@@ -109,6 +124,7 @@ export interface Site {
   analyticsProvider?: '' | 'ga4' | 'matomo' | string;
   analyticsId?: string;
   analyticsHost?: string;
+  legal?: LegalInfo;
 }
 
 export interface ScannedSite {

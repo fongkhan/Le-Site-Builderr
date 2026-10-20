@@ -36,6 +36,8 @@ const {
 } = require('../core/config');
 const { applySiteThemeCss, findPayloadSiteId, readSitePages, readSitePosts } = require('./content');
 const { getSiteOwners, updateSiteStatus } = require('./sites');
+const { legalBuildData } = require('../lib/legal');
+const { SUBMISSION_RETENTION } = require('../lib/submissions');
 
 const BUILD_TIMEOUT_MS = envInt('BUILD_TIMEOUT_MS', 10 * 60 * 1000);
 
@@ -371,6 +373,9 @@ function buildEnvFor(site, siteSlug, { draft = false, logo = null } = {}) {
     PUBLIC_ANALYTICS_PROVIDER: (!draft && site && site.analyticsProvider) || '',
     PUBLIC_ANALYTICS_ID: (!draft && site && site.analyticsId) || '',
     PUBLIC_ANALYTICS_HOST: (!draft && site && site.analyticsHost) || '',
+    // Mentions légales et politique de confidentialité (brouillons compris : le texte
+    // décrit le site publié, mesure d'audience comprise)
+    PUBLIC_LEGAL_JSON: JSON.stringify(legalBuildData(site || { name: siteSlug }, { env: process.env, retentionDays: SUBMISSION_RETENTION.retentionDays })),
     ...(draft ? { PUBLIC_IS_DRAFT: '1' } : {}),
   };
 }

@@ -427,8 +427,11 @@ if (admin.token && client.token) {
   const valid = { name: 'Jean Test', email: 'jean@exemple.fr', message: 'Bonjour, ceci est un test.' };
   const ok = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: valid });
   check('Contact : message valide -> 200', ok.status === 200 && ok.json?.success === true, `HTTP ${ok.status}`);
-  check('Contact : site inconnu -> 404', (await req('/api/contact/site-inexistant', { method: 'POST', body: valid })).status === 404);
-  check('Contact : corps invalide -> 400', (await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { name: '', email: 'pas-un-email', message: '' } })).status === 400);
+  // Erreurs : code stable (traduit par le script du site) et champs refusés
+  const unknown = await req('/api/contact/site-inexistant', { method: 'POST', body: valid });
+  check('Contact : site inconnu -> 404 (code unknown_site)', unknown.status === 404 && unknown.json?.code === 'unknown_site', `HTTP ${unknown.status} ${JSON.stringify(unknown.json)}`);
+  const invalid = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { name: '', email: 'pas-un-email', message: '' } });
+  check('Contact : corps invalide -> 400 (code invalid_fields + champs)', invalid.status === 400 && invalid.json?.code === 'invalid_fields' && JSON.stringify(invalid.json?.fields) === '["name","email","message"]', `HTTP ${invalid.status} ${JSON.stringify(invalid.json)}`);
   // Message propre à cette exécution : le bloc « Messages reçus » vérifie qu'il n'est jamais stocké
   const hp = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { ...valid, message: `honeypot-${process.pid}`, company: 'robot inc' } });
   check('Contact : honeypot rempli -> 200 silencieux', hp.status === 200 && hp.json?.success === true);
@@ -534,17 +537,20 @@ if (admin.token && client.token) {
   });
   check("CORS : preflight d'une route privée depuis une origine inconnue -> refusé", !priv.headers.get('access-control-allow-origin'), `ACAO=${priv.headers.get('access-control-allow-origin')}`);
   const big = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { name: 'x', email: 'a@b.fr', message: 'x'.repeat(64 * 1024) } });
-  check('Contact : corps de 64 Ko -> 413 (limite des endpoints publics)', big.status === 413, `HTTP ${big.status}`);
+  check('Contact : corps de 64 Ko -> 413 (limite des endpoints publics, code too_large)', big.status === 413 && big.json?.code === 'too_large', `HTTP ${big.status} ${JSON.stringify(big.json)}`);
   // Demande de RDV envoyée par le script du site : le serveur compose le message
   const rdv = await req('/api/contact/boulangerie-artisanale', { method: 'POST', body: { kind: 'appointment', name: 'Client RDV', email: 'rdv@example.com', service: 'Coupe', slot: 'mardi', phone: '0600000000' } });
   check('Contact : demande de RDV en JSON (sans message libre) -> 200', rdv.status === 200, `HTTP ${rdv.status}`);
-  // Formulaire posté sans JavaScript : une erreur s'affiche en page HTML, jamais en JSON brut
-  const bigForm = await fetch(`${BASE}/api/contact/boulangerie-artisanale`, {
+  // Formulaire posté sans JavaScript : une erreur s'affiche en page HTML, jamais en JSON
+  // brut, dans la langue du formulaire (?lang=)
+  const bigForm = await fetch(`${BASE}/api/contact/boulangerie-artisanale?lang=en`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: `name=x&email=a%40b.fr&message=${'x'.repeat(40 * 1024)}`,
   });
+  const bigFormHtml = await bigForm.text();
   check('Contact sans JavaScript : message trop long -> 413 en page HTML', bigForm.status === 413 && (bigForm.headers.get('content-type') || '').includes('text/html'), `HTTP ${bigForm.status} ${bigForm.headers.get('content-type')}`);
+  check('Contact sans JavaScript : page d’erreur dans la langue du formulaire (?lang=en)', bigFormHtml.includes('<html lang="en">') && bigFormHtml.includes('too long'), bigFormHtml.slice(0, 120));
 }
 
 // ---- Pages : suppression explicite, doublons, textes libres ----

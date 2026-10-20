@@ -11,6 +11,9 @@ import { localePath, normalizeLocale, LOCALE_LABELS, DEFAULT_LOCALE } from '../l
 import { withBase, stripBase, absoluteUrl } from '../lib/url';
 import { jsonLdString } from '../lib/jsonld';
 import { t } from '../lib/ui-strings.mjs';
+import { getLegalContent } from '../lib/legal-content';
+import { legalHref } from '../lib/legal.mjs';
+import { lt } from '../lib/legal-texts.mjs';
 
 interface NavPage {
 	title: string;
@@ -89,6 +92,18 @@ const analyticsProvider = process.env.PUBLIC_ANALYTICS_PROVIDER || '';
 const analyticsId = process.env.PUBLIC_ANALYTICS_ID || '';
 const analyticsHost = process.env.PUBLIC_ANALYTICS_HOST || '';
 const analyticsEnabled = Boolean(analyticsProvider && analyticsId);
+
+// Liens légaux en bas de chaque page (mentions légales, politique de confidentialité) :
+// page de la langue courante, sinon de la langue par défaut ; page générée ou page du CMS
+// à la même adresse. Aucun lien en build hors ligne.
+const { legalRoutes } = await getLegalContent();
+const noticePath = legalHref(legalRoutes, pageLocale, 'notice');
+const privacyPath = legalHref(legalRoutes, pageLocale, 'privacy');
+const noticeHref = noticePath ? withBase(noticePath) : '';
+const privacyHref = privacyPath ? withBase(privacyPath) : '';
+const trimPath = (p: string) => p.replace(/\/index\.html$/, '/').replace(/\/+$/, '');
+const currentPath = trimPath(stripBase(Astro.url.pathname));
+const isCurrent = (p: string) => Boolean(p) && trimPath(p) === currentPath;
 
 // Le site public est servi à la racine de son domaine : on retire le chemin de base du
 // build (« /preview/<slug> » en publication simulée) pour obtenir l'URL publique réelle.
@@ -181,10 +196,17 @@ const jsonLdScripts = (jsonLd || []).filter(Boolean).map((d) => jsonLdString(d))
 			)}
 		</header>
 		<slot />
+		{(noticeHref || privacyHref) && (
+			<nav class="legal-links" aria-label={lt(pageLocale, 'legalNav')} data-consent={analyticsEnabled ? 'on' : undefined}>
+				{noticeHref && <a href={noticeHref} aria-current={isCurrent(noticePath) ? 'page' : undefined}>{lt(pageLocale, 'legalNotice')}</a>}
+				{privacyHref && <a href={privacyHref} aria-current={isCurrent(privacyPath) ? 'page' : undefined}>{lt(pageLocale, 'privacyPolicy')}</a>}
+				{analyticsEnabled && <button type="button" class="legal-cookies" data-consent-open>{lt(pageLocale, 'manageCookies')}</button>}
+			</nav>
+		)}
 		{analyticsEnabled && (
 			<>
 				<div id="consent-banner" class="consent-banner" role="dialog" aria-live="polite" aria-label={t(pageLocale, 'consentLabel')} hidden>
-					<p class="consent-text">{t(pageLocale, 'consentText')}</p>
+					<p class="consent-text">{t(pageLocale, 'consentText')}{privacyHref && <> <a href={privacyHref}>{lt(pageLocale, 'privacyPolicy')}</a></>}</p>
 					<div class="consent-actions">
 						<button type="button" id="consent-accept" class="consent-btn consent-accept">{t(pageLocale, 'consentAccept')}</button>
 						<button type="button" id="consent-refuse" class="consent-btn consent-refuse">{t(pageLocale, 'consentRefuse')}</button>
@@ -251,9 +273,19 @@ const jsonLdScripts = (jsonLd || []).filter(Boolean).map((d) => jsonLdString(d))
 							if (value === 'accepted') loadAnalytics();
 						}
 
+						// Rouvre la bannière (bouton « Cookies » ou lien « Gérer les cookies » du bas
+						// de page) et place le focus sur son premier bouton.
+						function openBanner() {
+							banner.hidden = false;
+							reopen.hidden = true;
+							const first = banner.querySelector('button');
+							if (first) first.focus();
+						}
+
 						document.getElementById('consent-accept').addEventListener('click', () => { saveChoice('accepted'); applyChoice('accepted'); });
 						document.getElementById('consent-refuse').addEventListener('click', () => { saveChoice('refused'); applyChoice('refused'); });
-						reopen.addEventListener('click', () => { banner.hidden = false; reopen.hidden = true; });
+						reopen.addEventListener('click', openBanner);
+						document.querySelectorAll('[data-consent-open]').forEach((el) => el.addEventListener('click', openBanner));
 
 						const existing = readChoice();
 						if (existing) applyChoice(existing);
@@ -442,5 +474,51 @@ const jsonLdScripts = (jsonLd || []).filter(Boolean).map((d) => jsonLdString(d))
 		font-size: 0.78rem;
 		cursor: pointer;
 		box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+	}
+
+	/* Liens légaux du bas de page (mentions légales, confidentialité, cookies) : discrets,
+	   aux couleurs du thème ; place réservée au bouton flottant « Cookies ». */
+	.legal-links {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: center;
+		align-items: center;
+		gap: 6px 18px;
+		padding: 16px 20px;
+		font-family: var(--font-body), sans-serif;
+		font-size: 0.85rem;
+		background-color: var(--color-bg);
+		color: var(--color-text);
+		border-top: 1px solid color-mix(in srgb, var(--color-text) 12%, transparent);
+	}
+
+	.legal-links[data-consent] {
+		padding-bottom: 56px;
+	}
+
+	/* Couleur du texte du thème (pas d'opacité : contraste du thème conservé) */
+	.legal-links a,
+	.legal-cookies {
+		color: inherit;
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+
+	.legal-links a:hover,
+	.legal-cookies:hover {
+		color: var(--color-primary);
+	}
+
+	.legal-links a[aria-current="page"] {
+		font-weight: 600;
+		text-decoration: none;
+	}
+
+	.legal-cookies {
+		background: none;
+		border: none;
+		padding: 0;
+		font: inherit;
+		cursor: pointer;
 	}
 </style>

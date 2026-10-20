@@ -2,6 +2,7 @@
 const express = require('express');
 const { rateLimit } = require('express-rate-limit');
 const { envInt } = require('./config');
+const { contactLang, contactPage, contactErrorBody } = require('../lib/contact');
 
 // TRUST_PROXY : nombre de proxys de confiance (« 1 »), ou valeur Express telle quelle
 // (« loopback », liste d'IP/CIDR). Vide, « false » ou « 0 » : désactivé.
@@ -31,14 +32,24 @@ function isHtmlFormPost(req) {
 
 // Réponse à un formulaire posté SANS JavaScript (navigateur, application/x-www-form-
 // urlencoded) : petite page lisible avec un lien de retour vers la page d'origine, jamais
-// du JSON brut affiché au visiteur.
-function sendFormPage(req, res, status, title, text) {
+// du JSON brut affiché au visiteur. Langue (<html lang>) et lien de retour paramétrables.
+function sendFormPage(req, res, status, title, text, { lang = 'fr', backLabel = '← Revenir au site' } = {}) {
   let back = '';
   try {
     const ref = new URL(req.get('referer') || '');
     if (ref.protocol === 'http:' || ref.protocol === 'https:') back = ref.href;
   } catch { /* pas de page d'origine exploitable */ }
-  res.status(status).type('html').send(`<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>${escapeHtml(title)}</title><style>body{font-family:system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 20px;text-align:center;color:#222}a{color:#2563eb}</style></head><body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p>${back ? `<p><a href="${escapeHtml(back)}">← Revenir au site</a></p>` : ''}</body></html>`);
+  res.status(status).type('html').send(`<!doctype html><html lang="${escapeHtml(lang)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>${escapeHtml(title)}</title><style>body{font-family:system-ui,sans-serif;max-width:520px;margin:15vh auto;padding:0 20px;text-align:center;color:#222}a{color:#2563eb}</style></head><body><h1>${escapeHtml(title)}</h1><p>${escapeHtml(text)}</p>${back ? `<p><a href="${escapeHtml(back)}">${escapeHtml(backLabel)}</a></p>` : ''}</body></html>`);
+}
+
+// Page de réponse du formulaire de contact posté sans JavaScript, dans la langue de la
+// page d'origine (?lang= posé par le formulaire, sinon fr). `key` : code d'erreur de
+// lib/contact.js, « sent » ou « sent_appointment ». req.query existe aussi dans le
+// limiteur, monté avant le parsing du corps.
+function sendContactFormPage(req, res, status, key) {
+  const lang = contactLang(req.query && req.query.lang);
+  const page = contactPage(key, lang);
+  sendFormPage(req, res, status, page.title, page.text, { lang, backLabel: page.back });
 }
 
 // Page « connectez-vous » (navigateur sans session sur une ressource protégée, ex. un
@@ -58,7 +69,7 @@ const makeLimiter = (limit, message, extra = {}) => rateLimit({
   limit,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
-  handler: (req, res) => res.status(429).json({ error: message }),
+  handler: (req, res) => res.status(429).json({ error: message, code: 'rate_limited' }),
   ...extra,
 });
 
@@ -74,9 +85,8 @@ const limiters = {
   webhook: makeLimiter(60, "Trop de requêtes de build reçues. Réessayez plus tard."),
   contact: makeLimiter(10, "Trop de messages envoyés. Réessayez dans quelques minutes.", {
     handler: (req, res) => {
-      const message = "Trop de messages envoyés. Réessayez dans quelques minutes.";
-      if (isHtmlFormPost(req)) return sendFormPage(req, res, 429, 'Message non envoyé', message);
-      res.status(429).json({ error: message });
+      if (isHtmlFormPost(req)) return sendContactFormPage(req, res, 429, 'rate_limited');
+      res.status(429).json(contactErrorBody('rate_limited'));
     },
   }),
   // Beacon de stats : public, appelé une fois par page vue. Plafond généreux (une même
@@ -186,16 +196,17 @@ function jsonBodyForExpressRoutes(req, res, next) {
 // eslint-disable-next-line no-unused-vars
 function jsonErrorHandler(err, req, res, next) {
   if (res.headersSent) return next(err);
-  // Formulaire d'un site publié posté sans JavaScript : page HTML plutôt que JSON
+  // Formulaire d'un site publié posté sans JavaScript : page HTML (langue de la page
+  // d'origine) plutôt que JSON
   if (isPublicRoute(req.path) && isHtmlFormPost(req) && err && (err.type === 'entity.too.large' || err.type === 'entity.parse.failed')) {
     const tooLarge = err.type === 'entity.too.large';
-    return sendFormPage(req, res, tooLarge ? 413 : 400, 'Message non envoyé', tooLarge ? 'Votre message est trop long.' : 'Formulaire invalide.');
+    return sendContactFormPage(req, res, tooLarge ? 413 : 400, tooLarge ? 'too_large' : 'invalid_body');
   }
   if (err && err.type === 'entity.parse.failed') {
-    return res.status(400).json({ error: "Corps de requête JSON invalide." });
+    return res.status(400).json({ error: "Corps de requête JSON invalide.", code: 'invalid_body' });
   }
   if (err && err.type === 'entity.too.large') {
-    return res.status(413).json({ error: "Corps de requête trop volumineux." });
+    return res.status(413).json({ error: "Corps de requête trop volumineux.", code: 'too_large' });
   }
   const status = err && Number(err.status || err.statusCode);
   if (status >= 400 && status < 500) {
@@ -233,6 +244,7 @@ module.exports = {
   sendError,
   isHtmlFormPost,
   sendFormPage,
+  sendContactFormPage,
   sendSignInPage,
   makeLimiter,
   limiters,

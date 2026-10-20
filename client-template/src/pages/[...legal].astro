@@ -1,0 +1,56 @@
+---
+import Layout from '../layouts/Layout.astro';
+import LegalNotice from '../components/legal/LegalNotice.astro';
+import PrivacyPolicy from '../components/legal/PrivacyPolicy.astro';
+import { getSiteContent } from '../lib/content';
+import type { NavPage } from '../lib/content';
+import { getLegalContent } from '../lib/legal-content';
+import { lt } from '../lib/legal-texts.mjs';
+
+// Pages légales générées (mentions légales, politique de confidentialité) : une par langue
+// servie (lib/legal.mjs). Chemins disjoints de la route attrape-tout des pages du CMS :
+// une adresse occupée par une page du CMS n'est pas générée ici (`generated`), la page du
+// CMS reste prioritaire. Absentes du sitemap et du menu ; liées en bas de chaque page.
+export async function getStaticPaths() {
+  const [{ legalRoutes }, { navByLocale, locales }] = await Promise.all([getLegalContent(), getSiteContent()]);
+  return legalRoutes
+    .filter((r) => r.generated)
+    .map((r) => ({
+      params: { legal: r.route },
+      props: { kind: r.kind, locale: r.locale, nav: navByLocale[r.locale] || [], locales },
+    }));
+}
+
+interface Props {
+  kind: 'notice' | 'privacy';
+  locale: string;
+  nav: NavPage[];
+  locales: string[];
+}
+
+const { kind, locale, nav = [], locales = [] } = Astro.props;
+const heading = lt(locale, kind === 'notice' ? 'legalNotice' : 'privacyPolicy');
+const siteName = process.env.PUBLIC_SITE_NAME || '';
+---
+
+<Layout title={siteName ? `${heading} — ${siteName}` : heading} pages={nav} locale={locale} locales={locales}>
+  <main id="contenu" tabindex="-1">
+    <article class="legal-page" data-legal-page={kind}>
+      <h1>{heading}</h1>
+      {kind === 'notice' ? <LegalNotice locale={locale} /> : <PrivacyPolicy locale={locale} />}
+    </article>
+  </main>
+</Layout>
+
+<style>
+  .legal-page {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 60px 20px 80px;
+  }
+
+  .legal-page h1 {
+    font-size: clamp(1.8rem, 4vw, 2.5rem);
+    margin-bottom: 30px;
+  }
+</style>

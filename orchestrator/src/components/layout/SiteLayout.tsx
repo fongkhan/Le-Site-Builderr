@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useParams } from 'react-router-dom';
 import { fetchSubmissions, onUnreadChange } from '../../api/submissions';
+import { fetchLegal, onLegalMissingChange } from '../../api/legal';
 import { useSites } from '../../state/SitesContext';
 import { useConfig } from '../../state/ConfigContext';
 import { publishedSiteUrl } from '../../lib/siteUrls';
@@ -92,10 +93,29 @@ function useUnreadCount(slug: string): number {
   return unread?.slug === slug ? unread.count : 0;
 }
 
+// Informations légales obligatoires manquantes : chargées à l'ouverture du site, puis
+// tenues à jour par la page « Infos légales ». Un échec n'affiche simplement aucun badge.
+function useLegalMissing(slug: string): boolean {
+  const [state, setState] = useState<{ slug: string; missing: boolean } | null>(null);
+  useEffect(() => {
+    let active = true;
+    const off = onLegalMissingChange((s, missing) => { if (s === slug) setState({ slug, missing: missing.length > 0 }); });
+    fetchLegal(slug)
+      .then((d) => { if (active) setState((prev) => (prev?.slug === slug ? prev : { slug, missing: (d.missing || []).length > 0 })); })
+      .catch(() => {});
+    return () => {
+      active = false;
+      off();
+    };
+  }, [slug]);
+  return state?.slug === slug ? state.missing : false;
+}
+
 function SiteHeader({ site }: { site: Site }) {
   const deployed = site.status === 'active';
   const { config } = useConfig();
   const unread = useUnreadCount(site.slug);
+  const legalMissing = useLegalMissing(site.slug);
   return (
     <div className="glass-panel" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 15, padding: '16px 24px' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -140,6 +160,15 @@ function SiteHeader({ site }: { site: Site }) {
             <span className="site-step-num" style={{ background: 'var(--accent-rose)', color: 'white', width: 'auto', minWidth: 20, padding: '0 6px', borderRadius: 10 }}>
               {unread}
               <span className="sr-only"> non lu{unread > 1 ? 's' : ''}</span>
+            </span>
+          )}
+        </NavLink>
+        <NavLink to="legal" className={({ isActive }) => `site-step ${isActive ? 'active' : ''}`}>
+          Infos légales
+          {legalMissing && (
+            <span className="site-step-num" style={{ background: 'var(--amber-400)', color: '#1f2937' }}>
+              <span aria-hidden="true">!</span>
+              <span className="sr-only"> : informations à compléter</span>
             </span>
           )}
         </NavLink>
